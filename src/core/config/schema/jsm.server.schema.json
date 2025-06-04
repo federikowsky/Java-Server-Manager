@@ -1,0 +1,89 @@
+
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "JSM Workspace Servers Config",
+  "type": "object",
+  "required": ["servers"],
+  "properties": {
+    "servers": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/server" }
+    }
+  },
+  "definitions": {
+    "server": {
+      "type": "object",
+      "required": [
+        "id", "name", "type", "javaHome", "serverHome",
+        "host", "port", "debug", "autoSync", "pidFile", "state", "deployments"
+      ],
+      "properties": {
+        "id":       { "type": "string", "format": "uuid" },
+        "name":     { "type": "string", "minLength": 1 },
+        "type":     { "enum": ["tomcat", "jetty", "jboss", "custom"] },
+        "javaHome": { "type": "string" },
+        "serverHome": { "type": "string" },
+        "host":     { "type": "string" },
+        "port":     { "type": "integer", "minimum": 0, "maximum": 65535 },
+
+        "debug": {
+          "type": "object",
+          "required": ["enable"],
+          "properties": {
+            "enable":      { "type": "boolean" },
+            "port":        { "type": "integer", "minimum": 0, "maximum": 65535 },
+            "vmArgs":      { "type": "string" },
+            "attachDelay": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false
+        },
+
+        "autoSync": { "type": "boolean" },
+        "envVars": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "vmArgs":    { "type": "string" },
+        "logPath":   { "type": "string" },
+
+        "startupTimeout": { "type": "integer", "minimum": 0 },
+        "stopTimeout":    { "type": "integer", "minimum": 0 },
+        "healthCheckUrl": { "type": "string" },
+        "preStartCmd":    { "type": "string" },
+        "postStopCmd":    { "type": "string" },
+        "workingDir":     { "type": "string" },
+
+        "pidFile": { "type": "string" },
+        "state":   { "enum": ["stopped", "starting", "running", "stopping", "error"] },
+
+        "deployments": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/deployment" }
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "deployment": {
+      "type": "object",
+      "required": ["id", "name", "sourcePath", "targetPath", "contextPath", "type", "state"],
+      "properties": {
+        "id":         { "type": "string", "format": "uuid" },
+        "name":       { "type": "string" },
+        "sourcePath": { "type": "string" },
+        "targetPath": { "type": "string" },
+        "renameTo":   { "type": "string" },
+        "contextPath":{ "type": "string" },
+        "type":       { "enum": ["war", "exploded"] },
+        "state":      { "enum": ["undeployed", "deploying", "synced", "error"] },
+        "error":      { "type": "string" },
+        "ignoreGlobs":{
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

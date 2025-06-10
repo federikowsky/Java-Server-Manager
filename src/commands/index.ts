@@ -10,6 +10,7 @@ import {
   QuickPickItem,
   Uri
 } from 'vscode';
+import { ServerNode } from '../ui/views/ServerTreeViewProvider';
 
 import { ServerService } from '../services/ServerService';
 import { DeploymentService } from '../services/DeploymentService';
@@ -30,23 +31,58 @@ function showErr(e: unknown) {
 export function registerServerCommands(ctx: ExtensionContext, srv: ServerService) {
   ctx.subscriptions.push(
     commands.registerCommand('jsm.server.start', async (args: { id: string; mode: 'run' | 'debug' }) => {
+      console.log('🎯 Command: jsm.server.start called with args:', args);
       const res = await srv.start(args.id, args.mode);
       if (!res.ok) showErr(res.error);
     }),
 
     commands.registerCommand('jsm.server.stop', async (id: string) => {
+      console.log('🎯 Command: jsm.server.stop called with id:', id);
       const res = await srv.stop(id);
       if (!res.ok) showErr(res.error);
     }),
 
     commands.registerCommand('jsm.server.restart', async (args: { id: string; mode: 'run' | 'debug' }) => {
+      console.log('🎯 Command: jsm.server.restart called with args:', args);
       const res = await srv.restart(args.id, args.mode);
       if (!res.ok) showErr(res.error);
     }),
 
-    commands.registerCommand('jsm.server.delete', async (id: string) => {
+    commands.registerCommand('jsm.server.delete', async (node: ServerNode) => {
+      console.log('🎯 Command: jsm.server.delete called with node:', node);
+      const id = node.data.id; // Extract the ID from the ServerNode
       const res = await srv.delete(id);
       if (!res.ok) showErr(res.error);
+    }),
+
+    commands.registerCommand('jsm.server.create', async () => {
+      console.log('🎯 Command: jsm.server.create called');
+      const testServer = {
+        id: 'test-server-' + Date.now(),
+        name: 'Test Server ' + new Date().toLocaleTimeString(),
+        type: 'tomcat' as const,
+        javaHome: '/System/Library/Frameworks/JavaVM.framework/Versions/Current',
+        serverHome: '/opt/tomcat',
+        host: 'localhost',
+        port: 8080,
+        debug: { enable: false },
+        autoSync: false,
+        pidFile: 'test-server.pid',
+        state: 'stopped' as const,
+        deployments: []
+      };
+      const res = await srv.create(testServer);
+      if (!res.ok) {
+        showErr(res.error);
+      } else {
+        window.showInformationMessage(`Created server: ${testServer.name}`);
+      }
+    }),
+
+    commands.registerCommand('jsm.treeview.refresh', () => {
+      console.log('🎯 Command: jsm.treeview.refresh called');
+      // Trigger a manual refresh by reloading workspace
+      srv.loadWorkspace();
     })
   );
 }

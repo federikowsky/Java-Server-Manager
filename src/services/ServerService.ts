@@ -30,22 +30,35 @@ export class ServerService {
 
   /* ───────────────────────── WORKSPACE BOOT ─────────────────────── */
   async loadWorkspace(): Promise<Result<void, JsmError>> {
+    console.log('📂 ServerService: Starting loadWorkspace...');
     const all = this.cfgSvc.loadAll();
-    if (!all.ok) return all as any;
+    console.log('📂 ServerService: ConfigService.loadAll() result:', all.ok ? 'SUCCESS' : 'FAILED');
+    if (!all.ok) {
+      console.error('❌ ServerService: Failed to load config:', all.error);
+      return all as any;
+    }
+    console.log('📊 ServerService: Found', all.value.length, 'servers in config');
+    
     for (const s of all.value) {
+      console.log('🔄 ServerService: Processing server:', s.name, '(', s.id, ')');
       // attempt crash‑recovery from pid file
       if (s.state === 'running') {
         const pid = await this.pidMgr.read(s.pidFile);
         if (pid) {
           // runtime will be created lazily on first operation
           this.log.info(`Recovered running server ${s.name} (pid ${pid})`);
+          console.log('🔄 ServerService: Recovered running server:', s.name, 'with pid:', pid);
         } else {
           s.state = 'stopped';
+          console.log('🔄 ServerService: Server was marked running but no pid found, marking as stopped:', s.name);
         }
       }
+      console.log('📢 ServerService: Emitting ServerAdded event for:', s.name);
       this.bus.emit('ServerAdded', s);
     }
+    console.log('📢 ServerService: Emitting ConfigLoaded event');
     this.bus.emit('ConfigLoaded', { servers: all.value });
+    console.log('✅ ServerService: loadWorkspace completed successfully');
     return ok(undefined);
   }
 

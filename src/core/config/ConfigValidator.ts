@@ -5,6 +5,7 @@
 
 import Ajv, { ValidateFunction } from 'ajv/dist/2020';
 import addFormats from 'ajv-formats';
+import draft7MetaSchema from 'ajv/dist/refs/json-schema-draft-07.json';
 import { Result, ok, err } from '../utils/result';
 import { JsmError } from '../errors/JsmError';
 import { ErrorCode } from '../errors/codes';
@@ -16,6 +17,7 @@ export class ConfigValidator {
   constructor() {
     const ajv = new Ajv({ allowUnionTypes: true, allErrors: true });
     addFormats(ajv);
+    ajv.addMetaSchema(draft7MetaSchema);
     this.validateFn = ajv.compile(schema as any);
   }
 

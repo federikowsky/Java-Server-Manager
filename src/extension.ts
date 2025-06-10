@@ -39,7 +39,17 @@ const singleton = {
 };
 
 export async function activate(ctx: ExtensionContext): Promise<void> {
+  console.log('🚀 JSM: Starting activation...');
   singleton.logger.info('Activating Java Server Manager…');
+
+  // Check if workspace folders exist
+  if (!workspace.workspaceFolders || workspace.workspaceFolders.length === 0) {
+    console.error('❌ JSM: No workspace folders found!');
+    window.showErrorMessage('Java Server Manager requires an open workspace folder.');
+    return;
+  }
+
+  console.log('✅ JSM: Workspace folder found:', workspace.workspaceFolders[0].uri.fsPath);
 
   /* Services instantiation  */
   const pidMgr  = new PidManager();
@@ -57,13 +67,27 @@ export async function activate(ctx: ExtensionContext): Promise<void> {
   registerTemplateCommands(ctx);
 
   /* Tree‑view */
+  console.log('🌳 JSM: Creating TreeView...');
   const treeProv = new ServerTreeViewProvider(srvSvc, singleton.bus, singleton.logger);
   ctx.subscriptions.push(treeProv);
+  
+  // Register the tree view
+  console.log('🌳 JSM: Registering TreeView with ID: javaServerManagerView');
+  const treeView = window.createTreeView('javaServerManagerView', {
+    treeDataProvider: treeProv,
+    showCollapseAll: true
+  });
+  ctx.subscriptions.push(treeView);
+  console.log('✅ JSM: TreeView registered successfully');
 
   /* Load workspace servers */
+  console.log('📂 JSM: Loading workspace servers...');
   const res = await srvSvc.loadWorkspace();
   if (!res.ok) {
+    console.error('❌ JSM: Failed to load servers:', res.error);
     window.showErrorMessage('JSM: unable to load servers configuration.');
+  } else {
+    console.log('✅ JSM: Servers loaded successfully');
   }
 
   /* cleanup on deactivate */
@@ -71,6 +95,7 @@ export async function activate(ctx: ExtensionContext): Promise<void> {
     await deactivate();
   }));
 
+  console.log('🎉 JSM: Activation completed!');
   singleton.logger.info('JSM activated');
 }
 

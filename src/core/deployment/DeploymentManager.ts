@@ -33,6 +33,10 @@ export class DeploymentManager {
     return d ? ok(d) : err(new JsmError(ErrorCode.UNDEPLOY_ERROR, 'deployment not found'));
   }
 
+  getAll(): DeploymentConfig[] {
+    return Array.from(this.map.values());
+  }
+
   remove(depId: string): Result<void, JsmError> {
     if (!this.map.delete(depId)) {
       return err(new JsmError(ErrorCode.UNDEPLOY_ERROR, 'deployment not found'));

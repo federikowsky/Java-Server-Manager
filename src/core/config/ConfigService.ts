@@ -20,17 +20,31 @@ export class ConfigService {
 
   constructor(private workspaceUri: Uri) {
     this.wsFile = path.join(workspaceUri.fsPath, '.vscode', JSM_SERVER_CONFIG_FILENAME);
+    console.log('📁 ConfigService: Workspace URI:', workspaceUri.fsPath);
+    console.log('📁 ConfigService: Looking for servers.json at:', this.wsFile);
   }
 
   loadAll(): Result<ServerConfig[], JsmError> {
+    console.log('📖 ConfigService: Attempting to read servers.json from:', this.wsFile);
     try {
       const data = require('fs').readFileSync(this.wsFile, 'utf8');
+      console.log('✅ ConfigService: Successfully read servers.json, length:', data.length);
       const json = JSON.parse(data);
+      console.log('✅ ConfigService: Successfully parsed JSON, servers count:', json.servers?.length || 0);
       const v = this.validator.validate(json);
-      if (!v.ok) return err(v.error);
+      if (!v.ok) {
+        console.error('❌ ConfigService: Validation failed:', v.error);
+        return err(v.error);
+      }
+      console.log('✅ ConfigService: Validation passed, returning', json.servers.length, 'servers');
       return ok((json as WorkspaceServersConfig).servers);
     } catch (e: any) {
-      if (e.code === 'ENOENT') return ok([]); // fresh workspace
+      console.log('⚠️ ConfigService: Error reading servers.json:', e.code, e.message);
+      if (e.code === 'ENOENT') {
+        console.log('📝 ConfigService: servers.json not found, returning empty array (fresh workspace)');
+        return ok([]); // fresh workspace
+      }
+      console.error('❌ ConfigService: Unexpected error:', e);
       return err(new JsmError(ErrorCode.FS_READ, 'Unable to read servers.json', e));
     }
   }

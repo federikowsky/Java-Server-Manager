@@ -355,10 +355,27 @@ suite('Java Server Manager - Comprehensive Tests', () => {
             };
 
             const disposable = hookManager.register('test-hook-dispose', hook);
-            
+
             // Should not throw
             disposable.dispose();
             assert.ok(true);
+        });
+
+        test('invoke awaits async hooks', async () => {
+            let completed = false;
+            const hook = {
+                beforeStartServer: async () => {
+                    await new Promise(res => setTimeout(res, 50));
+                    completed = true;
+                }
+            };
+            const disposable = hookManager.register('async-hook', hook);
+            const start = Date.now();
+            await hookManager.invoke('beforeStartServer', 'id', 'run');
+            const duration = Date.now() - start;
+            disposable.dispose();
+            assert.ok(completed, 'hook should execute');
+            assert.ok(duration >= 50, 'invoke should await async hook');
         });
     });
 

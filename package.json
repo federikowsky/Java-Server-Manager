@@ -15,19 +15,59 @@
   "contributes": {
     "commands": [
       {
-        "command": "jsm.server.start",
-        "title": "Start Server",
+        "command": "jsm.server.add",
+        "title": "Add Server",
+        "icon": "$(add)"
+      },
+      {
+        "command": "jsm.templates.manage",
+        "title": "Manage Templates",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "jsm.server.startRun",
+        "title": "Start (Run)",
         "icon": "$(play)"
       },
       {
-        "command": "jsm.server.stop", 
+        "command": "jsm.server.startDebug",
+        "title": "Start (Debug)",
+        "icon": "$(debug-alt)"
+      },
+      {
+        "command": "jsm.server.stop",
         "title": "Stop Server",
         "icon": "$(stop)"
       },
       {
-        "command": "jsm.server.restart",
-        "title": "Restart Server",
+        "command": "jsm.server.restartRun",
+        "title": "Restart (Run)",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "jsm.server.restartDebug",
+        "title": "Restart (Debug)",
+        "icon": "$(debug-rerun)"
+      },
+      {
+        "command": "jsm.server.edit",
+        "title": "Edit Server",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "jsm.server.deployChanges",
+        "title": "Deploy Changes",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "jsm.server.fullRedeploy",
+        "title": "Full Redeploy",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "jsm.server.viewLogs",
+        "title": "View Logs",
+        "icon": "$(output)"
       },
       {
         "command": "jsm.server.delete",
@@ -35,49 +75,184 @@
         "icon": "$(trash)"
       },
       {
-        "command": "jsm.server.create",
-        "title": "Create Test Server",
-        "icon": "$(add)"
+        "command": "jsm.server.openDir",
+        "title": "Open Server Directory",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "jsm.server.copyInfo",
+        "title": "Copy Server Info",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "jsm.deployment.add",
+        "title": "Add Deployment",
+        "icon": "$(file-add)"
+      },
+      {
+        "command": "jsm.deployment.remove",
+        "title": "Remove Deployment",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "jsm.deployment.forceDeploy",
+        "title": "Force Deploy",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "jsm.deployment.undeploySoft",
+        "title": "Undeploy",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "jsm.deployment.toggleAutosync",
+        "title": "Toggle AutoSync",
+        "icon": "$(sync)"
       },
       {
         "command": "jsm.treeview.refresh",
         "title": "Refresh",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "jsm.deployment.removeSoft",
+        "title": "Remove Deployment (Config Only)",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "jsm.deployment.removeHard",
+        "title": "Remove Deployment (And Files)",
+        "icon": "$(trash)"
       }
     ],
     "menus": {
       "view/title": [
         {
-          "command": "jsm.server.create",
+          "command": "jsm.server.add",
           "when": "view == javaServerManagerView",
           "group": "navigation@1"
         },
         {
           "command": "jsm.treeview.refresh",
-          "when": "view == javaServerManagerView", 
+          "when": "view == javaServerManagerView",
           "group": "navigation@2"
+        },
+        {
+          "command": "jsm.templates.manage",
+          "when": "view == javaServerManagerView",
+          "group": "navigation@3"
         }
       ],
       "view/item/context": [
         {
-          "command": "jsm.server.start",
-          "when": "view == javaServerManagerView && viewItem == server",
+          "command": "jsm.server.startRun",
+          "when": "view == javaServerManagerView && viewItem == server-stopped",
           "group": "inline@1"
         },
         {
-          "command": "jsm.server.stop",
-          "when": "view == javaServerManagerView && viewItem == server", 
+          "command": "jsm.server.startDebug",
+          "when": "view == javaServerManagerView && viewItem == server-stopped",
           "group": "inline@2"
         },
         {
-          "command": "jsm.server.restart",
-          "when": "view == javaServerManagerView && viewItem == server",
+          "command": "jsm.server.stop",
+          "when": "view == javaServerManagerView && viewItem == server-running",
+          "group": "inline@1"
+        },
+        {
+          "command": "jsm.server.restartRun",
+          "when": "view == javaServerManagerView && viewItem == server-running",
+          "group": "inline@2"
+        },
+        {
+          "command": "jsm.server.restartDebug",
+          "when": "view == javaServerManagerView && viewItem == server-running",
           "group": "inline@3"
         },
         {
+          "command": "jsm.server.stop",
+          "when": "view == javaServerManagerView && viewItem == server-starting",
+          "group": "inline@1"
+        },
+        {
+          "command": "jsm.server.startRun",
+          "when": "view == javaServerManagerView && viewItem == server-error",
+          "group": "inline@1"
+        },
+        {
+          "command": "jsm.server.startDebug",
+          "when": "view == javaServerManagerView && viewItem == server-error",
+          "group": "inline@2"
+        },
+        {
+          "command": "jsm.server.edit",
+          "when": "view == javaServerManagerView && viewItem =~ /server-.*/",
+          "group": "2_manage@1"
+        },
+        {
+          "command": "jsm.server.deployChanges",
+          "when": "view == javaServerManagerView && viewItem =~ /server-.*/",
+          "group": "2_manage@2"
+        },
+        {
+          "command": "jsm.server.fullRedeploy",
+          "when": "view == javaServerManagerView && viewItem =~ /server-.*/",
+          "group": "2_manage@3"
+        },
+        {
+          "command": "jsm.server.viewLogs",
+          "when": "view == javaServerManagerView && viewItem =~ /server-.*/",
+          "group": "2_manage@4"
+        },
+        {
+          "command": "jsm.server.openDir",
+          "when": "view == javaServerManagerView && viewItem =~ /server-.*/",
+          "group": "2_manage@5"
+        },
+        {
+          "command": "jsm.server.copyInfo",
+          "when": "view == javaServerManagerView && viewItem =~ /server-.*/",
+          "group": "2_manage@6"
+        },
+        {
+          "command": "jsm.deployment.add",
+          "when": "view == javaServerManagerView && viewItem =~ /server-.*/",
+          "group": "3_deployments@1"
+        },
+        {
           "command": "jsm.server.delete",
-          "when": "view == javaServerManagerView && viewItem == server",
-          "group": "navigation"
+          "when": "view == javaServerManagerView && viewItem =~ /server-.*/",
+          "group": "9_danger@1"
+        },
+        {
+          "command": "jsm.deployment.forceDeploy",
+          "when": "view == javaServerManagerView && viewItem == deployment",
+          "group": "inline@1"
+        },
+        {
+          "command": "jsm.deployment.undeploySoft",
+          "when": "view == javaServerManagerView && viewItem == deployment",
+          "group": "inline@2"
+        },
+        {
+          "command": "jsm.deployment.toggleAutosync",
+          "when": "view == javaServerManagerView && viewItem == deployment",
+          "group": "1_manage@1"
+        },
+        {
+          "command": "jsm.deployment.remove",
+          "when": "view == javaServerManagerView && viewItem == deployment",
+          "group": "9_danger@1"
+        },
+        {
+          "command": "jsm.deployment.removeSoft",
+          "when": "view == javaServerManagerView && viewItem == deployment",
+          "group": "9_danger@2"
+        },
+        {
+          "command": "jsm.deployment.removeHard",
+          "when": "view == javaServerManagerView && viewItem == deployment",
+          "group": "9_danger@3"
         }
       ]
     },
@@ -125,6 +300,8 @@
     "@typescript-eslint/parser": "^8.31.1",
     "@vscode/test-cli": "^0.0.10",
     "@vscode/test-electron": "^2.5.2",
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
     "esbuild": "^0.25.3",
     "eslint": "^9.25.1",
     "glob": "^11.0.2",
@@ -136,8 +313,6 @@
     "vitest": "^3.2.1"
   },
   "dependencies": {
-    "ajv": "^8.17.1",
-    "ajv-formats": "^3.0.1",
     "lodash.debounce": "^4.0.8",
     "uuid": "^11.1.0"
   }

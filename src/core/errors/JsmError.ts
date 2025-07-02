@@ -15,6 +15,15 @@ export class JsmError<D = unknown> extends Error {
     this.code = code;
     this.details = details;
   }
+
+  toJSON() {
+    return {
+      name: this.name,
+      code: this.code,
+      message: this.message,
+      ...(this.details && { details: this.details })
+    };
+  }
 }
 
 export const isJsmError = (e: unknown): e is JsmError<unknown> => e instanceof JsmError;

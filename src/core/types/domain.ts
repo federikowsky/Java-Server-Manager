@@ -44,6 +44,11 @@ export interface ServerConfig {
 
   state          : ServerState;
   deployments    : DeploymentConfig[];
+  
+  /* Additional fields for compatibility */
+  env?           : string;         // Legacy environment variables as string
+  validatePaths? : boolean;        // Whether to validate paths before starting
+  instancePath?  : string;         // Path for instance-based servers
 }
 
 /* ───────────── Deployment config ────────── */

@@ -9,7 +9,7 @@ import { ServerConfig, DeploymentConfig, ServerState, DeploymentState } from './
 
 /** Map of all application‑level events */
 export interface EventMap {
-  ConfigLoaded           : { servers: ServerConfig[] };
+  WorkspaceLoaded        : { servers: ServerConfig[] };
   ServerStateChanged     : { id:string; state:ServerState };
   DeploymentStateChanged : { srvId:string; depId:string; state:DeploymentState };
   ServerAdded            : ServerConfig;

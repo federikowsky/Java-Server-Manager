@@ -1,11 +1,12 @@
 /*
  * src/core/deployment/DeploymentManager.ts
  * Keeps in‑memory registry of deployments for one server and delegates
- * heavy‑lifting (publish / undeploy) to the given AbstractRuntime.
+ * heavy‑lifting (publish / undeploy) to the given IServerRuntime.
  */
 
 import { DeploymentConfig } from '../types/domain';
-import { AbstractRuntime } from '../server/AbstractRuntime';
+// Use direct interface import to avoid circular dependencies
+import type { IServerRuntime } from '../plugins/interfaces/IServerRuntime';
 import { Result, ok, err } from '../utils/result';
 import { JsmError } from '../errors/JsmError';
 import { ErrorCode } from '../errors/codes';
@@ -46,18 +47,18 @@ export class DeploymentManager {
 
   /* ───────────────────── runtime actions ───────────────────── */
   async publish(
-    rt: AbstractRuntime,
+    rt: IServerRuntime,
     dep: DeploymentConfig,
     mode: 'incremental' | 'full'
   ): Promise<Result<void, JsmError>> {
-    return await rt.publish(dep, mode);
+    return await rt.deploy(dep);
   }
 
   async undeploy(
-    rt: AbstractRuntime,
+    rt: IServerRuntime,
     dep: DeploymentConfig,
     soft: boolean
   ): Promise<Result<void, JsmError>> {
-    return await rt.undeploy(dep, soft);
+    return await rt.undeploy(dep.id);
   }
 }

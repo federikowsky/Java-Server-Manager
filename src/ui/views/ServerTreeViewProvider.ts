@@ -23,14 +23,40 @@ import { Logger } from '../../core/utils/logger';
 /* ───────────────────────── Tree Items ───────────────────────── */
 export class ServerNode extends TreeItem {
   constructor(readonly data: ServerConfig) {
-    super(data.name, data.state === 'running' ? 1 : 0);
-    this.iconPath = new ThemeIcon(data.state === 'running' ? 'play-circle' : 'circle-outline');
-    this.contextValue = 'server';
-    this.tooltip = `${data.type} @ ${data.host}:${data.port}`;
+    // Show server name with state only (no port)
+    const instanceInfo = data.instancePath ? ' [Instance]' : '';
+    const displayName = `${data.name} (${data.state})${instanceInfo}`;
+    const hasDeployments = data.deployments && data.deployments.length > 0;
+    super(displayName, hasDeployments ? 1 : 0);
+    
+    // Set icon based on state
+    let iconName: string;
+    switch (data.state) {
+      case 'running':
+        iconName = 'play-circle';
+        break;
+      case 'starting':
+        iconName = 'loading~spin';
+        break;
+      case 'stopping':
+        iconName = 'loading~spin';
+        break;
+      case 'error':
+        iconName = 'error';
+        break;
+      case 'stopped':
+      default:
+        iconName = 'circle-outline';
+        break;
+    }
+    
+    this.iconPath = new ThemeIcon(iconName);
+    this.contextValue = `server-${data.state}`; // Dynamic context value based on state
+    this.tooltip = `${data.type} @ ${data.host}:${data.port} (${data.state})${data.instancePath ? '\nInstance Path: ' + data.instancePath : ''}`;
   }
 }
 
-class DeploymentNode extends TreeItem {
+export class DeploymentNode extends TreeItem {
   constructor(readonly parent: ServerConfig, readonly data: DeploymentConfig) {
     super(data.name, 0);
     this.contextValue = 'deployment';
@@ -49,19 +75,22 @@ export class ServerTreeViewProvider implements TreeDataProvider<TreeItem>, Dispo
     bus: EventBus,
     private readonly log: Logger
   ) {
-    console.log('🌳 TreeViewProvider: Constructor called');
     // subscribe to relevant events to refresh UI
     const events: EventKey[] = [
+      'WorkspaceLoaded',
       'ServerAdded',
-      'ServerUpdated',
+      'ServerUpdated', 
       'ServerDeleted',
       'DeploymentAdded',
       'DeploymentRemoved',
       'DeploymentStateChanged',
       'ServerStateChanged'
     ];
-    events.forEach(e => bus.on(e, () => this.refresh()));
-    console.log('🌳 TreeViewProvider: Event listeners registered');
+    events.forEach(e => {
+      bus.on(e, (data) => {
+        this.refresh();
+      });
+    });
   }
 
   refresh(node?: TreeItem) {
@@ -70,26 +99,35 @@ export class ServerTreeViewProvider implements TreeDataProvider<TreeItem>, Dispo
 
   /* get children */
   async getChildren(element?: TreeItem): Promise<TreeItem[]> {
-    console.log('🌳 TreeViewProvider: getChildren called, element:', element ? element.label : 'ROOT');
     
     if (!element) {
-      const res = this.srvSvc.get(''); // dirty but we need list; re-query config directly
-      const all = this.srvSvc['cfgSvc'].loadAll(); // access internal; ok for provider
+      // Get servers directly from ServerService 
+      const all = await this.srvSvc.getAll();
       if (!all.ok) {
         console.error('❌ TreeView load error:', all.error);
         this.log.error('TreeView load error', all.error);
         return [];
       }
-      console.log('📊 TreeViewProvider: Found servers:', all.value.length);
-      const nodes = all.value.map(s => new ServerNode(s));
-      console.log('🌳 TreeViewProvider: Created server nodes:', nodes.map(n => n.label));
-      return nodes;
+      
+      // Update states from runtime info
+      const servers = all.value.map((s: any) => {
+        // Use getServerState to get current state
+        try {
+          const stateResult = this.srvSvc.getServerState(s.id);
+          if (stateResult.ok) {
+            s.state = stateResult.value;
+          }
+        } catch (error) {
+          // Ignore runtime info errors, keep existing state
+        }
+        return s;
+      });
+      
+      return servers.map((s: ServerConfig) => new ServerNode(s));
     }
 
     if (element instanceof ServerNode) {
-      console.log('🌳 TreeViewProvider: Getting deployments for server:', element.label);
-      const deployments = element.data.deployments.map(d => new DeploymentNode(element.data, d));
-      console.log('📦 TreeViewProvider: Found deployments:', deployments.map(d => d.label));
+      const deployments = element.data.deployments?.map(d => new DeploymentNode(element.data, d)) || [];
       return deployments;
     }
     return [];

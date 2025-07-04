@@ -12,6 +12,8 @@ import {
 } from 'vscode';
 
 import { Logger } from './core/utils/logger';
+import { FileUtils } from './core/utils/FileUtils';
+import { TemplateManager } from './core/templates/TemplateManager';
 import { EventBus } from './core/EventBus';
 import { HookManager } from './core/hooks/HookManager';
 import { PidManager } from './core/pid/PidManager';
@@ -29,8 +31,8 @@ import { LogService } from './services/LogService';
 import { ServerTreeViewProvider } from './ui/views/ServerTreeViewProvider';
 import {
   registerServerCommands,
-  registerDeploymentCommands
-  // registerTemplateCommands // Temporarily disabled
+  registerDeploymentCommands,
+  registerTemplateCommands
 } from './commands';
 
 /* ────────────────────────────────────────────────────────────────── */
@@ -52,6 +54,10 @@ export async function activate(ctx: ExtensionContext): Promise<void> {
   }
 
   try {
+    /* Initialize File System Utilities */
+    singleton.logger.info('Initializing file system utilities...');
+    FileUtils.initialize(ctx);
+
     /* Initialize New Configuration System */
     singleton.logger.info('Initializing new configuration system...');
     
@@ -65,6 +71,18 @@ export async function activate(ctx: ExtensionContext): Promise<void> {
     singleton.configManager = ConfigManager.getInstance();
     
     singleton.logger.info('Configuration system initialized successfully');
+
+    /* Initialize Template Manager */
+    singleton.logger.info('Initializing template management system...');
+    const templateManager = TemplateManager.getInstance();
+    const templateInitResult = await templateManager.initialize();
+    if (!templateInitResult.ok) {
+      singleton.logger.error('Failed to initialize template manager:', templateInitResult.error);
+      window.showErrorMessage(`Template system initialization failed: ${templateInitResult.error.message}`);
+      return;
+    }
+    
+    singleton.logger.info(`Template system initialized successfully. Loaded ${templateManager.getAllTemplates().length} templates.`);
 
     /* Initialize Modernized Plugin System */
     singleton.logger.info('Initializing modernized plugin system...');
@@ -98,8 +116,7 @@ export async function activate(ctx: ExtensionContext): Promise<void> {
     /* Register VSCode commands */
     registerServerCommands(ctx, srvSvc, logSvc);
     registerDeploymentCommands(ctx, depSvc, syncSvc);
-    // Template commands temporarily disabled - need to refactor for new architecture
-    // registerTemplateCommands(ctx, pluginSrvSvc);
+    registerTemplateCommands(ctx, srvSvc);
 
     /* Tree-view */
     const treeProv = new ServerTreeViewProvider(srvSvc, singleton.bus, singleton.logger);

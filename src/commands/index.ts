@@ -8,8 +8,12 @@ import {
   commands,
   window,
   env,
-  Uri
+  Uri,
+  QuickPickItem,
+  QuickPickItemKind,
+  ThemeIcon
 } from 'vscode';
+import * as path from 'path';
 import { ServerNode, DeploymentNode } from '../ui/views/ServerTreeViewProvider';
 import { ServerService } from '../services/ServerService';
 import { DeploymentService } from '../services/DeploymentService';
@@ -17,9 +21,10 @@ import { AutoSyncService } from '../services/AutoSyncService';
 import { Logger } from '../core/utils/logger';
 import { JsmError } from '../core/errors/JsmError';
 import { ErrorCode } from '../core/errors/codes';
-import { DeploymentConfig } from '../core/types/domain';
+import { DeploymentConfig, ServerTemplate } from '../core/types/domain';
 import { EditServerPanel } from '../ui/webviews/EditServerPanel';
 import { LogService } from '../services/LogService';
+import { TemplateManager } from '../core/templates/TemplateManager';
 
 const log = Logger.getInstance().createChild('Commands');
 
@@ -67,16 +72,7 @@ export function registerServerCommands(ctx: ExtensionContext, srv: ServerService
   ctx.subscriptions.push(
     commands.registerCommand('jsm.server.add', async () => {
       try {
-        const panelResult = await EditServerPanel.open({ mode: 'create' });
-        if (!panelResult.ok) return;
-
-        const createResult = await srv.create(panelResult.value);
-        if (createResult.ok) {
-          showSuccess(`Server "${panelResult.value.name}" created successfully!`);
-          await commands.executeCommand('jsm.treeview.refresh');
-        } else {
-          showErr(createResult.error);
-        }
+        await showAddServerMenu(srv);
       } catch (error) {
         showErr(error);
       }
@@ -523,10 +519,376 @@ export function registerDeploymentCommands(
   );
 }
 
-export function registerTemplateCommands(ctx: ExtensionContext) {
+/* ───────────────────────── Template commands ────────────────────── */
+export function registerTemplateCommands(ctx: ExtensionContext, srv: ServerService) {
   ctx.subscriptions.push(
+    // Manage Templates - Main entry point
     commands.registerCommand('jsm.templates.manage', async () => {
-      showInfo('Template management is being redesigned for the new architecture. Coming soon!');
+      try {
+        await showTemplateManagementMenu(srv);
+      } catch (error) {
+        showErr(error);
+      }
+    }),
+
+    // Add Server from Template - Enhanced workflow  
+    commands.registerCommand('jsm.server.addFromTemplate', async () => {
+      try {
+        await showAddServerFromTemplateMenu(srv);
+      } catch (error) {
+        showErr(error);
+      }
     })
   );
+}
+
+/**
+ * Show Add Server menu with available templates or placeholder
+ */
+async function showAddServerMenu(service: ServerService): Promise<void> {
+  const templateManager = TemplateManager.getInstance();
+  const allTemplates = templateManager.getAllTemplates();
+  
+  if (allTemplates.length === 0) {
+    // No templates available - show information and redirect to template management
+    const addTemplate = await window.showInformationMessage(
+      'No server templates available. Register a template first to create server instances.',
+      'Manage Templates',
+      'Cancel'
+    );
+    
+    if (addTemplate === 'Manage Templates') {
+      await showTemplateManagementMenu(service);
+    }
+    return;
+  }
+
+  // Show available templates only
+  const items: QuickPickItem[] = allTemplates.map((template: ServerTemplate) => ({
+    label: template.name,
+    description: `${template.type}`,
+    detail: `Create instance from: ${template.defaultConfig.serverHome}`,
+    iconPath: new ThemeIcon('server')
+  }));
+
+  const selection = await window.showQuickPick(items, {
+    title: 'Add Server from Template',
+    placeHolder: 'Select a template to create server instance',
+    matchOnDescription: true
+  });
+
+  if (!selection) return;
+
+  // Find selected template and create instance
+  const template = allTemplates.find((t: ServerTemplate) => t.name === selection.label);
+  if (template) {
+    await createInstanceFromTemplate(service, template);
+  }
+}
+
+/* ───────────────────────── Template Management Implementation ────────────────────── */
+
+/**
+ * Show template management QuickPick with existing templates + "Add New Template" option
+ */
+async function showTemplateManagementMenu(service: ServerService): Promise<void> {
+  const templateManager = TemplateManager.getInstance();
+  const allTemplates = templateManager.getAllTemplates();
+  const items: QuickPickItem[] = [];
+
+  // Add existing templates first
+  if (allTemplates.length > 0) {
+    allTemplates.forEach((template: ServerTemplate) => {
+      items.push({
+        label: template.name,
+        description: `${template.type}`,
+        detail: template.description || 'No description',
+        iconPath: new ThemeIcon('server')
+      });
+    });
+
+    // Add separator before "Add New Template"
+    items.push({ label: '', kind: QuickPickItemKind.Separator });
+  }
+
+  // Add "Add New Template" option at the bottom
+  items.push({
+    label: '$(plus) Add New Template',
+    description: 'Register a new server template',
+    detail: 'Browse for a server installation directory'
+  });
+
+  const selection = await window.showQuickPick(items, {
+    title: 'Manage Server Templates',
+    placeHolder: allTemplates.length > 0 
+      ? 'Select a template to manage or add a new one'
+      : 'No templates available. Add first',
+    matchOnDescription: true,
+    matchOnDetail: true
+  });
+
+  if (!selection) return;
+
+  if (selection.label.includes('Add New Template')) {
+    await showAddTemplateWorkflow(service);
+  } else {
+    // Find the selected template by name
+    const template = allTemplates.find((t: ServerTemplate) => t.name === selection.label);
+    if (template) {
+      await showTemplateActions(service, template);
+    }
+  }
+}
+
+/**
+ * Show actions for a specific template (rename, delete, etc.)
+ */
+async function showTemplateActions(service: ServerService, template: ServerTemplate): Promise<void> {
+  const actions: QuickPickItem[] = [
+    {
+      label: '$(edit) Rename Template',
+      description: 'Change template display name',
+      detail: `Current name: ${template.name}`
+    },
+    {
+      label: '$(trash) Delete Template',
+      description: 'Remove template permanently',
+      detail: '⚠️ This action cannot be undone'
+    }
+  ];
+
+  const action = await window.showQuickPick(actions, {
+    title: `Manage Template: ${template.name}`,
+    placeHolder: 'Select an action'
+  });
+
+  if (!action) return;
+
+  if (action.label.includes('Rename')) {
+    await renameTemplate(service, template);
+  } else if (action.label.includes('Delete')) {
+    await deleteTemplate(service, template);
+  }
+}
+
+/**
+ * Add New Template workflow: File picker → Silent registration
+ */
+async function showAddTemplateWorkflow(service: ServerService): Promise<void> {
+  const templateManager = TemplateManager.getInstance();
+  
+  // Step 1: File picker for server directory
+  const folderUris = await window.showOpenDialog({
+    canSelectFiles: false,
+    canSelectFolders: true,
+    canSelectMany: false,
+    openLabel: 'Select Server Directory',
+    title: 'Select Server Installation Directory'
+  });
+
+  if (!folderUris || folderUris.length === 0) return;
+
+  const serverPath = folderUris[0].fsPath;
+  const folderName = path.basename(serverPath);
+
+  // Step 2: Auto-detect server type
+  const detectionResult = await service.detectServerType(serverPath);
+  if (!detectionResult.ok) {
+    showErr(new JsmError(ErrorCode.CONFIG_INVALID, `Cannot detect server type from path: ${serverPath}`));
+    return;
+  }
+
+  const serverType = detectionResult.value;
+
+  // Step 3: Input template name
+  const templateName = await window.showInputBox({
+    title: 'Template Name',
+    prompt: 'Enter template name',
+    value: `${folderName}`,
+    validateInput: (value) => {
+      if (!value?.trim()) return 'Template name required';
+      if (value.trim().length > 100) return 'Name too long (max 100 chars)';
+      if (templateManager.getAllTemplates().some((t: ServerTemplate) => t.name === value.trim())) {
+        return 'Template name already exists';
+      }
+      return undefined;
+    }
+  });
+
+  if (!templateName) return;
+
+  // Step 4: Get default config and create template
+  const defaultConfigResult = await service.getDefaultConfig(serverType);
+  if (!defaultConfigResult.ok) {
+    showErr(defaultConfigResult.error);
+    return;
+  }
+
+  const template: ServerTemplate = {
+    id: `template_${Date.now()}`,
+    name: templateName.trim(),
+    type: serverType,
+    defaultConfig: {
+      ...defaultConfigResult.value,
+      serverHome: serverPath,
+      javaHome: process.env.JAVA_HOME || '',
+      host: 'localhost',
+      port: serverType === 'tomcat' ? 8080 : 8081,
+      autoSync: false
+    },
+    description: `${serverType} template from ${serverPath}`
+  };
+
+  // Register template with TemplateManager
+  const addResult = await templateManager.addTemplate(template);
+  if (addResult.ok) {
+    showSuccess(`Template "${templateName}" registered successfully!`);
+  } else {
+    showErr(addResult.error);
+  }
+}
+
+/**
+ * Show Add Server menu with templates or explanation
+ */
+async function showAddServerFromTemplateMenu(service: ServerService): Promise<void> {
+  const templateManager = TemplateManager.getInstance();
+  const allTemplates = templateManager.getAllTemplates();
+  
+  if (allTemplates.length === 0) {
+    // No templates available - show explanation and redirect to template management
+    const addTemplate = await window.showInformationMessage(
+      'No server templates available. You need to register a server template first before creating server instances.',
+      'Add Template',
+      'Cancel'
+    );
+    
+    if (addTemplate === 'Add Template') {
+      await showAddTemplateWorkflow(service);
+    }
+    return;
+  }
+
+  // Show available templates
+  const items: QuickPickItem[] = allTemplates.map((template: ServerTemplate) => ({
+    label: template.name,
+    description: `${template.type}`,
+    detail: `Create instance from: ${template.defaultConfig.serverHome}`,
+    iconPath: new ThemeIcon('server')
+  }));
+
+  const selection = await window.showQuickPick(items, {
+    title: 'Create Server Instance',
+    placeHolder: 'Select a template to create a server instance from',
+    matchOnDescription: true
+  });
+
+  if (!selection) return;
+
+  // Find the selected template by name
+  const template = allTemplates.find((t: ServerTemplate) => t.name === selection.label);
+  
+  if (template) {
+    await createInstanceFromTemplate(service, template);
+  }
+}
+
+/**
+ * Create server instance from template using EditServerPanel
+ */
+async function createInstanceFromTemplate(service: ServerService, template: ServerTemplate): Promise<void> {
+  // Generate simple default configuration from template
+  const defaultConfig = {
+    id: `${template.type}_${Date.now()}`,
+    name: `${template.name} Instance`,
+    type: template.type,
+    state: 'stopped' as const,
+    deployments: [],
+    pidFile: '',
+    debug: { enable: false },
+    ...template.defaultConfig
+  };
+  
+  // Use EditServerPanel.openFromTemplate for clean template → server workflow
+  const panelResult = await EditServerPanel.open({
+    mode: 'createFromTemplate',
+    data: defaultConfig as any
+  });
+
+  if (!panelResult.ok) {
+    // User cancelled
+    return;
+  }
+
+  // Create server with configuration from EditServerPanel
+  const createResult = await service.create(panelResult.value);
+  if (createResult.ok) {
+    showSuccess(`Server instance "${panelResult.value.name}" created successfully!`);
+    
+    // Refresh the tree view to show the new server
+    await commands.executeCommand('jsm.treeview.refresh');
+  } else {
+    showErr(createResult.error);
+  }
+}
+
+/**
+ * Rename template workflow
+ */
+async function renameTemplate(service: ServerService, template: ServerTemplate): Promise<void> {
+  const templateManager = TemplateManager.getInstance();
+  
+  const newName = await window.showInputBox({
+    title: 'Rename Template',
+    prompt: 'Enter new template name',
+    value: template.name,
+    validateInput: (value) => {
+      if (!value || value.trim().length === 0) {
+        return 'Template name is required';
+      }
+      if (value.trim().length > 100) {
+        return 'Template name too long (max 100 characters)';
+      }
+      // Check for duplicate names (excluding current template)
+      if (templateManager.getAllTemplates().some((t: ServerTemplate) => t.name === value.trim() && t.id !== template.id)) {
+        return 'Template name already exists';
+      }
+      return undefined;
+    }
+  });
+
+  if (!newName || newName.trim() === template.name) return;
+
+  // Update template name
+  const updatedTemplate = { ...template, name: newName.trim() };
+  const updateResult = await templateManager.updateTemplate(updatedTemplate);
+  
+  if (updateResult.ok) {
+    showSuccess(`Template renamed to "${newName.trim()}" successfully`);
+  } else {
+    showErr(updateResult.error);
+  }
+}
+
+/**
+ * Delete template with confirmation
+ */
+async function deleteTemplate(service: ServerService, template: ServerTemplate): Promise<void> {
+  const confirmation = await window.showWarningMessage(
+    `⚠️ Delete template "${template.name}"?\n\nThis will permanently remove the template but keep the original server files intact.`,
+    { modal: true },
+    'Delete Template'
+  );
+
+  if (confirmation !== 'Delete Template') return;
+
+  // Delete template using TemplateManager
+  const templateManager = TemplateManager.getInstance();
+  const deleteResult = await templateManager.deleteTemplate(template.id);
+  
+  if (deleteResult.ok) {
+    showSuccess(`Template "${template.name}" deleted successfully`);
+  } else {
+    showErr(deleteResult.error);
+  }
 }

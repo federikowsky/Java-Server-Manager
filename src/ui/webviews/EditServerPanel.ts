@@ -5,8 +5,7 @@
  */
 
 import { window, Uri, ViewColumn, WebviewPanel, Disposable } from 'vscode';
-import { ServerConfig } from '../../core/types/domain';
-import { BaseServerTemplate } from '../../core/types/instance';
+import { ServerConfig, ServerTemplate } from '../../core/types/domain';
 import { Result, ok, err } from '../../core/utils/result';
 import { Logger } from '../../core/utils/logger';
 
@@ -26,18 +25,18 @@ export class EditServerPanel {
   /**
    * Create server instance from template - Simple defaults + EditServerPanel
    */
-  static async openFromTemplate(template: BaseServerTemplate): Promise<Result<ServerConfig, 'CANCELED'>> {
+  static async openFromTemplate(template: ServerTemplate): Promise<Result<ServerConfig, 'CANCELED'>> {
     // Generate simple default configuration from template
     const defaultConfig: Partial<ServerConfig> = {
       id: `${template.type}_${Date.now()}`,
       name: `${template.name} Instance`,
       type: template.type,
-      serverHome: template.basePath,
-      javaHome: process.env.JAVA_HOME || '',
-      host: 'localhost',
-      port: 8080,
+      serverHome: template.defaultConfig.serverHome,
+      javaHome: template.defaultConfig.javaHome || process.env.JAVA_HOME || '',
+      host: template.defaultConfig.host || 'localhost',
+      port: template.defaultConfig.port || 8080,
       state: 'stopped',
-      autoSync: true,
+      autoSync: template.defaultConfig.autoSync || true,
       deployments: [],
       pidFile: '',
       debug: { enable: false }

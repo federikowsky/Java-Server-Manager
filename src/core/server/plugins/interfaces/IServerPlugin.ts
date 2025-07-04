@@ -3,10 +3,10 @@
  * Zero dependencies on complex metadata structures
  */
 
-import { ServerConfig, DeploymentConfig, ServerState } from '../../types/domain';
-import { ServerStartMode } from '../../types/runtime';
-import { Result } from '../../utils/result';
-import { JsmError } from '../../errors/JsmError';
+import { ServerConfig, DeploymentConfig, ServerState } from '../../../types/domain';
+import { ServerStartMode } from '../../../types/runtime';
+import { Result } from '../../../utils/result';
+import { JsmError } from '../../../errors/JsmError';
 
 /**
  * Minimal plugin interface - Single responsibility only

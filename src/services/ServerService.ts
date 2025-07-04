@@ -1,14 +1,14 @@
 /*
- * ServerService - KISS approach with ConfigManager
- * Integrates with runtime manager and configuration architecture
+ * ServerService - Event-driven facade following KISS architecture
+ * Simplified approach using new ServerManager with ConfigManager persistence
  */
 
 import { Result, ok, err } from '../core/utils/result';
 import { ServerConfig, ServerState, ServerType } from '../core/types/domain';
 import { ServerStartMode } from '../core/types/runtime';
 import { ConfigManager } from '../core/config/ConfigManager';
-import { ServerRuntimeManager } from '../core/plugins/runtime/ServerRuntimeManager';
-import { PluginRegistry } from '../core/plugins/index';
+import { ServerManager } from '../core/server/ServerManager';
+import { PluginAdapter } from '../core/server/PluginAdapter';
 import { EventBus } from '../core/EventBus';
 import { JsmError } from '../core/errors/JsmError';
 import { ErrorCode } from '../core/errors/codes';
@@ -18,12 +18,13 @@ import { PidManager } from '../core/pid/PidManager';
 import { DebugManager } from '../core/debug/DebugManager';
 
 /**
- * Server Service using ConfigManager and runtime manager
+ * Server Service facade using new event-driven architecture
+ * Delegates to ServerManager and persists configuration changes
  */
 export class ServerService {
   private readonly log = Logger.getInstance().createChild('ServerService');
-  private readonly runtimeManager = ServerRuntimeManager.getInstance();
-  private readonly pluginRegistry = PluginRegistry.getInstance();
+  private readonly serverManager = ServerManager.getInstance();
+  private readonly pluginAdapter = PluginAdapter.getInstance();
 
   constructor(
     private readonly configManager: ConfigManager,
@@ -31,340 +32,274 @@ export class ServerService {
     private readonly bus: EventBus,
     private readonly hooks: HookManager,
     private readonly dbgMgr: DebugManager
-  ) {}
-
-  /* ───────────────────────── WORKSPACE BOOT ─────────────────────── */
-  
-  async loadWorkspace(): Promise<Result<void, JsmError>> {
-    const allResult = await this.configManager.getAllServers();
-    if (!allResult.ok) {
-      this.log.error('Failed to load server configurations:', allResult.error);
-      return allResult as any;
-    }
-    
-    this.log.info(`Loading ${allResult.value.length} server configurations...`);
-    
-    for (const server of allResult.value) {
-      try {
-        // Register server with runtime manager
-        const registerResult = await this.runtimeManager.register(server);
-        if (!registerResult.ok) {
-          this.log.warn(`Failed to register server ${server.name}: ${registerResult.error.message}`);
-          continue;
-        }
-
-        // Handle crash recovery
-        if (server.state === 'running') {
-          const pid = await this.pidMgr.read(server.pidFile);
-          if (pid) {
-            // Verify server is actually running
-            const healthResult = await this.runtimeManager.getServerHealth(server.id);
-            if (healthResult.ok && healthResult.value) {
-              this.log.info(`Recovered running server ${server.name} (pid ${pid})`);
-            } else {
-              // Process not running, update state
-              server.state = 'stopped';
-              await this.configManager.saveServer(server);
-              this.log.info(`Corrected state for server ${server.name} (process not running)`);
-            }
-          } else {
-            server.state = 'stopped';
-            await this.configManager.saveServer(server);
-          }
-        }
-        
-        this.bus.emit('ServerAdded', server);
-      } catch (error) {
-        this.log.error(`Error processing server ${server.name}: ${error}`);
-      }
-    }
-    
-    this.bus.emit('WorkspaceLoaded', { servers: allResult.value });
-    this.log.info(`Workspace loaded with ${allResult.value.length} servers`);
-    return ok(undefined);
+  ) {
+    // Listen for state changes to persist them
+    this.bus.on('ServerStateChanged', async (event) => {
+      await this.persistServerState(event.id, event.state);
+    });
   }
 
-  /* ───────────────────────── CRUD ──────────────────────────────── */
-  
-  async create(draft: Partial<ServerConfig>): Promise<Result<ServerConfig, JsmError>> {
+  /**
+   * Persist server state changes to ConfigManager
+   */
+  private async persistServerState(serverId: string, newState: ServerState): Promise<void> {
+    try {
+      const serverResult = this.configManager.getServer(serverId);
+      if (serverResult.ok) {
+        const server = serverResult.value;
+        server.state = newState;
+        await this.configManager.saveServer(server);
+        this.log.debug(`Persisted state change for ${serverId}: ${newState}`);
+      }
+    } catch (error) {
+      this.log.error(`Failed to persist state for ${serverId}: ${error}`);
+    }
+  }
+
+  // ==================== PUBLIC API ====================
+
+  /**
+   * Get all servers from ConfigManager
+   */
+  async getAllServers(): Promise<Result<ServerConfig[], JsmError>> {
+    return await this.configManager.getAllServers();
+  }
+
+  /**
+   * Get server by ID from ConfigManager
+   */
+  getServer(id: string): Result<ServerConfig, JsmError> {
+    return this.configManager.getServer(id);
+  }
+
+  /**
+   * Get server by ID (alias for backwards compatibility)
+   */
+  get(id: string): Result<ServerConfig, JsmError> {
+    return this.getServer(id);
+  }
+
+  /**
+   * Get all servers (alias for backwards compatibility)
+   */
+  async getAll(): Promise<Result<ServerConfig[], JsmError>> {
+    return this.getAllServers();
+  }
+
+  /**
+   * Get server state (alias for getStatus)
+   */
+  getServerState(id: string): Result<ServerState, JsmError> {
+    return this.serverManager.getState(id);
+  }
+
+  /**
+   * Create new server - persist to ConfigManager and notify ServerManager
+   */
+  async create(config: ServerConfig): Promise<Result<ServerConfig, JsmError>> {
+    // Validate configuration
+    if (!config.id || !config.name || !config.serverHome) {
+      return err(new JsmError(ErrorCode.CONFIG_INVALID, 'Missing required fields: id, name, serverHome'));
+    }
+
     try {
       // Auto-detect server type if not provided
-      if (!draft.type && draft.serverHome) {
-        const detectionResult = await this.runtimeManager.detectServerType(draft.serverHome);
+      if (!config.type && config.serverHome) {
+        const detectionResult = await this.pluginAdapter.detectServerType(config.serverHome);
         if (detectionResult.ok) {
-          draft.type = detectionResult.value as ServerType;
-          this.log.info(`Auto-detected server type: ${draft.type} for ${draft.name}`);
+          config.type = detectionResult.value;
+          this.log.info(`Auto-detected server type: ${config.type} for ${config.name}`);
         }
       }
 
       // Get default configuration from plugin
-      if (draft.type) {
-        const defaultConfigResult = await this.runtimeManager.getDefaultConfig(draft.type);
+      if (config.type) {
+        const defaultConfigResult = await this.pluginAdapter.getDefaultConfig(config.type);
         if (defaultConfigResult.ok) {
-          // Merge defaults with provided config
-          draft = { ...defaultConfigResult.value, ...draft };
+          // Merge defaults with provided config (provided config takes precedence)
+          config = { ...defaultConfigResult.value, ...config } as ServerConfig;
         }
       }
 
-      // Use draft as the full config (no more transformer needed)
-      const fullConfig = draft as ServerConfig;
-      
-      // Validate configuration with plugin
-      if (fullConfig.type) {
-        const pluginResult = this.pluginRegistry.get(fullConfig.type);
-        if (pluginResult.ok) {
-          const validationResult = pluginResult.value.validateConfig(fullConfig);
-          if (!validationResult.ok) {
-            return validationResult as any;
-          }
-        }
-      }
-
-      // Save configuration using ConfigManager
-      const saveResult = await this.configManager.saveServer(fullConfig);
+      // Save to ConfigManager first
+      const saveResult = await this.configManager.saveServer(config);
       if (!saveResult.ok) {
-        return saveResult as any;
+        return saveResult;
       }
 
-      // Register with runtime manager
-      const registerResult = await this.runtimeManager.register(fullConfig);
+      // Register with ServerManager to create runtime
+      const registerResult = await this.serverManager.register(config);
       if (!registerResult.ok) {
-        // Rollback configuration save
-        await this.configManager.deleteServer(fullConfig.id);
+        // Rollback configuration if runtime creation fails
+        await this.configManager.deleteServer(config.id);
         return registerResult as any;
       }
-      
-      this.bus.emit('ServerAdded', fullConfig);
-      await this.hooks.invoke('afterAddServer', fullConfig);
-      
-      this.log.info(`Created server: ${fullConfig.name} (${fullConfig.type})`);
-      return ok(fullConfig);
+
+      this.bus.emit('ServerAdded', config);
+      await this.hooks.invoke('afterAddServer', config);
+      this.log.info(`Server created: ${config.name} (${config.id})`);
+      return ok(config);
     } catch (error) {
-      return err(new JsmError(
-        ErrorCode.CONFIG_INVALID,
-        `Failed to create server: ${error}`,
-        error
-      ));
+      return err(new JsmError(ErrorCode.PLUGIN_ERROR, `Failed to create server: ${error}`, error));
     }
   }
 
-  async update(draft: ServerConfig): Promise<Result<ServerConfig, JsmError>> {
+  /**
+   * Update server configuration
+   */
+  async update(config: ServerConfig): Promise<Result<ServerConfig, JsmError>> {
     try {
-      // Validate configuration with plugin
-      if (draft.type) {
-        const pluginResult = this.pluginRegistry.get(draft.type);
-        if (pluginResult.ok) {
-          const validationResult = pluginResult.value.validateConfig(draft);
-          if (!validationResult.ok) {
-            return validationResult as any;
-          }
-        }
-      }
-
-      // Save configuration using ConfigManager
-      const saveResult = await this.configManager.saveServer(draft);
+      // Update ConfigManager
+      const saveResult = await this.configManager.saveServer(config);
       if (!saveResult.ok) {
-        return saveResult as any;
+        return saveResult;
       }
 
-      // Update runtime if registered
-      const runtimeResult = this.runtimeManager.get(draft.id);
-      if (runtimeResult.ok) {
-        runtimeResult.value.updateConfig(draft);
+      // Re-register with ServerManager to update runtime
+      await this.serverManager.unregister(config.id);
+      const registerResult = await this.serverManager.register(config);
+      if (!registerResult.ok) {
+        return registerResult as any;
       }
-      
-      this.bus.emit('ServerUpdated', draft);
-      await this.hooks.invoke('afterAddServer', draft);
-      
-      this.log.info(`Updated server: ${draft.name}`);
-      return ok(draft);
+
+      this.bus.emit('ServerUpdated', config);
+      await this.hooks.invoke('afterAddServer', config); // Use existing hook
+      this.log.info(`Server updated: ${config.name} (${config.id})`);
+      return ok(config);
     } catch (error) {
-      return err(new JsmError(
-        ErrorCode.CONFIG_INVALID,
-        `Failed to update server: ${error}`,
-        error
-      ));
+      return err(new JsmError(ErrorCode.PLUGIN_ERROR, `Failed to update server: ${error}`, error));
     }
   }
 
+  /**
+   * Delete server
+   */
   async delete(id: string): Promise<Result<void, JsmError>> {
     try {
+      // Get server config for hooks
+      const serverResult = this.configManager.getServer(id);
+      const serverConfig = serverResult.ok ? serverResult.value : undefined;
+
       // Stop server if running
-      const runtimeResult = this.runtimeManager.get(id);
-      if (runtimeResult.ok) {
-        const stopResult = await this.runtimeManager.stopServer(id);
-        if (!stopResult.ok) {
-          this.log.warn(`Failed to stop server ${id} before deletion: ${stopResult.error.message}`);
-        }
-        
-        // Unregister from runtime manager
-        await this.runtimeManager.unregister(id);
+      const stopResult = await this.serverManager.stop(id);
+      if (!stopResult.ok && stopResult.error.code !== ErrorCode.SERVER_NOT_FOUND) {
+        return stopResult;
       }
 
-      // Delete configuration using ConfigManager
+      // Remove from ServerManager
+      const removeResult = await this.serverManager.unregister(id);
+      if (!removeResult.ok) {
+        return removeResult;
+      }
+
+      // Delete from ConfigManager
       const deleteResult = await this.configManager.deleteServer(id);
       if (!deleteResult.ok) {
         return deleteResult;
       }
 
       this.bus.emit('ServerDeleted', { id });
-      await this.hooks.invoke('afterDeleteServer', id);
-      
-      this.log.info(`Deleted server: ${id}`);
+      if (serverConfig) {
+        await this.hooks.invoke('afterDeleteServer', id);
+      }
+      this.log.info(`Server deleted: ${id}`);
       return ok(undefined);
     } catch (error) {
-      return err(new JsmError(
-        ErrorCode.SERVER_NOT_FOUND,
-        `Failed to delete server: ${error}`,
-        error
-      ));
+      return err(new JsmError(ErrorCode.SERVER_DELETE_ERROR, `Failed to delete server: ${error}`, error));
     }
   }
 
-  get(id: string): Result<ServerConfig, JsmError> {
-    // First try to get from runtime manager (most current)
-    const runtimeResult = this.runtimeManager.get(id);
-    if (runtimeResult.ok) {
-      return ok(runtimeResult.value.config);
-    }
-
-    // Fallback to configuration manager (async version would be better)
-    return err(new JsmError(ErrorCode.SERVER_NOT_FOUND, 'Server not found in runtime manager'));
-  }
-
-  async getById(id: string): Promise<Result<ServerConfig, JsmError>> {
-    return this.configManager.getServer(id);
-  }
-
-  async getAll(): Promise<Result<ServerConfig[], JsmError>> {
-    // Get from runtime manager for most current state
+  /**
+   * Start server with optional debug mode
+   */
+  async start(id: string, mode: 'run' | 'debug' = 'run'): Promise<Result<void, JsmError>> {
     try {
-      const runtimes = this.runtimeManager.list();
-      const configs = runtimes.map(runtime => runtime.config);
-      return ok(configs);
-    } catch (error) {
-      // Fallback to configuration manager
-      return this.configManager.getAllServers();
-    }
-  }
-
-  /* ───────────────────────── LIFECYCLE ─────────────────────────── */
-  
-  async start(id: string, mode: 'run' | 'debug'): Promise<Result<void, JsmError>> {
-    try {
-      await this.hooks.invoke('beforeStartServer', id, mode);
-      
-      // Get server configuration
-      const serverResult = await this.getById(id);
+      // Get server configuration for hooks
+      const serverResult = this.configManager.getServer(id);
       if (!serverResult.ok) {
         return serverResult as any;
       }
       const server = serverResult.value;
+
+      await this.hooks.invoke('beforeStartServer', id, mode);
 
       let debugPort: number | undefined;
       if (mode === 'debug') {
         debugPort = await this.dbgMgr.findFreePort();
       }
 
-      // Start server using runtime manager
+      // Start server using ServerManager
       const startMode: ServerStartMode = mode === 'debug' ? 'debug' : 'run';
-      const startResult = await this.runtimeManager.startServer(id, startMode, debugPort);
+      const startResult = await this.serverManager.start(id, startMode, debugPort);
       if (!startResult.ok) {
         return startResult;
       }
 
-      // Update server state
-      server.state = 'running';
-      const updateResult = await this.configManager.saveServer(server);
-      if (!updateResult.ok) {
-        this.log.warn(`Failed to update server state: ${updateResult.error.message}`);
-      }
-
       // Setup debug session if in debug mode
       if (mode === 'debug' && debugPort) {
         const name = await this.dbgMgr.generateLaunchConfig(id, debugPort);
         await this.dbgMgr.attachDebugger(name);
       }
 
-      this.bus.emit('ServerStateChanged', { id, state: 'running' });
       await this.hooks.invoke('afterStartServer', id);
-      
       this.log.info(`Started server: ${server.name} in ${mode} mode`);
       return ok(undefined);
     } catch (error) {
-      return err(new JsmError(
-        ErrorCode.SERVER_STARTUP_ERROR,
-        `Failed to start server: ${error}`,
-        error
-      ));
+      return err(new JsmError(ErrorCode.SERVER_STARTUP_ERROR, `Failed to start server: ${error}`, error));
     }
   }
 
+  /**
+   * Stop server
+   */
   async stop(id: string): Promise<Result<void, JsmError>> {
     try {
-      await this.hooks.invoke('beforeStopServer', id);
-      
-      const serverResult = await this.getById(id);
+      // Get server configuration for hooks
+      const serverResult = this.configManager.getServer(id);
       if (!serverResult.ok) {
         return serverResult as any;
       }
       const server = serverResult.value;
 
-      // Stop server using runtime manager
-      const stopResult = await this.runtimeManager.stopServer(id);
+      await this.hooks.invoke('beforeStopServer', id);
+
+      const stopResult = await this.serverManager.stop(id);
       if (!stopResult.ok) {
         return stopResult;
       }
 
-      // Update server state
-      server.state = 'stopped';
-      const updateResult = await this.configManager.saveServer(server);
-      if (!updateResult.ok) {
-        this.log.warn(`Failed to update server state: ${updateResult.error.message}`);
-      }
-
-      this.bus.emit('ServerStateChanged', { id, state: 'stopped' });
       await this.hooks.invoke('afterStopServer', id);
-      
       this.log.info(`Stopped server: ${server.name}`);
       return ok(undefined);
     } catch (error) {
-      return err(new JsmError(
-        ErrorCode.SERVER_STOP_ERROR,
-        `Failed to stop server: ${error}`,
-        error
-      ));
+      return err(new JsmError(ErrorCode.SERVER_STOP_ERROR, `Failed to stop server: ${error}`, error));
     }
   }
 
-  async restart(id: string, mode: 'run' | 'debug'): Promise<Result<void, JsmError>> {
+  /**
+   * Restart server
+   */
+  async restart(id: string, mode: 'run' | 'debug' = 'run'): Promise<Result<void, JsmError>> {
     try {
-      await this.hooks.invoke('beforeStopServer', id);
-      
-      // Get server configuration
-      const serverResult = await this.getById(id);
+      // Get server configuration for hooks
+      const serverResult = this.configManager.getServer(id);
       if (!serverResult.ok) {
         return serverResult as any;
       }
       const server = serverResult.value;
+
+      await this.hooks.invoke('beforeStopServer', id);
 
       let debugPort: number | undefined;
       if (mode === 'debug') {
         debugPort = await this.dbgMgr.findFreePort();
       }
 
-      // Restart server using runtime manager
+      // Restart server using ServerManager
       const startMode: ServerStartMode = mode === 'debug' ? 'debug' : 'run';
-      const restartResult = await this.runtimeManager.restartServer(id, startMode, debugPort);
+      const restartResult = await this.serverManager.restart(id, startMode, debugPort);
       if (!restartResult.ok) {
         return restartResult;
-      }
-
-      // Update server state
-      server.state = 'running';
-      const updateResult = await this.configManager.saveServer(server);
-      if (!updateResult.ok) {
-        this.log.warn(`Failed to update server state: ${updateResult.error.message}`);
       }
 
       // Setup debug session if in debug mode
@@ -373,22 +308,107 @@ export class ServerService {
         await this.dbgMgr.attachDebugger(name);
       }
 
-      this.bus.emit('ServerStateChanged', { id, state: 'running' });
       await this.hooks.invoke('afterStartServer', id);
-      
       this.log.info(`Restarted server: ${server.name} in ${mode} mode`);
       return ok(undefined);
     } catch (error) {
-      return err(new JsmError(
-        ErrorCode.SERVER_RESTART_ERROR,
-        `Failed to restart server: ${error}`,
-        error
-      ));
+      return err(new JsmError(ErrorCode.SERVER_RESTART_ERROR, `Failed to restart server: ${error}`, error));
     }
   }
 
+  /**
+   * Get server status
+   */
+  async getStatus(id: string): Promise<Result<ServerState, JsmError>> {
+    return this.serverManager.getState(id);
+  }
+
+  /**
+   * Wait for server to reach specific status
+   */
+  async waitForStatus(id: string, targetStatus: ServerState, timeoutMs: number = 30000): Promise<Result<void, JsmError>> {
+    return await this.serverManager.waitForStatus(id, targetStatus, timeoutMs);
+  }
+
+  /**
+   * Health check for a server
+   */
+  async healthCheck(id: string): Promise<Result<boolean, JsmError>> {
+    return await this.serverManager.healthCheck(id);
+  }
+
+  /**
+   * Detect server type at path
+   */
+  async detectServerType(serverHome: string): Promise<Result<ServerType, JsmError>> {
+    return await this.pluginAdapter.detectServerType(serverHome);
+  }
+
+  /**
+   * Get default configuration for server type
+   */
+  async getDefaultConfig(serverType: ServerType): Promise<Result<Partial<ServerConfig>, JsmError>> {
+    return await this.pluginAdapter.getDefaultConfig(serverType);
+  }
+
+  /**
+   * Get supported server types
+   */
+  getSupportedTypes(): ServerType[] {
+    return this.pluginAdapter.getSupportedTypes();
+  }
+
+  /**
+   * Load workspace servers from ConfigManager
+   */
+  async loadWorkspace(): Promise<Result<void, JsmError>> {
+    try {
+      const allResult = await this.configManager.getAllServers();
+      if (!allResult.ok) {
+        return allResult;
+      }
+
+      this.log.info(`Loading ${allResult.value.length} server configurations...`);
+
+      for (const server of allResult.value) {
+        try {
+          // Create runtime for each server
+          const registerResult = await this.serverManager.register(server);
+          if (!registerResult.ok) {
+            this.log.warn(`Failed to create runtime for server ${server.name}: ${registerResult.error.message}`);
+            continue;
+          }
+
+          // Handle crash recovery for running servers
+          if (server.state === 'running') {
+            const healthResult = await this.serverManager.healthCheck(server.id);
+            if (!healthResult.ok || !healthResult.value) {
+              // Process not running, update state
+              server.state = 'stopped';
+              await this.configManager.saveServer(server);
+              this.log.info(`Corrected state for server ${server.name} (process not running)`);
+            }
+          }
+
+          this.bus.emit('ServerAdded', server);
+        } catch (error) {
+          this.log.error(`Error processing server ${server.name}: ${error}`);
+        }
+      }
+
+      this.bus.emit('WorkspaceLoaded', { servers: allResult.value });
+      this.log.info(`Workspace loaded with ${allResult.value.length} servers`);
+      return ok(undefined);
+    } catch (error) {
+      return err(new JsmError(ErrorCode.CONFIG_INVALID, `Failed to load workspace: ${error}`, error));
+    }
+  }
+
+  /**
+   * Stop all running servers
+   */
   async stopAll(): Promise<void> {
-    const allResult = await this.getAll();
+    const allResult = await this.getAllServers();
     if (allResult.ok) {
       const runningServers = allResult.value.filter(s => s.state === 'running');
       for (const server of runningServers) {
@@ -401,53 +421,11 @@ export class ServerService {
     }
   }
 
-  /* ───────────────────────── PLUGIN INTEGRATION ─────────────────────── */
-
-  /**
-   * Get server state from runtime manager
-   */
-  getServerState(id: string): Result<ServerState, JsmError> {
-    const runtimeResult = this.runtimeManager.get(id);
-    if (!runtimeResult.ok) {
-      return runtimeResult as any;
-    }
-    
-    return ok(runtimeResult.value.getCurrentState());
-  }
-
-  /**
-   * Run health check for a server
-   */
-  async healthCheck(id: string): Promise<Result<boolean, JsmError>> {
-    return this.runtimeManager.getServerHealth(id);
-  }
-
-  /**
-   * Detect server type at a given path
-   */
-  async detectServerType(serverHome: string): Promise<Result<string, JsmError>> {
-    return this.runtimeManager.detectServerType(serverHome);
-  }
-
-  /**
-   * Get default configuration for a server type
-   */
-  async getDefaultConfig(serverType: string): Promise<Result<Partial<ServerConfig>, JsmError>> {
-    return this.runtimeManager.getDefaultConfig(serverType);
-  }
-
-  /**
-   * Get supported server types
-   */
-  getSupportedTypes(): string[] {
-    return this.runtimeManager.getSupportedTypes();
-  }
-
   /**
    * Get running servers
    */
   async getRunning(): Promise<ServerConfig[]> {
-    const allResult = await this.getAll();
+    const allResult = await this.getAllServers();
     return allResult.ok ? allResult.value.filter(s => s.state === 'running') : [];
   }
 
@@ -455,25 +433,18 @@ export class ServerService {
    * Get stopped servers
    */
   async getStopped(): Promise<ServerConfig[]> {
-    const allResult = await this.getAll();
+    const allResult = await this.getAllServers();
     return allResult.ok ? allResult.value.filter(s => s.state === 'stopped') : [];
   }
-
-  /* ───────────────────────── CLEANUP ─────────────────────── */
 
   /**
    * Dispose service resources
    */
   async dispose(): Promise<void> {
     this.log.info('Disposing server service...');
-    
     try {
-      // Stop all running servers
       await this.stopAll();
-      
-      // Dispose runtime manager
-      await this.runtimeManager.dispose();
-      
+      await this.serverManager.dispose();
       this.log.info('Server service disposed');
     } catch (error) {
       this.log.error(`Error disposing server service: ${error}`);

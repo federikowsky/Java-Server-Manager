@@ -3,10 +3,10 @@
  */
 
 import { IServerPlugin } from '../interfaces/IServerPlugin';
-import { Result, ok, err } from '../../utils/result';
-import { JsmError } from '../../errors/JsmError';
-import { ErrorCode } from '../../errors/codes';
-import { ServerType } from '../../types/domain';
+import { Result, ok, err } from '../../../utils/result';
+import { JsmError } from '../../../errors/JsmError';
+import { ErrorCode } from '../../../errors/codes';
+import { ServerType } from '../../../types/domain';
 
 export class PluginRegistry {
   private static instance: PluginRegistry;

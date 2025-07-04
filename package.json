@@ -175,6 +175,11 @@
           "group": "inline@1"
         },
         {
+          "command": "jsm.server.stop",
+          "when": "view == javaServerManagerView && viewItem == server-stopping",
+          "group": "inline@1"
+        },
+        {
           "command": "jsm.server.startRun",
           "when": "view == javaServerManagerView && viewItem == server-error",
           "group": "inline@1"

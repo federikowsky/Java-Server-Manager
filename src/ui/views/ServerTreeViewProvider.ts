@@ -19,13 +19,13 @@ import { ServerService } from '../../services/ServerService';
 import { EventBus, EventKey } from '../../core/EventBus';
 import { ServerConfig, DeploymentConfig } from '../../core/types/domain';
 import { Logger } from '../../core/utils/logger';
+import { SERVER_STATE_TO_CONTEXT, CONTEXT_VALUES } from '../../core/constants/TreeViewConstants';
 
 /* ───────────────────────── Tree Items ───────────────────────── */
 export class ServerNode extends TreeItem {
   constructor(readonly data: ServerConfig) {
     // Show server name with state only (no port)
-    const instanceInfo = data.instancePath ? ' [Instance]' : '';
-    const displayName = `${data.name} (${data.state})${instanceInfo}`;
+    const displayName = `${data.name} (${data.state})`;
     const hasDeployments = data.deployments && data.deployments.length > 0;
     super(displayName, hasDeployments ? 1 : 0);
     
@@ -51,15 +51,19 @@ export class ServerNode extends TreeItem {
     }
     
     this.iconPath = new ThemeIcon(iconName);
-    this.contextValue = `server-${data.state}`; // Dynamic context value based on state
+    // Use centralized context value mapping
+    this.contextValue = SERVER_STATE_TO_CONTEXT[data.state] || SERVER_STATE_TO_CONTEXT.stopped;
     this.tooltip = `${data.type} @ ${data.host}:${data.port} (${data.state})${data.instancePath ? '\nInstance Path: ' + data.instancePath : ''}`;
+    
+    // Debug logging for context value assignment
+    console.log(`🏷️ ServerNode created: ${data.name} | state: ${data.state} | contextValue: ${this.contextValue}`);
   }
 }
 
 export class DeploymentNode extends TreeItem {
   constructor(readonly parent: ServerConfig, readonly data: DeploymentConfig) {
     super(data.name, 0);
-    this.contextValue = 'deployment';
+    this.contextValue = CONTEXT_VALUES.DEPLOYMENT;
     this.iconPath = new ThemeIcon('file-code');
     this.tooltip = data.contextPath;
   }
@@ -84,10 +88,12 @@ export class ServerTreeViewProvider implements TreeDataProvider<TreeItem>, Dispo
       'DeploymentAdded',
       'DeploymentRemoved',
       'DeploymentStateChanged',
-      'ServerStateChanged'
+      'ServerStateChanged',
+      'ConfigChanged'
     ];
     events.forEach(e => {
       bus.on(e, (data) => {
+        this.log.info(`🔄 TreeView refresh triggered by event: ${e}`);
         this.refresh();
       });
     });
@@ -102,32 +108,46 @@ export class ServerTreeViewProvider implements TreeDataProvider<TreeItem>, Dispo
     
     if (!element) {
       // Get servers directly from ServerService 
-      const all = await this.srvSvc.getAll();
+      const all = await this.srvSvc.getAllServers();
       if (!all.ok) {
         console.error('❌ TreeView load error:', all.error);
         this.log.error('TreeView load error', all.error);
         return [];
       }
       
-      // Update states from runtime info
-      const servers = all.value.map((s: any) => {
-        // Use getServerState to get current state
+      // Update states from runtime info - this is critical for buttons visibility
+      const servers = all.value.map((server: ServerConfig) => {
         try {
-          const stateResult = this.srvSvc.getServerState(s.id);
+          // Get real-time state from ServerService
+          const stateResult = this.srvSvc.getServerState(server.id);
           if (stateResult.ok) {
-            s.state = stateResult.value;
+            // Create updated server config with current state
+            const updatedServer = { ...server, state: stateResult.value };
+            console.log(`🔄 Server ${server.name} state updated: ${server.state} → ${stateResult.value}`);
+            return updatedServer;
+          } else {
+            console.warn(`⚠️ Failed to get state for server ${server.name}: ${stateResult.error?.message}`);
+            console.warn(`   This means the server is not registered in ServerManager`);
           }
         } catch (error) {
-          // Ignore runtime info errors, keep existing state
+          console.warn(`⚠️ Error getting state for server ${server.name}:`, error);
         }
-        return s;
+        
+        // Return original server if state update fails
+        console.log(`🔄 Server ${server.name} keeping original state: ${server.state}`);
+        return server;
       });
       
-      return servers.map((s: ServerConfig) => new ServerNode(s));
+      const serverNodes = servers.map((s: ServerConfig) => new ServerNode(s));
+      console.log(`🌳 TreeView: Created ${serverNodes.length} server nodes with contexts:`, 
+        serverNodes.map(n => `${n.label} → ${n.contextValue}`));
+      
+      return serverNodes;
     }
 
     if (element instanceof ServerNode) {
       const deployments = element.data.deployments?.map(d => new DeploymentNode(element.data, d)) || [];
+      console.log(`📦 TreeView: Server ${element.data.name} has ${deployments.length} deployments`);
       return deployments;
     }
     return [];

@@ -5,10 +5,12 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { workspace, FileSystemWatcher, Disposable, RelativePattern } from 'vscode';
 import { ServerConfig } from '../types/domain';
 import { Result, ok, err } from '../utils/result';
 import { JsmError } from '../errors/JsmError';
 import { ErrorCode } from '../errors/codes';
+import { EventBus } from '../EventBus';
 
 interface ConfigFile {
   servers: ServerConfig[];
@@ -22,8 +24,13 @@ export class ConfigManager {
   private static instance: ConfigManager | null = null;
   private configPath: string = '';
   private servers: ServerConfig[] = [];
+  private fileWatcher: FileSystemWatcher | null = null;
+  private eventBus: EventBus;
+  private debounceTimer: NodeJS.Timeout | null = null;
 
-  private constructor() {}
+  private constructor() {
+    this.eventBus = EventBus.getInstance();
+  }
 
   static getInstance(): ConfigManager {
     if (!ConfigManager.instance) {
@@ -46,6 +53,9 @@ export class ConfigManager {
     
     // Load servers into memory
     await instance.loadFromFile();
+    
+    // Setup file watching
+    instance.setupFileWatcher();
     
     return ok(undefined);
   }
@@ -128,10 +138,82 @@ export class ConfigManager {
     }
   }
 
+  // ==================== FILE WATCHING ====================
+
+  private setupFileWatcher(): void {
+    if (this.fileWatcher) {
+      this.fileWatcher.dispose();
+    }
+
+    // Create watcher for the specific servers.json file
+    const pattern = new RelativePattern(
+      path.dirname(this.configPath), 
+      'servers.json'
+    );
+    
+    this.fileWatcher = workspace.createFileSystemWatcher(pattern);
+    
+    // Watch for file changes with debouncing to prevent excessive events
+    this.fileWatcher.onDidChange(() => {
+      this.debouncedFileChanged();
+    });
+    
+    this.fileWatcher.onDidCreate(() => {
+      this.debouncedFileChanged();
+    });
+    
+    this.fileWatcher.onDidDelete(() => {
+      this.debouncedFileChanged();
+    });
+  }
+
+  private debouncedFileChanged(): void {
+    // Clear any existing timer
+    if (this.debounceTimer) {
+      clearTimeout(this.debounceTimer);
+    }
+    
+    // Set new timer for 500ms debounce
+    this.debounceTimer = setTimeout(async () => {
+      await this.handleFileChanged();
+    }, 500);
+  }
+
+  private async handleFileChanged(): Promise<void> {
+    try {
+      // Reload configuration from file
+      const loadResult = await this.loadFromFile();
+      if (loadResult.ok) {
+        // Emit ConfigChanged event to notify other components
+        this.eventBus.emit('ConfigChanged', {
+          source: 'file',
+          servers: [...this.servers]
+        });
+        console.log('🔄 Configuration reloaded from file - emitted ConfigChanged event');
+      } else {
+        console.error('❌ Failed to reload configuration after file change:', loadResult.error);
+      }
+    } catch (error) {
+      console.error('❌ Error handling file change:', error);
+    }
+  }
+
   // ==================== COMPATIBILITY ====================
 
   async dispose(): Promise<void> {
-    // Ultra-simplified: nothing to dispose
+    // Clean up file watcher
+    if (this.fileWatcher) {
+      this.fileWatcher.dispose();
+      this.fileWatcher = null;
+    }
+    
+    // Clear debounce timer
+    if (this.debounceTimer) {
+      clearTimeout(this.debounceTimer);
+      this.debounceTimer = null;
+    }
+    
+    // Ultra-simplified: clear servers
     this.servers = [];
   }
 

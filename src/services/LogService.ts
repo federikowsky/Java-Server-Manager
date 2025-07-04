@@ -4,7 +4,7 @@
  */
 
 import { window, workspace } from 'vscode';
-import { PluginRegistry } from '../core/plugins/index';
+import { PluginRegistry } from '../core/server/plugins/index';
 import { ConfigManager } from '../core/config/ConfigManager';
 import { Logger } from '../core/utils/logger';
 

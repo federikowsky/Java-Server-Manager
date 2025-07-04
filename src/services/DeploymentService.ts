@@ -7,7 +7,7 @@ import { DeploymentConfig, ServerConfig } from '../core/types/domain';
 import { Result, ok, err } from '../core/utils/result';
 import { JsmError } from '../core/errors/JsmError';
 import { ErrorCode } from '../core/errors/codes';
-import { PluginRegistry } from '../core/plugins/index';
+import { PluginRegistry } from '../core/server/plugins/index';
 import { ConfigManager } from '../core/config/ConfigManager';
 import { DeploymentManager } from '../core/deployment/DeploymentManager';
 import { EventBus } from '../core/EventBus';

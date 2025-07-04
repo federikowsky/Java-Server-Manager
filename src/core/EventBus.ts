@@ -19,6 +19,7 @@ export interface EventMap {
   DeploymentRemoved      : DeploymentConfig;
   DeploymentUndeployed   : DeploymentConfig;
   ServerPublished        : { id:string; mode:'incremental'|'full' };
+  ConfigChanged          : { source: 'file' | 'api'; servers: ServerConfig[] };
 }
 
 export type EventKey = keyof EventMap;

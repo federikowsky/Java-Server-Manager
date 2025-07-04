@@ -76,7 +76,7 @@ export interface DeploymentConfig {
   targetPath: string; // Path di deployment relativo alla directory di deploy del server (es. 'webapps/myapp.war' o 'myapp')
   type: 'war' | 'exploded'; // Tipo di deployment
   state: DeploymentState; // Stato corrente del deployment
-  isDirty: boolean; // Indica se ci sono modifiche locali che necessitano di sync/deploy
+  isDirty?: boolean; // Indica se ci sono modifiche locali che necessitano di sync/deploy
   error?: string; // Messaggio di errore relativo a questo deployment
   contextPath?: string; // Il context path dell'applicazione (es. /myapp)
 }

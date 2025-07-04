@@ -7,16 +7,13 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { spawn, ChildProcess } from 'child_process';
 import { EventEmitter } from 'events';
-import { Result, ok, err } from '../../utils/result';
-import { JsmError } from '../../errors/JsmError';
-import { ErrorCode } from '../../errors/codes';
-import { Logger } from '../../utils/logger';
+import { Result, ok, err } from '../../../utils/result';
+import { JsmError } from '../../../errors/JsmError';
+import { ErrorCode } from '../../../errors/codes';
+import { Logger } from '../../../utils/logger';
 import { IServerPlugin } from '../interfaces/IServerPlugin';
-import { IServerStatus } from '../interfaces/IServerStatus';
-import { ServerConfig, DeploymentConfig, ServerState } from '../../types/domain';
-import { ServerStartMode } from '../../types/runtime';
-// TODO: Replace PluginConfigManager with proper configuration management
-// import { PluginConfigManager } from '../../config/PluginConfig';
+import { ServerConfig, DeploymentConfig, ServerState } from '../../../types/domain';
+import { ServerStartMode } from '../../../types/runtime';
 
 export class TomcatPlugin implements IServerPlugin {
   readonly type = 'tomcat';
@@ -210,10 +207,6 @@ export class TomcatPlugin implements IServerPlugin {
         error instanceof Error ? error : undefined
       ));
     }
-  }
-
-  createStatusMonitor(config: ServerConfig): IServerStatus {
-    return new TomcatStatusMonitor(config, this.processes);
   }
 
   async healthCheck(config: ServerConfig): Promise<Result<boolean, JsmError>> {
@@ -467,147 +460,5 @@ export class TomcatPlugin implements IServerPlugin {
         error instanceof Error ? error : undefined
       ));
     }
-  }
-}
-
-/**
- * Tomcat status monitor implementation
- */
-class TomcatStatusMonitor extends EventEmitter implements IServerStatus {
-  private readonly log = Logger.getInstance().createChild('TomcatStatusMonitor');
-  private _state: ServerState = 'stopped';
-  private _pid = 0;
-  private _lastCheck = new Date();
-  private monitoringInterval?: NodeJS.Timeout;
-
-  constructor(
-    private readonly config: ServerConfig,
-    private readonly processes: Map<string, ChildProcess>
-  ) {
-    super();
-  }
-
-  get state(): ServerState {
-    return this._state;
-  }
-
-  get pid(): number {
-    return this._pid;
-  }
-
-  get isRunning(): boolean {
-    return this._state === 'running';
-  }
-
-  get lastCheck(): Date {
-    return this._lastCheck;
-  }
-
-  async startMonitoring(): Promise<Result<void, JsmError>> {
-    try {
-      if (this.monitoringInterval) {
-        return ok(undefined);
-      }
-
-      this.monitoringInterval = setInterval(async () => {
-        await this.checkStatus();
-      }, 5000);
-
-      // Initial check
-      await this.checkStatus();
-      
-      return ok(undefined);
-    } catch (error) {
-      return err(new JsmError(
-        ErrorCode.STATUS_MONITOR_ERROR,
-        `Failed to start monitoring: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        error instanceof Error ? error : undefined
-      ));
-    }
-  }
-
-  async stopMonitoring(): Promise<Result<void, JsmError>> {
-    try {
-      if (this.monitoringInterval) {
-        clearInterval(this.monitoringInterval);
-        this.monitoringInterval = undefined;
-      }
-      return ok(undefined);
-    } catch (error) {
-      return err(new JsmError(
-        ErrorCode.STATUS_MONITOR_ERROR,
-        `Failed to stop monitoring: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        error instanceof Error ? error : undefined
-      ));
-    }
-  }
-
-  async checkStatus(): Promise<Result<ServerState, JsmError>> {
-    try {
-      this._lastCheck = new Date();
-      
-      const serverProcess = this.processes.get(this.config.id);
-      let newState: ServerState;
-      let newPid = 0;
-
-      if (!serverProcess) {
-        newState = 'stopped';
-      } else if (serverProcess.killed || serverProcess.exitCode !== null) {
-        newState = 'stopped';
-      } else {
-        newState = 'running';
-        newPid = serverProcess.pid || 0;
-      }
-
-      if (newState !== this._state) {
-        const oldState = this._state;
-        this._state = newState;
-        this._pid = newPid;
-        
-        this.emit('stateChanged', { from: oldState, to: newState });
-        
-        if (newState === 'running') {
-          this.emit('processStarted', { pid: newPid });
-        } else if (oldState === 'running') {
-          this.emit('processStopped', { pid: this._pid });
-        }
-      }
-
-      return ok(newState);
-    } catch (error) {
-      return err(new JsmError(
-        ErrorCode.STATUS_CHECK_ERROR,
-        `Status check failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        error instanceof Error ? error : undefined
-      ));
-    }
-  }
-
-  async verifyHealth(): Promise<Result<boolean, JsmError>> {
-    try {
-      // Simple health check - in a real implementation,
-      // you would check HTTP endpoint or JMX
-      if (this._state === 'running') {
-        // Could check HTTP endpoint here
-        return ok(true);
-      }
-      return ok(false);
-    } catch (error) {
-      return err(new JsmError(
-        ErrorCode.HEALTH_CHECK_ERROR,
-        `Health verification failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        error instanceof Error ? error : undefined
-      ));
-    }
-  }
-
-  updateState(state: ServerState): void {
-    const oldState = this._state;
-    this._state = state;
-    this.emit('stateChanged', { from: oldState, to: state });
-  }
-
-  updatePid(pid: number): void {
-    this._pid = pid;
   }
 }

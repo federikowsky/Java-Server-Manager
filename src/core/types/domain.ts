@@ -42,7 +42,6 @@ export interface ServerConfig {
   workingDir?    : string;         // cwd alternativo
   pidFile        : string;         // path pid.<id>.txt
 
-  state          : ServerState;
   deployments    : DeploymentConfig[];
   
   /* Additional fields for compatibility */

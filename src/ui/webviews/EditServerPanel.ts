@@ -8,6 +8,7 @@ import { window, Uri, ViewColumn, WebviewPanel, Disposable } from 'vscode';
 import { ServerConfig, ServerTemplate } from '../../core/types/domain';
 import { Result, ok, err } from '../../core/utils/result';
 import { Logger } from '../../core/utils/logger';
+import { ConfigManager } from '../../core/config/ConfigManager';
 
 export type PanelMode = 'create' | 'edit' | 'createFromTemplate';
 
@@ -29,13 +30,12 @@ export class EditServerPanel {
     // Generate simple default configuration from template
     const defaultConfig: Partial<ServerConfig> = {
       id: `${template.type}_${Date.now()}`,
-      name: `${template.name} Instance`,
+      name: `${template.name}`,
       type: template.type,
       serverHome: template.defaultConfig.serverHome,
       javaHome: template.defaultConfig.javaHome || process.env.JAVA_HOME || '',
       host: template.defaultConfig.host || 'localhost',
       port: template.defaultConfig.port || 8080,
-      state: 'stopped',
       autoSync: template.defaultConfig.autoSync || true,
       deployments: [],
       pidFile: '',
@@ -74,7 +74,7 @@ export class EditServerPanel {
       this.pending = { panel, resolve, disposables };
     });
 
-    panel.webview.onDidReceiveMessage(msg => {
+    panel.webview.onDidReceiveMessage(async msg => {
       if (msg.type === 'save') {
         try {
           const userInput = JSON.parse(msg.payload);
@@ -88,7 +88,6 @@ export class EditServerPanel {
             javaHome: userInput.javaHome || process.env.JAVA_HOME || '',
             host: userInput.host || 'localhost',
             port: userInput.port || 8080,
-            state: userInput.state || 'stopped',
             autoSync: userInput.autoSync !== undefined ? userInput.autoSync : true,
             deployments: userInput.deployments || [],
             pidFile: userInput.pidFile || '',
@@ -109,11 +108,28 @@ export class EditServerPanel {
             }
           }
           
+          // Validate the configuration
+          const configManager = ConfigManager.getInstance();
+          const validationResult = await configManager.validateServer(cfg);
+          
+          if (!validationResult.ok) {
+            // Send validation errors back to webview without closing panel
+            panel.webview.postMessage({
+              type: 'validationError',
+              errors: validationResult.error.message
+            });
+            return;
+          }
+          
           this.pending?.resolve(ok(cfg));
+          panel.dispose();
         } catch (e) {
-          window.showErrorMessage('Invalid JSON – please fix');
+          // Send JSON parsing error back to webview
+          panel.webview.postMessage({
+            type: 'validationError',
+            errors: 'Invalid JSON format – please fix syntax errors'
+          });
         }
-        panel.dispose();
       } else if (msg.type === 'cancel') {
         this.pending?.resolve(err('CANCELED'));
         panel.dispose();
@@ -134,8 +150,8 @@ export class EditServerPanel {
     let initial: string;
     
     if (opts.data) {
-      // For edit mode, strip auto-generated fields from existing data
-      const { id, pidFile, state, deployments, ...userFields } = opts.data;
+      // For edit mode, strip auto-generated fields from existing data  
+      const { id, pidFile, deployments, ...userFields } = opts.data;
       initial = JSON.stringify(userFields, null, 2);
     } else {
       // For create mode, show minimal template with only user-input fields
@@ -157,20 +173,75 @@ export class EditServerPanel {
         <meta charset="UTF-8" />
         <style>
           body{ margin:0; padding:0; font-family: monospace; }
-          textarea{ width:100%; height:90vh; }
+          textarea{ width:100%; height:85vh; }
           footer{ display:flex; gap:.5rem; padding:.5rem; }
+          .error-panel{ 
+            background-color: #ffebee; 
+            border: 1px solid #f44336; 
+            color: #c62828; 
+            padding: 0.5rem; 
+            margin: 0.5rem 0; 
+            border-radius: 3px;
+            display: none;
+            white-space: pre-wrap;
+          }
+          .success-panel{
+            background-color: #e8f5e8;
+            border: 1px solid #4caf50;
+            color: #2e7d32;
+            padding: 0.5rem;
+            margin: 0.5rem 0;
+            border-radius: 3px;
+            display: none;
+          }
         </style>
       </head>
       <body>
+        <div id="errorPanel" class="error-panel"></div>
+        <div id="successPanel" class="success-panel">Configuration validated successfully!</div>
         <textarea id="txt">${initial.replace(/</g, '&lt;')}</textarea>
         <footer>
-          <button onclick="save()">Save</button>
+          <button id="saveBtn" onclick="save()">Save</button>
           <button onclick="cancel()">Cancel</button>
         </footer>
         <script>
           const vscode = acquireVsCodeApi();
-          function save(){ vscode.postMessage({type:'save',payload:document.getElementById('txt').value}); }
-          function cancel(){ vscode.postMessage({type:'cancel'}); }
+          
+          function save(){ 
+            clearMessages();
+            document.getElementById('saveBtn').disabled = true;
+            document.getElementById('saveBtn').textContent = 'Validating...';
+            vscode.postMessage({type:'save',payload:document.getElementById('txt').value}); 
+          }
+          
+          function cancel(){ 
+            vscode.postMessage({type:'cancel'}); 
+          }
+          
+          function clearMessages() {
+            document.getElementById('errorPanel').style.display = 'none';
+            document.getElementById('successPanel').style.display = 'none';
+          }
+          
+          function showError(message) {
+            const errorPanel = document.getElementById('errorPanel');
+            errorPanel.textContent = message;
+            errorPanel.style.display = 'block';
+            document.getElementById('saveBtn').disabled = false;
+            document.getElementById('saveBtn').textContent = 'Save';
+          }
+          
+          function showSuccess() {
+            document.getElementById('successPanel').style.display = 'block';
+          }
+          
+          // Listen for messages from extension
+          window.addEventListener('message', event => {
+            const message = event.data;
+            if (message.type === 'validationError') {
+              showError(message.errors);
+            }
+          });
         </script>
       </body>
       </html>

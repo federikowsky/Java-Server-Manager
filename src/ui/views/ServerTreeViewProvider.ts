@@ -17,21 +17,21 @@ import {
 
 import { ServerService } from '../../services/ServerService';
 import { EventBus, EventKey } from '../../core/EventBus';
-import { ServerConfig, DeploymentConfig } from '../../core/types/domain';
+import { ServerConfig, DeploymentConfig, ServerState } from '../../core/types/domain';
 import { Logger } from '../../core/utils/logger';
 import { SERVER_STATE_TO_CONTEXT, CONTEXT_VALUES } from '../../core/constants/TreeViewConstants';
 
 /* ───────────────────────── Tree Items ───────────────────────── */
 export class ServerNode extends TreeItem {
-  constructor(readonly data: ServerConfig) {
+  constructor(readonly data: ServerConfig, readonly currentState: ServerState = 'stopped') {
     // Show server name with state only (no port)
-    const displayName = `${data.name} (${data.state})`;
+    const displayName = `${data.name} (${currentState})`;
     const hasDeployments = data.deployments && data.deployments.length > 0;
     super(displayName, hasDeployments ? 1 : 0);
     
     // Set icon based on state
     let iconName: string;
-    switch (data.state) {
+    switch (currentState) {
       case 'running':
         iconName = 'play-circle';
         break;
@@ -52,11 +52,11 @@ export class ServerNode extends TreeItem {
     
     this.iconPath = new ThemeIcon(iconName);
     // Use centralized context value mapping
-    this.contextValue = SERVER_STATE_TO_CONTEXT[data.state] || SERVER_STATE_TO_CONTEXT.stopped;
-    this.tooltip = `${data.type} @ ${data.host}:${data.port} (${data.state})${data.instancePath ? '\nInstance Path: ' + data.instancePath : ''}`;
+    this.contextValue = SERVER_STATE_TO_CONTEXT[currentState] || SERVER_STATE_TO_CONTEXT.stopped;
+    this.tooltip = `${data.type} @ ${data.host}:${data.port} (${currentState})${data.instancePath ? '\nInstance Path: ' + data.instancePath : ''}`;
     
     // Debug logging for context value assignment
-    console.log(`🏷️ ServerNode created: ${data.name} | state: ${data.state} | contextValue: ${this.contextValue}`);
+    console.log(`🏷️ ServerNode created: ${data.name} | state: ${currentState} | contextValue: ${this.contextValue}`);
   }
 }
 
@@ -116,15 +116,15 @@ export class ServerTreeViewProvider implements TreeDataProvider<TreeItem>, Dispo
       }
       
       // Update states from runtime info - this is critical for buttons visibility
-      const servers = all.value.map((server: ServerConfig) => {
+      const serversWithState = all.value.map((server: ServerConfig) => {
+        let currentState: ServerState = 'stopped'; // Default state
+        
         try {
           // Get real-time state from ServerService
           const stateResult = this.srvSvc.getServerState(server.id);
           if (stateResult.ok) {
-            // Create updated server config with current state
-            const updatedServer = { ...server, state: stateResult.value };
-            console.log(`🔄 Server ${server.name} state updated: ${server.state} → ${stateResult.value}`);
-            return updatedServer;
+            currentState = stateResult.value;
+            console.log(`🔄 Server ${server.name} runtime state: ${currentState}`);
           } else {
             console.warn(`⚠️ Failed to get state for server ${server.name}: ${stateResult.error?.message}`);
             console.warn(`   This means the server is not registered in ServerManager`);
@@ -133,12 +133,10 @@ export class ServerTreeViewProvider implements TreeDataProvider<TreeItem>, Dispo
           console.warn(`⚠️ Error getting state for server ${server.name}:`, error);
         }
         
-        // Return original server if state update fails
-        console.log(`🔄 Server ${server.name} keeping original state: ${server.state}`);
-        return server;
+        return { server, currentState };
       });
       
-      const serverNodes = servers.map((s: ServerConfig) => new ServerNode(s));
+      const serverNodes = serversWithState.map(({ server, currentState }) => new ServerNode(server, currentState));
       console.log(`🌳 TreeView: Created ${serverNodes.length} server nodes with contexts:`, 
         serverNodes.map(n => `${n.label} → ${n.contextValue}`));
       

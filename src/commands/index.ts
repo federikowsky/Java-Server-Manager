@@ -241,8 +241,7 @@ export function registerServerCommands(ctx: ExtensionContext, srv: ServerService
 ID: ${serverData.id}
 Type: ${serverData.type}
 Host: ${serverData.host}:${serverData.port}
-Home: ${serverData.serverHome}
-State: ${serverData.state}`;
+Home: ${serverData.serverHome}`;
 
         await env.clipboard.writeText(info);
         showSuccess('Server info copied to clipboard');
@@ -800,7 +799,7 @@ async function createInstanceFromTemplate(service: ServerService, template: Serv
   // Generate simple default configuration from template
   const defaultConfig = {
     id: `${template.type}_${Date.now()}`,
-    name: `${template.name} Instance`,
+    name: template.name,
     type: template.type,
     state: 'stopped' as const,
     deployments: [],

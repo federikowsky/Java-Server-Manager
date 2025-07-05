@@ -16,6 +16,10 @@ export class JsmError<D = unknown> extends Error {
     this.details = details;
   }
 
+  /**
+   * Create a validation error
+   */
+
   toJSON() {
     return {
       name: this.name,

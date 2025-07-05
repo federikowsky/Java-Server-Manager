@@ -11,6 +11,7 @@ import { Result, ok, err } from '../utils/result';
 import { JsmError } from '../errors/JsmError';
 import { ErrorCode } from '../errors/codes';
 import { EventBus } from '../EventBus';
+import { ValidationManager } from './schema/ValidationManager';
 
 interface ConfigFile {
   servers: ServerConfig[];
@@ -27,9 +28,11 @@ export class ConfigManager {
   private fileWatcher: FileSystemWatcher | null = null;
   private eventBus: EventBus;
   private debounceTimer: NodeJS.Timeout | null = null;
+  private validationManager: ValidationManager;
 
   private constructor() {
     this.eventBus = EventBus.getInstance();
+    this.validationManager = ValidationManager.getInstance();
   }
 
   static getInstance(): ConfigManager {
@@ -62,6 +65,44 @@ export class ConfigManager {
 
   // ==================== CORE OPERATIONS ====================
 
+  /**
+   * Get the validation manager instance
+   */
+  getValidationManager(): ValidationManager {
+    return this.validationManager;
+  }
+
+  /**
+   * Validate a server configuration without saving
+   */
+  async validateServer(config: ServerConfig): Promise<Result<void, JsmError>> {
+    // Step 1: Validate against JSON schema using ValidationManager
+    const schemaResult = this.validationManager.validateServer(config);
+    if (!schemaResult.ok) {
+      return schemaResult;
+    }
+
+    // Step 2: Check for unique names within existing servers
+    const existingServer = this.servers.find(s => s.name === config.name && s.id !== config.id);
+    if (existingServer) {
+      return err(new JsmError(ErrorCode.SERVER_VALIDATION_ERROR, `Server name '${config.name}' already exists. Server names must be unique.`));
+    }
+
+    // Step 3: Validate paths exist (business logic validation)
+    try {
+      if (!fs.existsSync(config.serverHome)) {
+        return err(new JsmError(ErrorCode.SERVER_VALIDATION_ERROR, `Server home path does not exist: ${config.serverHome}`));
+      }
+      if (!fs.existsSync(config.javaHome)) {
+        return err(new JsmError(ErrorCode.SERVER_VALIDATION_ERROR, `Java home path does not exist: ${config.javaHome}`));
+      }
+    } catch (error) {
+      return err(new JsmError(ErrorCode.SERVER_VALIDATION_ERROR, `Path validation error: ${error}`));
+    }
+
+    return ok(undefined);
+  }
+
   async getAllServers(): Promise<Result<ServerConfig[], JsmError>> {
     return ok([...this.servers]);
   }
@@ -75,9 +116,10 @@ export class ConfigManager {
   }
 
   async saveServer(config: ServerConfig): Promise<Result<ServerConfig, JsmError>> {
-    // Basic validation
-    if (!config.id || !config.name || !config.serverHome) {
-      return err(new JsmError(ErrorCode.CONFIG_INVALID, 'Missing required fields: id, name, serverHome'));
+    // Validate the server configuration
+    const validationResult = await this.validateServer(config);
+    if (!validationResult.ok) {
+      return validationResult as any;
     }
 
     // Find existing or add new
@@ -118,11 +160,25 @@ export class ConfigManager {
       }
 
       const content = await fs.promises.readFile(this.configPath, 'utf8');
-      const config = JSON.parse(content) as ConfigFile;
+      const rawConfig = JSON.parse(content);
       
+      // Validate JSON against schema
+      const validationResult = this.validationManager.validateWithUniqueNames(rawConfig);
+      if (!validationResult.ok) {
+        return err(new JsmError(ErrorCode.CONFIG_INVALID, 
+          `Configuration file validation failed: ${validationResult.error.message}`));
+      }
+
+      const config = rawConfig as ConfigFile;
+      
+      // Load servers - state is now managed only in runtime, not in configuration
       this.servers = Array.isArray(config.servers) ? config.servers : [];
+        
       return ok(undefined);
     } catch (error) {
+      if (error instanceof SyntaxError) {
+        return err(new JsmError(ErrorCode.CONFIG_INVALID, `Invalid JSON in configuration file: ${error.message}`));
+      }
       return err(new JsmError(ErrorCode.FS_READ, `Failed to load config: ${error}`));
     }
   }
@@ -130,6 +186,14 @@ export class ConfigManager {
   private async saveToFile(): Promise<Result<void, JsmError>> {
     try {
       const config: ConfigFile = { servers: this.servers };
+      
+      // Validate configuration before saving
+      const validationResult = this.validationManager.validateWithUniqueNames(config);
+      if (!validationResult.ok) {
+        return err(new JsmError(ErrorCode.CONFIG_INVALID, 
+          `Cannot save invalid configuration: ${validationResult.error.message}`));
+      }
+      
       const content = JSON.stringify(config, null, 2);
       await fs.promises.writeFile(this.configPath, content, 'utf8');
       return ok(undefined);

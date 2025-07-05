@@ -25,7 +25,8 @@ export class ServerRuntime {
     public readonly config: ServerConfig,
     private readonly pluginAdapter: PluginAdapter
   ) {
-    this.currentState = config.state || 'stopped';
+    // Initialize runtime state (not from config since state is no longer in ServerConfig)
+    this.currentState = 'stopped';
   }
 
   /**
@@ -43,10 +44,7 @@ export class ServerRuntime {
       const oldState = this.currentState;
       this.currentState = newState;
       
-      // Update config state
-      this.config.state = newState;
-      
-      // Emit state change event for coordination
+      // Emit state change event for coordination (no longer update config)
       this.eventBus.emit('ServerStateChanged', {
         id: this.config.id,
         state: newState

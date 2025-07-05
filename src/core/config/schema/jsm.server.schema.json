@@ -1,0 +1,168 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "JSM Simplified Servers Config",
+  "description": "Simplified, user-friendly configuration schema for Java Server Manager",
+  "type": "object",
+  "required": ["servers"],
+  "properties": {
+    "servers": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/server" }
+    }
+  },
+  "definitions": {
+    "server": {
+      "type": "object",
+      "required": ["name", "javaHome", "serverHome"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Display name for the server",
+          "examples": ["Local Tomcat", "Development Server", "API Gateway"]
+        },
+        "type": {
+          "enum": ["tomcat", "jetty", "jboss", "custom"],
+          "default": "tomcat",
+          "description": "Server type (auto-detected from serverHome if not specified)"
+        },
+        "javaHome": {
+          "type": "string",
+          "description": "Path to Java installation",
+          "examples": ["/usr/lib/jvm/java-11-openjdk", "/opt/java/jdk-17"]
+        },
+        "serverHome": {
+          "type": "string",
+          "description": "Path to server installation directory",
+          "examples": ["/opt/tomcat", "./apache-tomcat-9.0.75"]
+        },
+        "host": {
+          "type": "string",
+          "default": "localhost",
+          "description": "Server hostname",
+          "examples": ["localhost", "0.0.0.0", "dev.mycompany.com"]
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "default": 8080,
+          "description": "Server port"
+        },
+        "debug": {
+          "type": "object",
+          "properties": {
+            "port": { 
+              "type": "integer", 
+              "minimum": 1, 
+              "maximum": 65535,
+              "description": "Debug port (if not specified, auto-assigns free port)"
+            },
+            "vmArgs": { 
+              "type": "string",
+              "description": "Custom JDWP arguments"
+            },
+            "attachDelay": { 
+              "type": "integer", 
+              "minimum": 0,
+              "description": "Delay in milliseconds before attaching debugger"
+            }
+          },
+          "additionalProperties": false,
+          "description": "Debug configuration (only used when starting server in debug mode)"
+        },
+        "autoSync": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable automatic synchronization of deployments"
+        },
+        "env": {
+          "type": "string",
+          "description": "Environment variables as KEY=value KEY2=value2 format"
+        },
+        "vmArgs": {
+          "type": "string",
+          "description": "JVM arguments string (e.g., '-Xms512m -Xmx2g -XX:+UseG1GC')"
+        },
+        "startupTimeout": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 30000,
+          "description": "Startup timeout in milliseconds"
+        },
+        "stopTimeout": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 10000,
+          "description": "Stop timeout in milliseconds"
+        },
+        "healthCheck": {
+          "type": "string",
+          "format": "uri",
+          "description": "Health check URL"
+        },
+        "logPath": {
+          "type": "string",
+          "description": "Custom log file path"
+        },
+        "workingDir": {
+          "type": "string",
+          "description": "Working directory for server process (defaults to serverHome if not specified)",
+          "examples": ["/opt/tomcat", "./work"]
+        },
+        "validatePaths": {
+          "type": "boolean",
+          "default": true,
+          "description": "Validate that paths exist and are accessible before starting server"
+        },
+        "deployments": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/deployment" },
+          "default": [],
+          "description": "Application deployments"
+        }
+      },
+      "additionalProperties": false
+    },
+    "deployment": {
+      "type": "object",
+      "required": ["sourcePath"],
+      "properties": {
+        "sourcePath": {
+          "type": "string",
+          "description": "Source path (WAR file or exploded directory). Display name will be auto-generated from filename",
+          "examples": ["./target/myapp.war", "/path/to/exploded/webapp", "./my-service.war"]
+        },
+        "deployName": {
+          "type": "string",
+          "description": "Name for deployment in webapps folder (determines URL path). If not specified, uses filename from sourcePath",
+          "examples": ["api", "ROOT", "admin", "my-app"]
+        },
+        "type": {
+          "enum": ["war", "exploded"],
+          "description": "Deployment type (auto-detected from sourcePath if not specified)"
+        },
+        "ignoreGlobs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["**/.git/**", "**/node_modules/**", "**/.DS_Store"],
+          "description": "File patterns to ignore during sync",
+          "examples": [["**/*.log", "**/temp/**"]]
+        },
+        "maxFileSize": {
+          "type": "string",
+          "default": "500MB",
+          "pattern": "^\\d+[kKmMgG]?[bB]?$",
+          "description": "Maximum size for deployment files (e.g., '500MB', '1GB')"
+        },
+        "validateBeforeDeploy": {
+          "type": "boolean",
+          "default": true,
+          "description": "Validate deployment files exist and are readable before deploying"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

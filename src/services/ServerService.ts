@@ -33,27 +33,7 @@ export class ServerService {
     private readonly hooks: HookManager,
     private readonly dbgMgr: DebugManager
   ) {
-    // Listen for state changes to persist them
-    this.bus.on('ServerStateChanged', async (event) => {
-      await this.persistServerState(event.id, event.state);
-    });
-  }
-
-  /**
-   * Persist server state changes to ConfigManager
-   */
-  private async persistServerState(serverId: string, newState: ServerState): Promise<void> {
-    try {
-      const serverResult = this.configManager.getServer(serverId);
-      if (serverResult.ok) {
-        const server = serverResult.value;
-        server.state = newState;
-        await this.configManager.saveServer(server);
-        this.log.debug(`Persisted state change for ${serverId}: ${newState}`);
-      }
-    } catch (error) {
-      this.log.error(`Failed to persist state for ${serverId}: ${error}`);
-    }
+    // No longer need to persist state changes since state is not part of config
   }
 
   // ==================== PUBLIC API ====================
@@ -379,15 +359,10 @@ export class ServerService {
             continue;
           }
 
-          // Handle crash recovery for running servers
-          if (server.state === 'running') {
-            const healthResult = await this.serverManager.healthCheck(server.id);
-            if (!healthResult.ok || !healthResult.value) {
-              // Process not running, update state
-              server.state = 'stopped';
-              await this.configManager.saveServer(server);
-              this.log.info(`Corrected state for server ${server.name} (process not running)`);
-            }
+          // Health check for crash recovery (state is now managed by ServerRuntime)
+          const healthResult = await this.serverManager.healthCheck(server.id);
+          if (!healthResult.ok || !healthResult.value) {
+            this.log.info(`Server ${server.name} process not running - runtime state set to stopped`);
           }
 
           this.bus.emit('ServerAdded', server);
@@ -410,10 +385,13 @@ export class ServerService {
   async stopAll(): Promise<void> {
     const allResult = await this.getAllServers();
     if (allResult.ok) {
-      const runningServers = allResult.value.filter(s => s.state === 'running');
-      for (const server of runningServers) {
+      // Get all servers and check their runtime state
+      for (const server of allResult.value) {
         try {
-          await this.stop(server.id);
+          const stateResult = this.serverManager.getState(server.id);
+          if (stateResult.ok && stateResult.value === 'running') {
+            await this.stop(server.id);
+          }
         } catch (error) {
           this.log.error(`Failed to stop server ${server.name}: ${error}`);
         }
@@ -426,7 +404,12 @@ export class ServerService {
    */
   async getRunning(): Promise<ServerConfig[]> {
     const allResult = await this.getAllServers();
-    return allResult.ok ? allResult.value.filter(s => s.state === 'running') : [];
+    if (!allResult.ok) return [];
+
+    return allResult.value.filter(server => {
+      const stateResult = this.serverManager.getState(server.id);
+      return stateResult.ok && stateResult.value === 'running';
+    });
   }
 
   /**
@@ -434,7 +417,12 @@ export class ServerService {
    */
   async getStopped(): Promise<ServerConfig[]> {
     const allResult = await this.getAllServers();
-    return allResult.ok ? allResult.value.filter(s => s.state === 'stopped') : [];
+    if (!allResult.ok) return [];
+
+    return allResult.value.filter(server => {
+      const stateResult = this.serverManager.getState(server.id);
+      return stateResult.ok && stateResult.value === 'stopped';
+    });
   }
 
   /**

@@ -3,13 +3,12 @@
 //  Dati che vanno serializzati su disco (.vscode/servers.json, templates)
 
 export type ServerState       = 'stopped' | 'starting' | 'running' | 'stopping' | 'error';
+export type ServerType        = 'tomcat' | 'jetty' | 'wildfly' | 'weblogic' | 'generic';
 export type DeploymentState   = 'undeployed' | 'deploying' | 'synced' | 'error';
-export type ServerType        = 'tomcat' | 'jetty' | 'jboss' | 'custom';
 export type DeployType        = 'war' | 'exploded';
 
 /* ───────────── Debug settings ───────────── */
 export interface DebugSettings {
-  enable      : boolean;           // se true avvio JDWP
   port?       : number;            // porta fissa; se assente auto-assign
   vmArgs?     : string;            // args extra JDWP
   attachDelay?: number;            // ms prima di auto-attach
@@ -19,7 +18,6 @@ export interface DebugSettings {
 export interface ServerConfig {
   id          : string;
   name        : string;
-  type        : ServerType;
   javaHome    : string;
   serverHome  : string;
   host        : string;
@@ -40,13 +38,11 @@ export interface ServerConfig {
   postStopCmd?   : string;
 
   workingDir?    : string;         // cwd alternativo
-  pidFile        : string;         // path pid.<id>.txt
 
   deployments    : DeploymentConfig[];
   
   /* Additional fields for compatibility */
   env?           : string;         // Legacy environment variables as string
-  validatePaths? : boolean;        // Whether to validate paths before starting
   instancePath?  : string;         // Path for instance-based servers
 }
 
@@ -68,7 +64,6 @@ export interface DeploymentConfig {
 export interface ServerTemplate {
   id   : string;
   name : string;
-  type : ServerType;
   defaultConfig: Partial<Omit<ServerConfig,'id'|'deployments'>>;
   description? : string;
 }

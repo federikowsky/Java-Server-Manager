@@ -105,7 +105,7 @@ export async function activate(ctx: ExtensionContext): Promise<void> {
     const serverManager = ServerManager.getInstance();
     const pluginAdapter = PluginAdapter.getInstance();
     
-    const srvSvc = new ServerService(singleton.configManager, pidMgr, singleton.bus, singleton.hooks, dbgMgr);
+    const srvSvc = new ServerService(pidMgr, singleton.bus, singleton.hooks, dbgMgr);
     const depSvc = new DeploymentService(singleton.configManager, pluginRegistry, singleton.bus, singleton.hooks);
     const logSvc = new LogService(pluginRegistry, singleton.configManager);
     

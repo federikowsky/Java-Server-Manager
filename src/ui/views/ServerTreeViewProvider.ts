@@ -19,6 +19,7 @@ import { ServerService } from '../../services/ServerService';
 import { EventBus, EventKey } from '../../core/EventBus';
 import { ServerConfig, DeploymentConfig, ServerState } from '../../core/types/domain';
 import { Logger } from '../../core/utils/logger';
+import { PluginRegistry } from '../../core/server/plugins';
 import { SERVER_STATE_TO_CONTEXT, CONTEXT_VALUES } from '../../core/constants/TreeViewConstants';
 
 /* ───────────────────────── Tree Items ───────────────────────── */
@@ -53,7 +54,10 @@ export class ServerNode extends TreeItem {
     this.iconPath = new ThemeIcon(iconName);
     // Use centralized context value mapping
     this.contextValue = SERVER_STATE_TO_CONTEXT[currentState] || SERVER_STATE_TO_CONTEXT.stopped;
-    this.tooltip = `${data.type} @ ${data.host}:${data.port} (${currentState})${data.instancePath ? '\nInstance Path: ' + data.instancePath : ''}`;
+    
+    // For now, show a simplified tooltip without server type detection
+    // Server type detection is async and TreeItem constructor can't be async
+    this.tooltip = `Server @ ${data.host}:${data.port} (${currentState})${data.instancePath ? '\nInstance Path: ' + data.instancePath : ''}`;
     
     // Debug logging for context value assignment
     console.log(`🏷️ ServerNode created: ${data.name} | state: ${currentState} | contextValue: ${this.contextValue}`);

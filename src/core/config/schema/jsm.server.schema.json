@@ -13,26 +13,30 @@
   "definitions": {
     "server": {
       "type": "object",
-      "required": ["name", "javaHome", "serverHome"],
+      "required": ["id", "name", "javaHome", "serverHome"],
       "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Unique identifier for the server",
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
         "name": {
           "type": "string",
           "minLength": 1,
+          "maxLength": 100,
           "description": "Display name for the server",
           "examples": ["Local Tomcat", "Development Server", "API Gateway"]
         },
-        "type": {
-          "enum": ["tomcat", "jetty", "jboss", "custom"],
-          "default": "tomcat",
-          "description": "Server type (auto-detected from serverHome if not specified)"
-        },
         "javaHome": {
           "type": "string",
+          "minLength": 1,
           "description": "Path to Java installation",
           "examples": ["/usr/lib/jvm/java-11-openjdk", "/opt/java/jdk-17"]
         },
         "serverHome": {
           "type": "string",
+          "minLength": 1,
           "description": "Path to server installation directory",
           "examples": ["/opt/tomcat", "./apache-tomcat-9.0.75"]
         },
@@ -86,15 +90,15 @@
         },
         "startupTimeout": {
           "type": "integer",
-          "minimum": 0,
+          "minimum": 1000,
           "default": 30000,
-          "description": "Startup timeout in milliseconds"
+          "description": "Startup timeout in milliseconds (minimum 1000ms)"
         },
         "stopTimeout": {
           "type": "integer",
-          "minimum": 0,
+          "minimum": 1000,
           "default": 10000,
-          "description": "Stop timeout in milliseconds"
+          "description": "Stop timeout in milliseconds (minimum 1000ms)"
         },
         "healthCheck": {
           "type": "string",
@@ -110,11 +114,6 @@
           "description": "Working directory for server process (defaults to serverHome if not specified)",
           "examples": ["/opt/tomcat", "./work"]
         },
-        "validatePaths": {
-          "type": "boolean",
-          "default": true,
-          "description": "Validate that paths exist and are accessible before starting server"
-        },
         "deployments": {
           "type": "array",
           "items": { "$ref": "#/definitions/deployment" },
@@ -128,6 +127,12 @@
       "type": "object",
       "required": ["sourcePath"],
       "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Unique identifier for the server",
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
         "sourcePath": {
           "type": "string",
           "description": "Source path (WAR file or exploded directory). Display name will be auto-generated from filename",
@@ -148,12 +153,6 @@
           "default": ["**/.git/**", "**/node_modules/**", "**/.DS_Store"],
           "description": "File patterns to ignore during sync",
           "examples": [["**/*.log", "**/temp/**"]]
-        },
-        "maxFileSize": {
-          "type": "string",
-          "default": "500MB",
-          "pattern": "^\\d+[kKmMgG]?[bB]?$",
-          "description": "Maximum size for deployment files (e.g., '500MB', '1GB')"
         },
         "validateBeforeDeploy": {
           "type": "boolean",

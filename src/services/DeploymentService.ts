@@ -1,6 +1,6 @@
 /*
- * DeploymentService - KISS approach with ConfigManager
- * Handles deployment lifecycle orchestration using plugin system
+ * DeploymentService - Streamlined deployment orchestration following KISS principles
+ * Single responsibility: Deploy, undeploy, and manage deployment lifecycle
  */
 
 import { DeploymentConfig, ServerConfig } from '../core/types/domain';
@@ -9,14 +9,15 @@ import { JsmError } from '../core/errors/JsmError';
 import { ErrorCode } from '../core/errors/codes';
 import { PluginRegistry } from '../core/server/plugins/index';
 import { ConfigManager } from '../core/config/ConfigManager';
-import { DeploymentManager } from '../core/deployment/DeploymentManager';
 import { EventBus } from '../core/EventBus';
 import { HookManager } from '../core/hooks/HookManager';
 import { Logger } from '../core/utils/logger';
+import { SchemaValidator } from '../core/validation/SchemaValidator';
+import * as fs from 'fs';
 
 export class DeploymentService {
   private readonly log = Logger.getInstance().createChild('DeploymentService');
-  private readonly managers = new Map<string, DeploymentManager>(); // srvId → DeploymentManager
+  private readonly schemaValidator = SchemaValidator.getInstance();
 
   constructor(
     private readonly configManager: ConfigManager,
@@ -25,176 +26,214 @@ export class DeploymentService {
     private readonly hooks: HookManager
   ) {}
 
-  /* ───────────────────── helpers ───────────────────── */
-  private getManager(serverId: string): DeploymentManager {
-    let m = this.managers.get(serverId);
-    if (!m) {
-      m = new DeploymentManager(serverId);
-      this.managers.set(serverId, m);
-    }
-    return m;
+  /* ───────────────────── Configuration Operations ─────────────────── */
+
+  async add(serverId: string, draft: DeploymentConfig): Promise<Result<DeploymentConfig, JsmError>> {
+    await this.hooks.invoke('beforeAddDeployment', serverId);
+    
+    const serverResult = await this.getServerConfig(serverId);
+    if (!serverResult.ok) return serverResult as any;
+
+    const deploymentConfig = this.buildDeploymentConfig(draft, serverResult.value);
+    
+    // Validate deployment configuration
+    const validationResult = await this.validateDeployment(deploymentConfig);
+    if (!validationResult.ok) return validationResult as any;
+    
+    const saveResult = await this.configManager.addDeployment(serverId, deploymentConfig);
+    if (!saveResult.ok) return saveResult as any;
+
+    this.bus.emit('DeploymentAdded', deploymentConfig);
+    await this.hooks.invoke('afterAddDeployment', deploymentConfig);
+    
+    return ok(deploymentConfig);
   }
 
-  private async serverConfig(id: string): Promise<Result<ServerConfig, JsmError>> {
-    const serverResult = await this.configManager.getServer(id);
+  async remove(serverId: string, deploymentId: string, hardDelete: boolean = false): Promise<Result<void, JsmError>> {
+    const deploymentResult = await this.getDeployment(serverId, deploymentId);
+    if (!deploymentResult.ok) return deploymentResult as any;
+
+    if (hardDelete) {
+      const undeployResult = await this.undeploy(serverId, deploymentId);
+      if (!undeployResult.ok) {
+        this.log.warn(`Hard delete: undeploy failed for ${deploymentId}: ${undeployResult.error.message}`);
+      }
+    }
+
+    const deleteResult = await this.configManager.deleteDeployment(serverId, deploymentId);
+    if (!deleteResult.ok) return deleteResult;
+
+    this.bus.emit('DeploymentRemoved', deploymentResult.value);
+    await this.hooks.invoke('afterRemoveDeployment', deploymentResult.value);
+    
+    return ok(undefined);
+  }
+
+  /* ───────────────────── Deployment Operations ─────────────────── */
+
+  async publish(serverId: string, deploymentId: string, mode: 'full' | 'incremental' = 'full'): Promise<Result<void, JsmError>> {
+    const [serverResult, deploymentResult] = await Promise.all([
+      this.getServerConfig(serverId),
+      this.getDeployment(serverId, deploymentId)
+    ]);
+
+    if (!serverResult.ok) return serverResult as any;
+    if (!deploymentResult.ok) return deploymentResult as any;
+
+    // Detect server type from serverHome since type field was removed
+    const typeResult = await this.pluginRegistry.detectServerType(serverResult.value.serverHome);
+    if (!typeResult.ok) return typeResult as any;
+
+    const pluginResult = this.pluginRegistry.get(typeResult.value);
+    if (!pluginResult.ok) return pluginResult as any;
+
+    let deployResult: Result<void, JsmError>;
+
+    if (mode === 'incremental' && 'deployIncremental' in pluginResult.value) {
+      deployResult = await (pluginResult.value as any).deployIncremental(serverResult.value, deploymentResult.value);
+    } else {
+      deployResult = await pluginResult.value.deploy(serverResult.value, deploymentResult.value);
+    }
+
+    if (!deployResult.ok) return deployResult;
+
+    await this.updateDeploymentState(serverId, deploymentId, 'synced');
+    this.bus.emit('DeploymentStateChanged', { 
+      srvId: serverId, 
+      depId: deploymentId, 
+      state: 'synced' 
+    });
+    
+    return ok(undefined);
+  }
+
+  async undeploy(serverId: string, deploymentId: string): Promise<Result<void, JsmError>> {
+    const serverResult = await this.getServerConfig(serverId);
+    if (!serverResult.ok) return serverResult as any;
+
+    // Detect server type from serverHome since type field was removed
+    const typeResult = await this.pluginRegistry.detectServerType(serverResult.value.serverHome);
+    if (!typeResult.ok) return typeResult as any;
+
+    const pluginResult = this.pluginRegistry.get(typeResult.value);
+    if (!pluginResult.ok) return pluginResult as any;
+
+    const undeployResult = await pluginResult.value.undeploy(serverResult.value, deploymentId);
+    if (!undeployResult.ok) return undeployResult;
+
+    await this.updateDeploymentState(serverId, deploymentId, 'undeployed');
+    
+    const deploymentResult = await this.getDeployment(serverId, deploymentId);
+    if (deploymentResult.ok) {
+      this.bus.emit('DeploymentUndeployed', deploymentResult.value);
+    }
+    
+    return ok(undefined);
+  }
+
+  /* ───────────────────── Query Operations ─────────────────── */
+
+  async getDeployment(serverId: string, deploymentId: string): Promise<Result<DeploymentConfig, JsmError>> {
+    const serverResult = await this.getServerConfig(serverId);
+    if (!serverResult.ok) return serverResult as any;
+
+    const deployment = serverResult.value.deployments?.find(d => d.id === deploymentId);
+    if (!deployment) {
+      return err(new JsmError(ErrorCode.DEPLOY_ERROR, `Deployment ${deploymentId} not found`));
+    }
+
+    return ok(deployment);
+  }
+
+  async listDeployments(serverId: string): Promise<Result<DeploymentConfig[], JsmError>> {
+    const serverResult = await this.getServerConfig(serverId);
+    if (!serverResult.ok) return serverResult as any;
+
+    return ok(serverResult.value.deployments || []);
+  }
+
+  /* ───────────────────── Private Helpers ─────────────────── */
+
+  private async validateDeployment(deployment: DeploymentConfig): Promise<Result<void, JsmError>> {
+    // For now, use basic validation since deployments are part of server config validation
+    // TODO: Extract deployment schema validation to SchemaValidator if needed
+    try {
+      // Basic validation
+      if (!deployment.name || deployment.name.trim() === '') {
+        return err(new JsmError(ErrorCode.SERVER_VALIDATION_ERROR, 'Deployment name is required'));
+      }
+      
+      if (!deployment.sourcePath || deployment.sourcePath.trim() === '') {
+        return err(new JsmError(ErrorCode.SERVER_VALIDATION_ERROR, 'Deployment source path is required'));
+      }
+      
+      if (!deployment.type || (deployment.type !== 'war' && deployment.type !== 'exploded')) {
+        return err(new JsmError(ErrorCode.SERVER_VALIDATION_ERROR, 'Deployment type must be "war" or "exploded"'));
+      }
+
+      // Check if source is file or directory based on deployment type
+      const sourceStat = await fs.promises.stat(deployment.sourcePath);
+      if (deployment.type === 'war' && !sourceStat.isFile()) {
+        return err(new JsmError(ErrorCode.SERVER_VALIDATION_ERROR, `WAR deployment source must be a file: ${deployment.sourcePath}`));
+      }
+      if (deployment.type === 'exploded' && !sourceStat.isDirectory()) {
+        return err(new JsmError(ErrorCode.SERVER_VALIDATION_ERROR, `Exploded deployment source must be a directory: ${deployment.sourcePath}`));
+      }
+
+      return ok(undefined);
+    } catch (error: any) {
+      return err(new JsmError(ErrorCode.SERVER_VALIDATION_ERROR, `Deployment path validation failed: ${error.message || error}`, error));
+    }
+  }
+
+  private async getServerConfig(serverId: string): Promise<Result<ServerConfig, JsmError>> {
+    const serverResult = await this.configManager.getServer(serverId);
     if (!serverResult.ok) {
-      return err(new JsmError(ErrorCode.SERVER_NOT_FOUND, 'server missing'));
+      return err(new JsmError(ErrorCode.SERVER_NOT_FOUND, `Server ${serverId} not found`));
     }
     return serverResult;
   }
 
-  /* ───────────────────── public API ─────────────────── */
-  async add(srvId: string, draft: DeploymentConfig): Promise<Result<DeploymentConfig, JsmError>> {
-    await this.hooks.invoke('beforeAddDeployment', srvId);
-    
-    // Get server config to extract serverHome for auto-generation
-    const serverRes = await this.serverConfig(srvId);
-    if (!serverRes.ok) return serverRes as any;
-    
-    // Use instancePath if available (for instance-based servers), otherwise fallback to serverHome
-    const effectivePath = (serverRes.value as any).instancePath || serverRes.value.serverHome;
-    
-    // Simple deployment config creation
-    const deploymentConfig: DeploymentConfig = {
+  private buildDeploymentConfig(draft: DeploymentConfig, server: ServerConfig): DeploymentConfig {
+    return {
       ...draft,
       id: draft.id || `dep_${Date.now()}`,
-      name: draft.name || 'New Deployment',
-      type: draft.type || 'war',
-      state: 'undeployed'
+      name: draft.name || this.extractNameFromPath(draft.sourcePath),
+      type: draft.type || this.detectTypeFromPath(draft.sourcePath),
+      state: 'undeployed',
+      targetPath: draft.targetPath || this.generateTargetPath(draft, server)
     };
-    
-    const m = this.getManager(srvId);
-    const addRes = m.add(deploymentConfig);
-    if (!addRes.ok) return addRes;
-    
-    // Save deployment using ConfigManager
-    const saveRes = await this.configManager.addDeployment(srvId, addRes.value);
-    if (!saveRes.ok) return saveRes as any;
-    
-    this.bus.emit('DeploymentAdded', addRes.value);
-    await this.hooks.invoke('afterAddDeployment', addRes.value);
-    return addRes;
   }
 
-  async remove(srvId: string, depId: string, hard: boolean): Promise<Result<void, JsmError>> {
-    const m = this.getManager(srvId);
+  private extractNameFromPath(sourcePath: string): string {
+    return sourcePath?.split('/').pop()?.replace('.war', '') || 'deployment';
+  }
+
+  private detectTypeFromPath(sourcePath: string): 'war' | 'exploded' {
+    return sourcePath?.endsWith('.war') ? 'war' : 'exploded';
+  }
+
+  private generateTargetPath(draft: DeploymentConfig, server: ServerConfig): string {
+    const effectivePath = (server as any).instancePath || server.serverHome;
+    const webappsDir = `${effectivePath}/webapps`;
+    const name = draft.renameTo || this.extractNameFromPath(draft.sourcePath);
     
-    // Get deployment config before removing
-    const deploymentRes = m.get(depId);
-    if (!deploymentRes.ok) return deploymentRes as any;
+    return draft.type === 'war' 
+      ? `${webappsDir}/${name}.war` 
+      : `${webappsDir}/${name}`;
+  }
 
-    if (hard) {
-      // Use plugin to undeploy from server
-      const serverRes = await this.serverConfig(srvId);
-      if (!serverRes.ok) return serverRes as any;
-
-      const pluginRes = this.pluginRegistry.get(serverRes.value.type);
-      if (pluginRes.ok) {
-        const undeployRes = await pluginRes.value.undeploy(serverRes.value, depId);
-        if (!undeployRes.ok) {
-          this.log.warn(`Plugin undeploy failed: ${undeployRes.error.message}`);
-        }
-      }
+  private async updateDeploymentState(serverId: string, deploymentId: string, state: DeploymentConfig['state']): Promise<void> {
+    const deploymentResult = await this.getDeployment(serverId, deploymentId);
+    if (deploymentResult.ok) {
+      const updatedDeployment = { ...deploymentResult.value, state };
+      await this.configManager.updateDeployment(serverId, deploymentId, updatedDeployment);
     }
-
-    const removeRes = m.remove(depId);
-    if (!removeRes.ok) return removeRes;
-
-    // Delete deployment using ConfigManager
-    const cfgRes = await this.configManager.deleteDeployment(srvId, depId);
-    if (!cfgRes.ok) return cfgRes;
-
-    this.bus.emit('DeploymentRemoved', deploymentRes.value);
-    await this.hooks.invoke('afterRemoveDeployment', deploymentRes.value);
-    return ok(undefined);
   }
 
-  async publish(srvId: string, depId: string): Promise<Result<void, JsmError>> {
-    const serverRes = await this.serverConfig(srvId);
-    if (!serverRes.ok) return serverRes as any;
+  /* ───────────────────── Lifecycle ─────────────────── */
 
-    const pluginRes = this.pluginRegistry.get(serverRes.value.type);
-    if (!pluginRes.ok) return pluginRes as any;
-
-    const m = this.getManager(srvId);
-    const dep = m.get(depId);
-    if (!dep.ok) return dep as any;
-
-    const publishRes = await pluginRes.value.deploy(serverRes.value, dep.value);
-    if (!publishRes.ok) return publishRes;
-
-    // Update deployment state
-    dep.value.state = 'synced';
-    await this.configManager.updateDeployment(srvId, dep.value.id, dep.value);
-
-    this.bus.emit('DeploymentAdded', dep.value);
-    return ok(undefined);
-  }
-
-  async publishIncremental(srvId: string, depId: string): Promise<Result<void, JsmError>> {
-    const serverRes = await this.serverConfig(srvId);
-    if (!serverRes.ok) return serverRes as any;
-
-    const pluginRes = this.pluginRegistry.get(serverRes.value.type);
-    if (!pluginRes.ok) return pluginRes as any;
-
-    const m = this.getManager(srvId);
-    const dep = m.get(depId);
-    if (!dep.ok) return dep as any;
-
-    // Use incremental deployment if supported
-    if ('deployIncremental' in pluginRes.value) {
-      const incrementalRes = await (pluginRes.value as any).deployIncremental(srvId, dep.value);
-      if (!incrementalRes.ok) return incrementalRes;
-    } else {
-      // Fallback to full deployment
-      const deployRes = await pluginRes.value.deploy(serverRes.value, dep.value);
-      if (!deployRes.ok) return deployRes;
-    }
-
-    // Update deployment state
-    dep.value.state = 'synced';
-    await this.configManager.updateDeployment(srvId, dep.value.id, dep.value);
-
-    this.bus.emit('DeploymentAdded', dep.value);
-    return ok(undefined);
-  }
-
-  async undeploy(srvId: string, depId: string): Promise<Result<void, JsmError>> {
-    const serverRes = await this.serverConfig(srvId);
-    if (!serverRes.ok) return serverRes as any;
-
-    const pluginRes = this.pluginRegistry.get(serverRes.value.type);
-    if (!pluginRes.ok) return pluginRes as any;
-
-    const m = this.getManager(srvId);
-    const dep = m.get(depId);
-    if (!dep.ok) return dep as any;
-
-    const undeployRes = await pluginRes.value.undeploy(serverRes.value, depId);
-    if (!undeployRes.ok) return undeployRes;
-
-    // Update deployment state
-    dep.value.state = 'undeployed';
-    await this.configManager.updateDeployment(srvId, dep.value.id, dep.value);
-
-    this.bus.emit('DeploymentUndeployed', dep.value);
-    return ok(undefined);
-  }
-
-  list(srvId: string): DeploymentConfig[] {
-    const m = this.getManager(srvId);
-    return m.getAll();
-  }
-
-  get(srvId: string, depId: string): Result<DeploymentConfig, JsmError> {
-    const m = this.getManager(srvId);
-    return m.get(depId);
-  }
-
-  /* ───────────────────── cleanup ─────────────────── */
-  disposeAll(): void {
-    this.managers.clear();
-    this.log.debug('All deployment managers disposed');
+  dispose(): void {
+    this.log.debug('DeploymentService disposed');
   }
 }

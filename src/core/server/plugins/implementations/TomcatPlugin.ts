@@ -287,23 +287,6 @@ export class TomcatPlugin implements IServerPlugin {
         ));
       }
 
-      // Validate paths exist
-      if (config.validatePaths !== false) {
-        if (!fs.existsSync(config.javaHome)) {
-          return err(new JsmError(
-            ErrorCode.CONFIG_INVALID,
-            `Java home does not exist: ${config.javaHome}`
-          ));
-        }
-
-        if (!fs.existsSync(config.serverHome)) {
-          return err(new JsmError(
-            ErrorCode.CONFIG_INVALID,
-            `Server home does not exist: ${config.serverHome}`
-          ));
-        }
-      }
-
       return ok(undefined);
     } catch (error) {
       this.log.error('Configuration validation failed', error);
@@ -317,11 +300,9 @@ export class TomcatPlugin implements IServerPlugin {
 
   getDefaultConfig(): Partial<ServerConfig> {
     return {
-      type: 'tomcat',
       host: 'localhost',
       port: 8080,
       autoSync: false,
-      validatePaths: true,
       startupTimeout: 30000,
       stopTimeout: 5000
     };
@@ -348,7 +329,7 @@ export class TomcatPlugin implements IServerPlugin {
         if (!fs.existsSync(deployment.targetPath)) {
           fs.mkdirSync(deployment.targetPath, { recursive: true });
         }
-        // Implementation for copying directory would go here
+        await this.copyDirectory(deployment.sourcePath, deployment.targetPath);
       }
 
       this.log.info(`Successfully deployed ${deployment.name}`);
@@ -358,6 +339,45 @@ export class TomcatPlugin implements IServerPlugin {
       return err(new JsmError(
         ErrorCode.DEPLOY_ERROR,
         `Failed to deploy application: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        error instanceof Error ? error : undefined
+      ));
+    }
+  }
+
+  async deployIncremental(config: ServerConfig, deployment: DeploymentConfig): Promise<Result<void, JsmError>> {
+    try {
+      this.log.info(`Incremental deployment of ${deployment.name} to Tomcat server: ${config.name}`);
+
+      if (deployment.type === 'war') {
+        // For WAR files, incremental deployment is the same as full deployment
+        return this.deploy(config, deployment);
+      }
+
+      // For exploded deployments, perform incremental sync
+      if (deployment.type === 'exploded') {
+        const webappsDir = path.join(config.serverHome, 'webapps');
+        if (!fs.existsSync(webappsDir)) {
+          return err(new JsmError(
+            ErrorCode.DEPLOY_ERROR,
+            'Webapps directory not found'
+          ));
+        }
+
+        // Perform incremental synchronization
+        await this.syncDirectoryIncremental(deployment.sourcePath, deployment.targetPath);
+        this.log.info(`Successfully performed incremental deployment of ${deployment.name}`);
+        return ok(undefined);
+      }
+
+      return err(new JsmError(
+        ErrorCode.DEPLOY_ERROR,
+        `Unsupported deployment type for incremental deployment: ${deployment.type}`
+      ));
+    } catch (error) {
+      this.log.error('Failed to perform incremental deployment', error);
+      return err(new JsmError(
+        ErrorCode.DEPLOY_ERROR,
+        `Incremental deployment failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
         error instanceof Error ? error : undefined
       ));
     }
@@ -459,6 +479,75 @@ export class TomcatPlugin implements IServerPlugin {
         `Detection failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
         error instanceof Error ? error : undefined
       ));
+    }
+  }
+
+  /**
+   * Copy directory recursively
+   */
+  private async copyDirectory(source: string, target: string): Promise<void> {
+    if (!fs.existsSync(target)) {
+      fs.mkdirSync(target, { recursive: true });
+    }
+
+    const items = fs.readdirSync(source, { withFileTypes: true });
+    
+    for (const item of items) {
+      const sourcePath = path.join(source, item.name);
+      const targetPath = path.join(target, item.name);
+
+      if (item.isDirectory()) {
+        await this.copyDirectory(sourcePath, targetPath);
+      } else {
+        fs.copyFileSync(sourcePath, targetPath);
+      }
+    }
+  }
+
+  /**
+   * Perform incremental synchronization between directories
+   */
+  private async syncDirectoryIncremental(source: string, target: string): Promise<void> {
+    if (!fs.existsSync(target)) {
+      fs.mkdirSync(target, { recursive: true });
+    }
+
+    const sourceItems = fs.readdirSync(source, { withFileTypes: true });
+    
+    for (const item of sourceItems) {
+      const sourcePath = path.join(source, item.name);
+      const targetPath = path.join(target, item.name);
+
+      if (item.isDirectory()) {
+        await this.syncDirectoryIncremental(sourcePath, targetPath);
+      } else {
+        // Only copy if file doesn't exist or has been modified
+        const shouldCopy = !fs.existsSync(targetPath) || 
+                          fs.statSync(sourcePath).mtime > fs.statSync(targetPath).mtime;
+        
+        if (shouldCopy) {
+          fs.copyFileSync(sourcePath, targetPath);
+          this.log.debug(`Incremental sync: copied ${sourcePath} -> ${targetPath}`);
+        }
+      }
+    }
+
+    // Remove files in target that no longer exist in source
+    if (fs.existsSync(target)) {
+      const targetItems = fs.readdirSync(target, { withFileTypes: true });
+      for (const item of targetItems) {
+        const sourcePath = path.join(source, item.name);
+        const targetPath = path.join(target, item.name);
+
+        if (!fs.existsSync(sourcePath)) {
+          if (item.isDirectory()) {
+            fs.rmSync(targetPath, { recursive: true, force: true });
+          } else {
+            fs.unlinkSync(targetPath);
+          }
+          this.log.debug(`Incremental sync: removed ${targetPath}`);
+        }
+      }
     }
   }
 }

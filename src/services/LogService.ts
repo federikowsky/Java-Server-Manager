@@ -26,7 +26,7 @@ export class LogService {
       }
 
       // Get server configuration
-      const serverResult = this.configManager.getServer(serverId);
+      const serverResult = await this.configManager.getServer(serverId);
       if (!serverResult.ok) {
         window.showErrorMessage(`Server ${serverId} not found`);
         return;
@@ -34,10 +34,17 @@ export class LogService {
 
       const server = serverResult.value;
       
+      // Detect server type from serverHome
+      const serverTypeResult = await this.pluginRegistry.detectServerType(server.serverHome);
+      if (!serverTypeResult.ok) {
+        window.showErrorMessage(`Could not detect server type for: ${server.serverHome}`);
+        return;
+      }
+      
       // Get plugin for server type
-      const pluginResult = this.pluginRegistry.get(server.type);
+      const pluginResult = this.pluginRegistry.get(serverTypeResult.value);
       if (!pluginResult.ok) {
-        window.showErrorMessage(`No plugin found for server type: ${server.type}`);
+        window.showErrorMessage(`No plugin found for server type: ${serverTypeResult.value}`);
         return;
       }
 
@@ -53,7 +60,7 @@ export class LogService {
           window.showWarningMessage(`No log file found for server: ${server.name}`);
         }
       } else {
-        window.showWarningMessage(`Plugin for ${server.type} does not support log viewing`);
+        window.showWarningMessage(`Plugin for ${serverTypeResult.value} does not support log viewing`);
       }
     } catch (error) {
       this.log.error(`Failed to open server log: ${error}`);

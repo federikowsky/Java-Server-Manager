@@ -22,9 +22,10 @@ import { Logger } from '../core/utils/logger';
 import { JsmError } from '../core/errors/JsmError';
 import { ErrorCode } from '../core/errors/codes';
 import { DeploymentConfig, ServerTemplate } from '../core/types/domain';
-import { EditServerPanel } from '../ui/webviews/EditServerPanel';
+import { ServerFormPanel } from '../ui/webviews/ServerFormPanel';
 import { LogService } from '../services/LogService';
 import { TemplateManager } from '../core/templates/TemplateManager';
+import { PluginRegistry } from '../core/server/plugins/registry/PluginRegistry';
 
 const log = Logger.getInstance().createChild('Commands');
 
@@ -163,22 +164,19 @@ export function registerServerCommands(ctx: ExtensionContext, srv: ServerService
       if (!serverId) return;
 
       try {
-        const serverResult = srv.getServer(serverId);
+        const serverResult = await srv.getServer(serverId);
         if (!serverResult.ok) {
           showErr(serverResult.error);
           return;
         }
 
-        const panelResult = await EditServerPanel.open({
-          mode: 'edit',
-          data: serverResult.value
-        });
+        const panelResult = await ServerFormPanel.showForm(serverId);
 
         if (!panelResult.ok) return;
 
-        const updateResult = await srv.update(panelResult.value);
+        const updateResult = await srv.updateFromUserInput(serverId, panelResult.value);
         if (updateResult.ok) {
-          showSuccess(`Server "${panelResult.value.name}" updated successfully!`);
+          showSuccess(`Server "${updateResult.value.name}" updated successfully!`);
           await commands.executeCommand('jsm.treeview.refresh');
         } else {
           showErr(updateResult.error);
@@ -239,7 +237,6 @@ export function registerServerCommands(ctx: ExtensionContext, srv: ServerService
       try {
         const info = `Server: ${serverData.name}
 ID: ${serverData.id}
-Type: ${serverData.type}
 Host: ${serverData.host}:${serverData.port}
 Home: ${serverData.serverHome}`;
 
@@ -256,7 +253,7 @@ Home: ${serverData.serverHome}`;
 
       try {
         // Get all deployments for this server and redeploy them incrementally
-        const serverResult = srv.getServer(serverId);
+        const serverResult = await srv.getServer(serverId);
         if (!serverResult.ok) {
           showErr(serverResult.error);
           return;
@@ -281,7 +278,7 @@ Home: ${serverData.serverHome}`;
       if (!serverId) return;
 
       try {
-        const serverResult = srv.getServer(serverId);
+        const serverResult = await srv.getServer(serverId);
         if (!serverResult.ok) {
           showErr(serverResult.error);
           return;
@@ -453,9 +450,11 @@ export function registerDeploymentCommands(
       if (!nodeData) return;
 
       try {
-        const result = sync.toggle(nodeData.serverId, nodeData.deploymentId);
+        const result = await sync.toggle(nodeData.serverId, nodeData.deploymentId);
         if (result.ok) {
-          showSuccess('AutoSync toggled for deployment');
+          const status = result.value === 'enabled' ? 'enabled' : 'disabled';
+          showSuccess(`AutoSync ${status} for deployment`);
+          await commands.executeCommand('jsm.treeview.refresh');
         } else {
           showErr(result.error);
         }
@@ -563,11 +562,20 @@ async function showAddServerMenu(service: ServerService): Promise<void> {
   }
 
   // Show available templates only
-  const items: QuickPickItem[] = allTemplates.map((template: ServerTemplate) => ({
-    label: template.name,
-    description: `${template.type}`,
-    detail: `Create instance from: ${template.defaultConfig.serverHome}`,
-    iconPath: new ThemeIcon('server')
+  const items: QuickPickItem[] = await Promise.all(allTemplates.map(async (template: ServerTemplate) => {
+    // Detect server type from template's default config
+    const serverHome = template.defaultConfig.serverHome;
+    let detectedType = 'Unknown';
+    if (serverHome) {
+      const result = await PluginRegistry.getInstance().detectServerType(serverHome);
+      detectedType = result.ok ? result.value : 'Unknown';
+    }
+    return {
+      label: template.name,
+      description: detectedType,
+      detail: `Create instance from: ${serverHome || 'Unknown'}`,
+      iconPath: new ThemeIcon('server')
+    };
   }));
 
   const selection = await window.showQuickPick(items, {
@@ -597,14 +605,21 @@ async function showTemplateManagementMenu(service: ServerService): Promise<void>
 
   // Add existing templates first
   if (allTemplates.length > 0) {
-    allTemplates.forEach((template: ServerTemplate) => {
+    for (const template of allTemplates) {
+      // Detect server type from template's default config  
+      const serverHome = template.defaultConfig.serverHome;
+      let detectedType = 'Unknown';
+      if (serverHome) {
+        const result = await PluginRegistry.getInstance().detectServerType(serverHome);
+        detectedType = result.ok ? result.value : 'Unknown';
+      }
       items.push({
         label: template.name,
-        description: `${template.type}`,
+        description: detectedType,
         detail: template.description || 'No description',
         iconPath: new ThemeIcon('server')
       });
-    });
+    }
 
     // Add separator before "Add New Template"
     items.push({ label: '', kind: QuickPickItemKind.Separator });
@@ -726,7 +741,6 @@ async function showAddTemplateWorkflow(service: ServerService): Promise<void> {
   const template: ServerTemplate = {
     id: `template_${Date.now()}`,
     name: templateName.trim(),
-    type: serverType,
     defaultConfig: {
       ...defaultConfigResult.value,
       serverHome: serverPath,
@@ -769,11 +783,20 @@ async function showAddServerFromTemplateMenu(service: ServerService): Promise<vo
   }
 
   // Show available templates
-  const items: QuickPickItem[] = allTemplates.map((template: ServerTemplate) => ({
-    label: template.name,
-    description: `${template.type}`,
-    detail: `Create instance from: ${template.defaultConfig.serverHome}`,
-    iconPath: new ThemeIcon('server')
+  const items: QuickPickItem[] = await Promise.all(allTemplates.map(async (template: ServerTemplate) => {
+    // Detect server type from template's default config
+    const serverHome = template.defaultConfig.serverHome;
+    let detectedType = 'Unknown';
+    if (serverHome) {
+      const result = await PluginRegistry.getInstance().detectServerType(serverHome);
+      detectedType = result.ok ? result.value : 'Unknown';
+    }
+    return {
+      label: template.name,
+      description: detectedType,
+      detail: `Create instance from: ${serverHome || 'Unknown'}`,
+      iconPath: new ThemeIcon('server')
+    };
   }));
 
   const selection = await window.showQuickPick(items, {
@@ -793,36 +816,21 @@ async function showAddServerFromTemplateMenu(service: ServerService): Promise<vo
 }
 
 /**
- * Create server instance from template using EditServerPanel
+ * Create server instance from template using ServerFormPanel
  */
 async function createInstanceFromTemplate(service: ServerService, template: ServerTemplate): Promise<void> {
-  // Generate simple default configuration from template
-  const defaultConfig = {
-    id: `${template.type}_${Date.now()}`,
-    name: template.name,
-    type: template.type,
-    state: 'stopped' as const,
-    deployments: [],
-    pidFile: '',
-    debug: { enable: false },
-    ...template.defaultConfig
-  };
-  
-  // Use EditServerPanel.openFromTemplate for clean template → server workflow
-  const panelResult = await EditServerPanel.open({
-    mode: 'createFromTemplate',
-    data: defaultConfig as any
-  });
+  // Show form with template data pre-populated
+  const panelResult = await ServerFormPanel.showForm();
 
   if (!panelResult.ok) {
     // User cancelled
     return;
   }
 
-  // Create server with configuration from EditServerPanel
-  const createResult = await service.create(panelResult.value);
+  // Create server with configuration from ServerFormPanel
+  const createResult = await service.createFromUserInput(panelResult.value);
   if (createResult.ok) {
-    showSuccess(`Server instance "${panelResult.value.name}" created successfully!`);
+    showSuccess(`Server instance "${createResult.value.name}" created successfully!`);
     
     // Refresh the tree view to show the new server
     await commands.executeCommand('jsm.treeview.refresh');

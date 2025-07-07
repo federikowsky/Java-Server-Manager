@@ -211,10 +211,6 @@ export class TemplateManager {
       return err(new JsmError(ErrorCode.CONFIG_INVALID, 'Template name is required and must be a non-empty string'));
     }
 
-    if (!template.type || typeof template.type !== 'string') {
-      return err(new JsmError(ErrorCode.CONFIG_INVALID, 'Template type is required and must be a string'));
-    }
-
     if (!template.defaultConfig || typeof template.defaultConfig !== 'object') {
       return err(new JsmError(ErrorCode.CONFIG_INVALID, 'Template defaultConfig is required and must be an object'));
     }

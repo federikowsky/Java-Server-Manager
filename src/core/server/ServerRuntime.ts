@@ -66,7 +66,14 @@ export class ServerRuntime {
     this.updateState('starting');
 
     try {
-      const plugin = await this.pluginAdapter.getPlugin(this.config.type);
+      // Detect server type from serverHome
+      const typeResult = await this.pluginAdapter.detectServerType(this.config.serverHome);
+      if (!typeResult.ok) {
+        this.updateState('error');
+        return err(new JsmError(ErrorCode.SERVER_TYPE_DETECTION_ERROR, 'Failed to detect server type'));
+      }
+
+      const plugin = await this.pluginAdapter.getPlugin(typeResult.value);
       if (!plugin.ok) {
         this.updateState('error');
         return plugin as any;
@@ -101,7 +108,14 @@ export class ServerRuntime {
     this.updateState('stopping');
 
     try {
-      const plugin = await this.pluginAdapter.getPlugin(this.config.type);
+      // Detect server type from serverHome
+      const typeResult = await this.pluginAdapter.detectServerType(this.config.serverHome);
+      if (!typeResult.ok) {
+        this.updateState('error');
+        return err(new JsmError(ErrorCode.SERVER_TYPE_DETECTION_ERROR, 'Failed to detect server type'));
+      }
+
+      const plugin = await this.pluginAdapter.getPlugin(typeResult.value);
       if (!plugin.ok) {
         this.updateState('error');
         return plugin as any;
@@ -153,7 +167,13 @@ export class ServerRuntime {
     this.log.info(`Deploying ${deployment.name} to ${this.config.name}`);
 
     try {
-      const plugin = await this.pluginAdapter.getPlugin(this.config.type);
+      // Detect server type from serverHome
+      const typeResult = await this.pluginAdapter.detectServerType(this.config.serverHome);
+      if (!typeResult.ok) {
+        return err(new JsmError(ErrorCode.SERVER_TYPE_DETECTION_ERROR, 'Failed to detect server type'));
+      }
+
+      const plugin = await this.pluginAdapter.getPlugin(typeResult.value);
       if (!plugin.ok) {
         return plugin as any;
       }
@@ -179,7 +199,13 @@ export class ServerRuntime {
     this.log.info(`Undeploying ${deploymentId} from ${this.config.name}`);
 
     try {
-      const plugin = await this.pluginAdapter.getPlugin(this.config.type);
+      // Detect server type from serverHome
+      const typeResult = await this.pluginAdapter.detectServerType(this.config.serverHome);
+      if (!typeResult.ok) {
+        return err(new JsmError(ErrorCode.SERVER_TYPE_DETECTION_ERROR, 'Failed to detect server type'));
+      }
+
+      const plugin = await this.pluginAdapter.getPlugin(typeResult.value);
       if (!plugin.ok) {
         return plugin as any;
       }
@@ -203,7 +229,13 @@ export class ServerRuntime {
    */
   async healthCheck(): Promise<Result<boolean, JsmError>> {
     try {
-      const plugin = await this.pluginAdapter.getPlugin(this.config.type);
+      // Detect server type from serverHome
+      const typeResult = await this.pluginAdapter.detectServerType(this.config.serverHome);
+      if (!typeResult.ok) {
+        return err(new JsmError(ErrorCode.SERVER_TYPE_DETECTION_ERROR, 'Failed to detect server type'));
+      }
+
+      const plugin = await this.pluginAdapter.getPlugin(typeResult.value);
       if (!plugin.ok) {
         return plugin as any;
       }

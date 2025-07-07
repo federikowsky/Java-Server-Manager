@@ -27,6 +27,9 @@ export interface IServerPlugin {
   // Deployment operations
   deploy(config: ServerConfig, deployment: DeploymentConfig): Promise<Result<void, JsmError>>;
   undeploy(config: ServerConfig, deploymentId: string): Promise<Result<void, JsmError>>;
+  
+  // Optional incremental deployment support for plugins that can support it
+  deployIncremental?(config: ServerConfig, deployment: DeploymentConfig): Promise<Result<void, JsmError>>;
 
   // Configuration
   validateConfig(config: ServerConfig): Result<void, JsmError>;

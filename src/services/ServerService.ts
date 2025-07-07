@@ -24,38 +24,37 @@ import { DebugManager } from '../core/debug/DebugManager';
 export class ServerService {
   private readonly log = Logger.getInstance().createChild('ServerService');
   private readonly serverManager = ServerManager.getInstance();
-  private readonly pluginAdapter = PluginAdapter.getInstance();
+  private readonly configManager = ConfigManager.getInstance();
 
   constructor(
-    private readonly configManager: ConfigManager,
     private readonly pidMgr: PidManager,
     private readonly bus: EventBus,
     private readonly hooks: HookManager,
     private readonly dbgMgr: DebugManager
   ) {
-    // No longer need to persist state changes since state is not part of config
+    // Simplified constructor - CRUD operations delegated to ConfigManager
   }
 
-  // ==================== PUBLIC API ====================
+  // ==================== CRUD OPERATIONS ====================
 
   /**
-   * Get all servers from ConfigManager
+   * Get all servers
    */
   async getAllServers(): Promise<Result<ServerConfig[], JsmError>> {
-    return await this.configManager.getAllServers();
+    return this.configManager.getAllServers();
   }
 
   /**
-   * Get server by ID from ConfigManager
+   * Get server by ID
    */
-  getServer(id: string): Result<ServerConfig, JsmError> {
+  async getServer(id: string): Promise<Result<ServerConfig, JsmError>> {
     return this.configManager.getServer(id);
   }
 
   /**
    * Get server by ID (alias for backwards compatibility)
    */
-  get(id: string): Result<ServerConfig, JsmError> {
+  async get(id: string): Promise<Result<ServerConfig, JsmError>> {
     return this.getServer(id);
   }
 
@@ -67,83 +66,63 @@ export class ServerService {
   }
 
   /**
-   * Get server state (alias for getStatus)
+   * Get server state
    */
   getServerState(id: string): Result<ServerState, JsmError> {
     return this.serverManager.getState(id);
   }
 
   /**
-   * Create new server - persist to ConfigManager and notify ServerManager
+   * Create new server from config
    */
-  async create(config: ServerConfig): Promise<Result<ServerConfig, JsmError>> {
-    // Validate configuration
-    if (!config.id || !config.name || !config.serverHome) {
-      return err(new JsmError(ErrorCode.CONFIG_INVALID, 'Missing required fields: id, name, serverHome'));
-    }
-
+  async createFromUserInput(config: ServerConfig): Promise<Result<ServerConfig, JsmError>> {
     try {
-      // Auto-detect server type if not provided
-      if (!config.type && config.serverHome) {
-        const detectionResult = await this.pluginAdapter.detectServerType(config.serverHome);
-        if (detectionResult.ok) {
-          config.type = detectionResult.value;
-          this.log.info(`Auto-detected server type: ${config.type} for ${config.name}`);
-        }
-      }
+      // Use ConfigManager to create server
+      const createResult = await this.configManager.saveServer(config);
+      if (!createResult.ok) return createResult;
 
-      // Get default configuration from plugin
-      if (config.type) {
-        const defaultConfigResult = await this.pluginAdapter.getDefaultConfig(config.type);
-        if (defaultConfigResult.ok) {
-          // Merge defaults with provided config (provided config takes precedence)
-          config = { ...defaultConfigResult.value, ...config } as ServerConfig;
-        }
-      }
-
-      // Save to ConfigManager first
-      const saveResult = await this.configManager.saveServer(config);
-      if (!saveResult.ok) {
-        return saveResult;
-      }
+      const savedConfig = createResult.value;
 
       // Register with ServerManager to create runtime
-      const registerResult = await this.serverManager.register(config);
+      const registerResult = await this.serverManager.register(savedConfig);
       if (!registerResult.ok) {
         // Rollback configuration if runtime creation fails
-        await this.configManager.deleteServer(config.id);
+        await this.configManager.deleteServer(savedConfig.id);
         return registerResult as any;
       }
 
-      this.bus.emit('ServerAdded', config);
-      await this.hooks.invoke('afterAddServer', config);
-      this.log.info(`Server created: ${config.name} (${config.id})`);
-      return ok(config);
+      this.bus.emit('ServerAdded', savedConfig);
+      await this.hooks.invoke('afterAddServer', savedConfig);
+      this.log.info(`Server created: ${savedConfig.name} (${savedConfig.id})`);
+      return ok(savedConfig);
     } catch (error) {
       return err(new JsmError(ErrorCode.PLUGIN_ERROR, `Failed to create server: ${error}`, error));
     }
   }
 
   /**
-   * Update server configuration
+   * Update server from config
    */
-  async update(config: ServerConfig): Promise<Result<ServerConfig, JsmError>> {
+  async updateFromUserInput(serverId: string, config: ServerConfig): Promise<Result<ServerConfig, JsmError>> {
     try {
-      // Update ConfigManager
-      const saveResult = await this.configManager.saveServer(config);
-      if (!saveResult.ok) {
-        return saveResult;
-      }
+      // Ensure the ID matches
+      config.id = serverId;
+      
+      // Use ConfigManager to update server
+      const updateResult = await this.configManager.saveServer(config);
+      if (!updateResult.ok) return updateResult;
+
+      const updatedConfig = updateResult.value;
 
       // Re-register with ServerManager to update runtime
-      await this.serverManager.unregister(config.id);
-      const registerResult = await this.serverManager.register(config);
+      await this.serverManager.unregister(updatedConfig.id);
+      const registerResult = await this.serverManager.register(updatedConfig);
       if (!registerResult.ok) {
         return registerResult as any;
       }
 
-      this.bus.emit('ServerUpdated', config);
-      await this.hooks.invoke('afterAddServer', config); // Use existing hook
+      this.bus.emit('ServerUpdated', updatedConfig);
+      await this.hooks.invoke('afterAddServer', config);
       this.log.info(`Server updated: ${config.name} (${config.id})`);
       return ok(config);
     } catch (error) {
@@ -157,7 +136,7 @@ export class ServerService {
   async delete(id: string): Promise<Result<void, JsmError>> {
     try {
       // Get server config for hooks
-      const serverResult = this.configManager.getServer(id);
+      const serverResult = await this.configManager.getServer(id);
       const serverConfig = serverResult.ok ? serverResult.value : undefined;
 
       // Stop server if running
@@ -195,7 +174,7 @@ export class ServerService {
   async start(id: string, mode: 'run' | 'debug' = 'run'): Promise<Result<void, JsmError>> {
     try {
       // Get server configuration for hooks
-      const serverResult = this.configManager.getServer(id);
+      const serverResult = await this.configManager.getServer(id);
       if (!serverResult.ok) {
         return serverResult as any;
       }
@@ -235,7 +214,7 @@ export class ServerService {
   async stop(id: string): Promise<Result<void, JsmError>> {
     try {
       // Get server configuration for hooks
-      const serverResult = this.configManager.getServer(id);
+      const serverResult = await this.configManager.getServer(id);
       if (!serverResult.ok) {
         return serverResult as any;
       }
@@ -262,7 +241,7 @@ export class ServerService {
   async restart(id: string, mode: 'run' | 'debug' = 'run'): Promise<Result<void, JsmError>> {
     try {
       // Get server configuration for hooks
-      const serverResult = this.configManager.getServer(id);
+      const serverResult = await this.configManager.getServer(id);
       if (!serverResult.ok) {
         return serverResult as any;
       }
@@ -318,34 +297,13 @@ export class ServerService {
   }
 
   /**
-   * Detect server type at path
-   */
-  async detectServerType(serverHome: string): Promise<Result<ServerType, JsmError>> {
-    return await this.pluginAdapter.detectServerType(serverHome);
-  }
-
-  /**
-   * Get default configuration for server type
-   */
-  async getDefaultConfig(serverType: ServerType): Promise<Result<Partial<ServerConfig>, JsmError>> {
-    return await this.pluginAdapter.getDefaultConfig(serverType);
-  }
-
-  /**
-   * Get supported server types
-   */
-  getSupportedTypes(): ServerType[] {
-    return this.pluginAdapter.getSupportedTypes();
-  }
-
-  /**
-   * Load workspace servers from ConfigManager
+   * Load workspace servers from CRUD manager
    */
   async loadWorkspace(): Promise<Result<void, JsmError>> {
     try {
       const allResult = await this.configManager.getAllServers();
       if (!allResult.ok) {
-        return allResult;
+        return allResult as any;
       }
 
       this.log.info(`Loading ${allResult.value.length} server configurations...`);
@@ -423,6 +381,22 @@ export class ServerService {
       const stateResult = this.serverManager.getState(server.id);
       return stateResult.ok && stateResult.value === 'stopped';
     });
+  }
+
+  /**
+   * Detect server type from server home directory
+   */
+  async detectServerType(serverHome: string): Promise<Result<ServerType, JsmError>> {
+    const pluginAdapter = PluginAdapter.getInstance();
+    return await pluginAdapter.detectServerType(serverHome);
+  }
+
+  /**
+   * Get default configuration for server type
+   */
+  async getDefaultConfig(serverType: ServerType): Promise<Result<Partial<ServerConfig>, JsmError>> {
+    const pluginAdapter = PluginAdapter.getInstance();
+    return await pluginAdapter.getDefaultConfig(serverType);
   }
 
   /**

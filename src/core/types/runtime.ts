@@ -17,7 +17,6 @@ export interface DeploymentRuntimeInfo {
 
 export interface ServerRuntimeInfo {
   pid           : number;
-  pidFile       : string;          // uguale al domain, ma certo
   process       : ChildProcess;
   state         : ServerState;
   mode          : ServerStartMode;

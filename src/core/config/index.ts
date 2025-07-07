@@ -3,6 +3,6 @@
  * SIMPLIFIED config exports - KISS approach
  */
 
-// Only export the simplified ConfigManager and new ValidationManager
+// Only export the simplified ConfigManager and SchemaValidator
 export { ConfigManager } from './ConfigManager';
-export { ValidationManager } from './schema/ValidationManager';
+export { SchemaValidator } from '../validation/SchemaValidator';

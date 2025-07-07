@@ -90,6 +90,11 @@
         "icon": "$(file-add)"
       },
       {
+        "command": "jsm.deployment.edit",
+        "title": "Edit Deployment",
+        "icon": "$(edit)"
+      },
+      {
         "command": "jsm.deployment.remove",
         "title": "Remove Deployment",
         "icon": "$(trash)"
@@ -243,6 +248,11 @@
           "command": "jsm.deployment.toggleAutosync",
           "when": "view == javaServerManagerView && viewItem == deployment",
           "group": "1_manage@1"
+        },
+        {
+          "command": "jsm.deployment.edit",
+          "when": "view == javaServerManagerView && viewItem == deployment",
+          "group": "1_manage@2"
         },
         {
           "command": "jsm.deployment.remove",

@@ -66,10 +66,12 @@ export class ServerNode extends TreeItem {
 
 export class DeploymentNode extends TreeItem {
   constructor(readonly parent: ServerConfig, readonly data: DeploymentConfig) {
-    super(data.name, 0);
+    const displayName = data.deployName || data.sourcePath.split('/').pop()?.replace('.war', '') || 'deployment';
+    super(displayName, 0);
     this.contextValue = CONTEXT_VALUES.DEPLOYMENT;
     this.iconPath = new ThemeIcon('file-code');
-    this.tooltip = data.contextPath;
+    // Simple tooltip with source path since contextPath needs to be computed
+    this.tooltip = `Source: ${data.sourcePath}`;
   }
 }
 

@@ -107,6 +107,15 @@ export async function activate(ctx: ExtensionContext): Promise<void> {
     
     const srvSvc = new ServerService(pidMgr, singleton.bus, singleton.hooks, dbgMgr);
     const depSvc = new DeploymentService(singleton.configManager, pluginRegistry, singleton.bus, singleton.hooks);
+    
+    // Initialize deployment state repository
+    const depStateInitResult = await depSvc.initialize(workspace.workspaceFolders![0].uri.toString());
+    if (!depStateInitResult.ok) {
+      singleton.logger.error('Failed to initialize deployment state repository:', depStateInitResult.error);
+      window.showErrorMessage(`Deployment state initialization failed: ${depStateInitResult.error.message}`);
+      return;
+    }
+    
     const logSvc = new LogService(pluginRegistry, singleton.configManager);
     
     singleton.logger.info('Modern services initialized successfully');

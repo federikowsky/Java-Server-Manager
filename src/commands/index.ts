@@ -23,6 +23,7 @@ import { JsmError } from '../core/errors/JsmError';
 import { ErrorCode } from '../core/errors/codes';
 import { DeploymentConfig, ServerTemplate } from '../core/types/domain';
 import { ServerFormPanel } from '../ui/webviews/ServerFormPanel';
+import { DeploymentFormPanel } from '../ui/webviews/DeploymentFormPanel';
 import { LogService } from '../services/LogService';
 import { TemplateManager } from '../core/templates/TemplateManager';
 import { PluginRegistry } from '../core/server/plugins/registry/PluginRegistry';
@@ -348,39 +349,53 @@ export function registerDeploymentCommands(
       if (!serverId) return;
 
       try {
-        const sourceUri = await window.showOpenDialog({
-          canSelectFiles: true,
-          canSelectFolders: true,
-          canSelectMany: false,
-          openLabel: 'Select Deployment Source',
-          filters: {
-            'Web Applications': ['war'],
-            'All Files': ['*']
-          }
-        });
+        // Show deployment form panel
+        const panelResult = await DeploymentFormPanel.showForm(serverId);
 
-        if (!sourceUri || sourceUri.length === 0) return;
+        if (!panelResult.ok) {
+          // User cancelled
+          return;
+        }
 
-        const sourcePath = sourceUri[0].fsPath;
-        const isWar = sourcePath.endsWith('.war');
-        const baseName = sourcePath.split('/').pop()?.replace('.war', '') || 'deployment';
-
-        const deployment: DeploymentConfig = {
-          id: `deployment-${Date.now()}`,
-          name: baseName,
-          sourcePath,
-          targetPath: isWar ? `/webapps/${baseName}.war` : `/webapps/${baseName}`,
-          contextPath: `/${baseName}`,
-          type: isWar ? 'war' : 'exploded',
-          state: 'undeployed'
-        };
-
-        const result = await dep.add(serverId, deployment);
-        if (result.ok) {
-          showSuccess(`Deployment "${deployment.name}" added successfully`);
+        // Create deployment with configuration from DeploymentFormPanel
+        const createResult = await dep.add(serverId, panelResult.value);
+        if (createResult.ok) {
+          showSuccess(`Deployment "${panelResult.value.deployName || 'New Deployment'}" created successfully!`);
+          
+          // Refresh the tree view to show the new deployment
           await commands.executeCommand('jsm.treeview.refresh');
         } else {
-          showErr(result.error);
+          showErr(createResult.error);
+        }
+      } catch (error) {
+        showErr(error);
+      }
+    }),
+
+    commands.registerCommand('jsm.deployment.edit', async (node: DeploymentNode) => {
+      const nodeData = validateDeploymentNode(node);
+      if (!nodeData) return;
+
+      try {
+        // Show deployment form panel with existing data
+        const panelResult = await DeploymentFormPanel.showForm(nodeData.serverId, nodeData.deploymentId);
+
+        if (!panelResult.ok) {
+          // User cancelled
+          return;
+        }
+
+        // Update deployment configuration through ConfigManager
+        const { ConfigManager } = await import('../core/config/ConfigManager');
+        const configManager = ConfigManager.getInstance();
+        const updateResult = await configManager.updateDeployment(nodeData.serverId, nodeData.deploymentId, panelResult.value);
+        if (updateResult.ok) {
+          showSuccess(`Deployment "${panelResult.value.deployName || 'Deployment'}" updated successfully!`);
+          
+          // Refresh the tree view to show changes
+          await commands.executeCommand('jsm.treeview.refresh');
+        } else {
+          showErr(updateResult.error);
         }
       } catch (error) {
         showErr(error);
@@ -392,7 +407,7 @@ export function registerDeploymentCommands(
       if (!nodeData) return;
 
       try {
-        const deploymentName = node.data.name || nodeData.deploymentId;
+        const deploymentName = node.data.deployName || node.data.sourcePath.split('/').pop()?.replace('.war', '') || nodeData.deploymentId;
         const confirmation = await window.showWarningMessage(
           `Remove deployment "${deploymentName}" and its files?`,
           { modal: true },
@@ -468,7 +483,7 @@ export function registerDeploymentCommands(
       if (!nodeData) return;
 
       try {
-        const deploymentName = node.data.name || nodeData.deploymentId;
+        const deploymentName = node.data.deployName || node.data.sourcePath.split('/').pop()?.replace('.war', '') || nodeData.deploymentId;
         const confirmation = await window.showWarningMessage(
           `Remove deployment "${deploymentName}" configuration (keep files)?`,
           { modal: true },
@@ -494,7 +509,7 @@ export function registerDeploymentCommands(
       if (!nodeData) return;
 
       try {
-        const deploymentName = node.data.name || nodeData.deploymentId;
+        const deploymentName = node.data.deployName || node.data.sourcePath.split('/').pop()?.replace('.war', '') || nodeData.deploymentId;
         const confirmation = await window.showWarningMessage(
           `Remove deployment "${deploymentName}" and delete all files?`,
           { modal: true },

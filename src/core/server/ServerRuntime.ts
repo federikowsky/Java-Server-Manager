@@ -164,7 +164,8 @@ export class ServerRuntime {
    * Deploy application
    */
   async deploy(deployment: DeploymentConfig): Promise<Result<void, JsmError>> {
-    this.log.info(`Deploying ${deployment.name} to ${this.config.name}`);
+    const deployName = deployment.deployName || this.extractNameFromPath(deployment.sourcePath);
+    this.log.info(`Deploying ${deployName} to ${this.config.name}`);
 
     try {
       // Detect server type from serverHome
@@ -181,9 +182,9 @@ export class ServerRuntime {
       const deployResult = await plugin.value.deploy(this.config, deployment);
       
       if (deployResult.ok) {
-        this.log.info(`Successfully deployed ${deployment.name}`);
+        this.log.info(`Successfully deployed ${deployName}`);
       } else {
-        this.log.error(`Failed to deploy ${deployment.name}: ${deployResult.error.message}`);
+        this.log.error(`Failed to deploy ${deployName}: ${deployResult.error.message}`);
       }
       
       return deployResult;
@@ -278,5 +279,12 @@ export class ServerRuntime {
     } catch (error) {
       this.log.error(`Error disposing runtime for ${this.config.name}: ${error}`);
     }
+  }
+
+  /**
+   * Helper method to extract deployment name from source path
+   */
+  private extractNameFromPath(sourcePath: string): string {
+    return sourcePath?.split('/').pop()?.replace('.war', '') || 'deployment';
   }
 }

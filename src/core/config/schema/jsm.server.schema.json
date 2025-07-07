@@ -153,11 +153,6 @@
           "default": ["**/.git/**", "**/node_modules/**", "**/.DS_Store"],
           "description": "File patterns to ignore during sync",
           "examples": [["**/*.log", "**/temp/**"]]
-        },
-        "validateBeforeDeploy": {
-          "type": "boolean",
-          "default": true,
-          "description": "Validate deployment files exist and are readable before deploying"
         }
       },
       "additionalProperties": false

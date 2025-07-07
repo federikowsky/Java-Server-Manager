@@ -3,21 +3,25 @@
  * Single responsibility: Deploy, undeploy, and manage deployment lifecycle
  */
 
-import { DeploymentConfig, ServerConfig } from '../core/types/domain';
+import { DeploymentConfig, ServerConfig, DeploymentRuntimeState, DeploymentRuntime } from '../core/types/domain';
 import { Result, ok, err } from '../core/utils/result';
 import { JsmError } from '../core/errors/JsmError';
 import { ErrorCode } from '../core/errors/codes';
 import { PluginRegistry } from '../core/server/plugins/index';
 import { ConfigManager } from '../core/config/ConfigManager';
+import { DeploymentStateRepo } from '../core/persistence/DeploymentStateRepo';
 import { EventBus } from '../core/EventBus';
 import { HookManager } from '../core/hooks/HookManager';
 import { Logger } from '../core/utils/logger';
+import { FileUtils } from '../core/utils/FileUtils';
 import { SchemaValidator } from '../core/validation/SchemaValidator';
 import * as fs from 'fs';
+import * as path from 'path';
 
 export class DeploymentService {
   private readonly log = Logger.getInstance().createChild('DeploymentService');
   private readonly schemaValidator = SchemaValidator.getInstance();
+  private readonly stateRepo = DeploymentStateRepo.getInstance();
 
   constructor(
     private readonly configManager: ConfigManager,
@@ -25,6 +29,13 @@ export class DeploymentService {
     private readonly bus: EventBus,
     private readonly hooks: HookManager
   ) {}
+
+  /**
+   * Initialize deployment state repository
+   */
+  async initialize(workspaceUri: string): Promise<Result<void, JsmError>> {
+    return await this.stateRepo.initialize(workspaceUri);
+  }
 
   /* ───────────────────── Configuration Operations ─────────────────── */
 
@@ -42,6 +53,14 @@ export class DeploymentService {
     
     const saveResult = await this.configManager.addDeployment(serverId, deploymentConfig);
     if (!saveResult.ok) return saveResult as any;
+
+    // Initialize deployment runtime state
+    await this.stateRepo.setState({
+      deploymentId: deploymentConfig.id!,
+      serverId,
+      state: 'undeployed',
+      lastUpdated: Date.now()
+    });
 
     this.bus.emit('DeploymentAdded', deploymentConfig);
     await this.hooks.invoke('afterAddDeployment', deploymentConfig);
@@ -62,6 +81,9 @@ export class DeploymentService {
 
     const deleteResult = await this.configManager.deleteDeployment(serverId, deploymentId);
     if (!deleteResult.ok) return deleteResult;
+
+    // Remove deployment runtime state
+    await this.stateRepo.removeState(deploymentId);
 
     this.bus.emit('DeploymentRemoved', deploymentResult.value);
     await this.hooks.invoke('afterRemoveDeployment', deploymentResult.value);
@@ -155,28 +177,30 @@ export class DeploymentService {
   /* ───────────────────── Private Helpers ─────────────────── */
 
   private async validateDeployment(deployment: DeploymentConfig): Promise<Result<void, JsmError>> {
-    // For now, use basic validation since deployments are part of server config validation
-    // TODO: Extract deployment schema validation to SchemaValidator if needed
     try {
-      // Basic validation
-      if (!deployment.name || deployment.name.trim() === '') {
-        return err(new JsmError(ErrorCode.SERVER_VALIDATION_ERROR, 'Deployment name is required'));
-      }
-      
+      // Validate sourcePath (required field in JSM schema)
       if (!deployment.sourcePath || deployment.sourcePath.trim() === '') {
         return err(new JsmError(ErrorCode.SERVER_VALIDATION_ERROR, 'Deployment source path is required'));
       }
       
-      if (!deployment.type || (deployment.type !== 'war' && deployment.type !== 'exploded')) {
+      // Check if source path exists
+      if (!(await FileUtils.fileExists(deployment.sourcePath))) {
+        return err(new JsmError(ErrorCode.SERVER_VALIDATION_ERROR, `Source path does not exist: ${deployment.sourcePath}`));
+      }
+      
+      // Validate type if specified
+      if (deployment.type && (deployment.type !== 'war' && deployment.type !== 'exploded')) {
         return err(new JsmError(ErrorCode.SERVER_VALIDATION_ERROR, 'Deployment type must be "war" or "exploded"'));
       }
 
       // Check if source is file or directory based on deployment type
       const sourceStat = await fs.promises.stat(deployment.sourcePath);
-      if (deployment.type === 'war' && !sourceStat.isFile()) {
+      const detectedType = deployment.type || this.detectTypeFromPath(deployment.sourcePath);
+      
+      if (detectedType === 'war' && !sourceStat.isFile()) {
         return err(new JsmError(ErrorCode.SERVER_VALIDATION_ERROR, `WAR deployment source must be a file: ${deployment.sourcePath}`));
       }
-      if (deployment.type === 'exploded' && !sourceStat.isDirectory()) {
+      if (detectedType === 'exploded' && !sourceStat.isDirectory()) {
         return err(new JsmError(ErrorCode.SERVER_VALIDATION_ERROR, `Exploded deployment source must be a directory: ${deployment.sourcePath}`));
       }
 
@@ -195,14 +219,16 @@ export class DeploymentService {
   }
 
   private buildDeploymentConfig(draft: DeploymentConfig, server: ServerConfig): DeploymentConfig {
-    return {
-      ...draft,
+    // Build config following JSM schema structure
+    const config: DeploymentConfig = {
       id: draft.id || `dep_${Date.now()}`,
-      name: draft.name || this.extractNameFromPath(draft.sourcePath),
+      sourcePath: draft.sourcePath,
+      deployName: draft.deployName || this.extractNameFromPath(draft.sourcePath),
       type: draft.type || this.detectTypeFromPath(draft.sourcePath),
-      state: 'undeployed',
-      targetPath: draft.targetPath || this.generateTargetPath(draft, server)
+      ignoreGlobs: draft.ignoreGlobs || ['**/.git/**', '**/node_modules/**', '**/.DS_Store']
     };
+    
+    return config;
   }
 
   private extractNameFromPath(sourcePath: string): string {
@@ -213,22 +239,62 @@ export class DeploymentService {
     return sourcePath?.endsWith('.war') ? 'war' : 'exploded';
   }
 
-  private generateTargetPath(draft: DeploymentConfig, server: ServerConfig): string {
+  /**
+   * Generate target path in webapps directory
+   */
+  private generateTargetPath(deploymentConfig: DeploymentConfig, server: ServerConfig): string {
     const effectivePath = (server as any).instancePath || server.serverHome;
     const webappsDir = `${effectivePath}/webapps`;
-    const name = draft.renameTo || this.extractNameFromPath(draft.sourcePath);
+    const deployName = deploymentConfig.deployName || this.extractNameFromPath(deploymentConfig.sourcePath);
+    const type = deploymentConfig.type || this.detectTypeFromPath(deploymentConfig.sourcePath);
     
-    return draft.type === 'war' 
-      ? `${webappsDir}/${name}.war` 
-      : `${webappsDir}/${name}`;
+    return type === 'war' 
+      ? `${webappsDir}/${deployName}.war` 
+      : `${webappsDir}/${deployName}`;
   }
 
-  private async updateDeploymentState(serverId: string, deploymentId: string, state: DeploymentConfig['state']): Promise<void> {
+  /**
+   * Generate context path for URL access
+   */
+  private generateContextPath(deploymentConfig: DeploymentConfig): string {
+    const deployName = deploymentConfig.deployName || this.extractNameFromPath(deploymentConfig.sourcePath);
+    return deployName === 'ROOT' ? '/' : `/${deployName}`;
+  }
+
+  /**
+   * Update deployment runtime state
+   */
+  private async updateDeploymentState(serverId: string, deploymentId: string, state: string, error?: string): Promise<void> {
+    await this.stateRepo.updateState(deploymentId, serverId, state, error);
+  }
+
+  /**
+   * Get deployment runtime information combining config and state
+   */
+  async getDeploymentRuntime(serverId: string, deploymentId: string): Promise<Result<DeploymentRuntime, JsmError>> {
     const deploymentResult = await this.getDeployment(serverId, deploymentId);
-    if (deploymentResult.ok) {
-      const updatedDeployment = { ...deploymentResult.value, state };
-      await this.configManager.updateDeployment(serverId, deploymentId, updatedDeployment);
-    }
+    if (!deploymentResult.ok) return deploymentResult as any;
+
+    const serverResult = await this.getServerConfig(serverId);
+    if (!serverResult.ok) return serverResult as any;
+
+    const config = deploymentResult.value;
+    const state = this.stateRepo.getState(deploymentId) || {
+      deploymentId,
+      serverId,
+      state: 'undeployed',
+      lastUpdated: Date.now()
+    };
+
+    const runtime: DeploymentRuntime = {
+      config,
+      state,
+      displayName: config.deployName || this.extractNameFromPath(config.sourcePath),
+      targetPath: this.generateTargetPath(config, serverResult.value),
+      contextPath: this.generateContextPath(config)
+    };
+
+    return ok(runtime);
   }
 
   /* ───────────────────── Lifecycle ─────────────────── */

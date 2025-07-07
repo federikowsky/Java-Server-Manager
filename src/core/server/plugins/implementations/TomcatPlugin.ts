@@ -310,7 +310,8 @@ export class TomcatPlugin implements IServerPlugin {
 
   async deploy(config: ServerConfig, deployment: DeploymentConfig): Promise<Result<void, JsmError>> {
     try {
-      this.log.info(`Deploying ${deployment.name} to Tomcat server: ${config.name}`);
+      const deployName = deployment.deployName || this.extractNameFromPath(deployment.sourcePath);
+      this.log.info(`Deploying ${deployName} to Tomcat server: ${config.name}`);
 
       const webappsDir = path.join(config.serverHome, 'webapps');
       if (!fs.existsSync(webappsDir)) {
@@ -320,19 +321,23 @@ export class TomcatPlugin implements IServerPlugin {
         ));
       }
 
+      // Calculate target path
+      const deploymentType = deployment.type || this.detectTypeFromPath(deployment.sourcePath);
+      const targetPath = this.generateTargetPath(webappsDir, deployName, deploymentType);
+
       // Copy the deployment
-      if (deployment.type === 'war') {
+      if (deploymentType === 'war') {
         // Copy WAR file
-        fs.copyFileSync(deployment.sourcePath, deployment.targetPath);
-      } else if (deployment.type === 'exploded') {
+        fs.copyFileSync(deployment.sourcePath, targetPath);
+      } else if (deploymentType === 'exploded') {
         // Copy directory contents
-        if (!fs.existsSync(deployment.targetPath)) {
-          fs.mkdirSync(deployment.targetPath, { recursive: true });
+        if (!fs.existsSync(targetPath)) {
+          fs.mkdirSync(targetPath, { recursive: true });
         }
-        await this.copyDirectory(deployment.sourcePath, deployment.targetPath);
+        await this.copyDirectory(deployment.sourcePath, targetPath);
       }
 
-      this.log.info(`Successfully deployed ${deployment.name}`);
+      this.log.info(`Successfully deployed ${deployName}`);
       return ok(undefined);
     } catch (error) {
       this.log.error('Failed to deploy application', error);
@@ -346,15 +351,18 @@ export class TomcatPlugin implements IServerPlugin {
 
   async deployIncremental(config: ServerConfig, deployment: DeploymentConfig): Promise<Result<void, JsmError>> {
     try {
-      this.log.info(`Incremental deployment of ${deployment.name} to Tomcat server: ${config.name}`);
+      const deployName = deployment.deployName || this.extractNameFromPath(deployment.sourcePath);
+      this.log.info(`Incremental deployment of ${deployName} to Tomcat server: ${config.name}`);
 
-      if (deployment.type === 'war') {
+      const deploymentType = deployment.type || this.detectTypeFromPath(deployment.sourcePath);
+      
+      if (deploymentType === 'war') {
         // For WAR files, incremental deployment is the same as full deployment
         return this.deploy(config, deployment);
       }
 
       // For exploded deployments, perform incremental sync
-      if (deployment.type === 'exploded') {
+      if (deploymentType === 'exploded') {
         const webappsDir = path.join(config.serverHome, 'webapps');
         if (!fs.existsSync(webappsDir)) {
           return err(new JsmError(
@@ -363,9 +371,12 @@ export class TomcatPlugin implements IServerPlugin {
           ));
         }
 
+        // Calculate target path for incremental sync
+        const targetPath = this.generateTargetPath(webappsDir, deployName, deploymentType);
+        
         // Perform incremental synchronization
-        await this.syncDirectoryIncremental(deployment.sourcePath, deployment.targetPath);
-        this.log.info(`Successfully performed incremental deployment of ${deployment.name}`);
+        await this.syncDirectoryIncremental(deployment.sourcePath, targetPath);
+        this.log.info(`Successfully performed incremental deployment of ${deployName}`);
         return ok(undefined);
       }
 
@@ -395,15 +406,21 @@ export class TomcatPlugin implements IServerPlugin {
         ));
       }
 
-      if (fs.existsSync(deployment.targetPath)) {
-        if (fs.statSync(deployment.targetPath).isDirectory()) {
-          fs.rmSync(deployment.targetPath, { recursive: true, force: true });
+      // Calculate target path using helper methods
+      const webappsDir = path.join(config.serverHome, 'webapps');
+      const deployName = deployment.deployName || this.extractNameFromPath(deployment.sourcePath);
+      const deploymentType = deployment.type || this.detectTypeFromPath(deployment.sourcePath);
+      const targetPath = this.generateTargetPath(webappsDir, deployName, deploymentType);
+
+      if (fs.existsSync(targetPath)) {
+        if (fs.statSync(targetPath).isDirectory()) {
+          fs.rmSync(targetPath, { recursive: true, force: true });
         } else {
-          fs.unlinkSync(deployment.targetPath);
+          fs.unlinkSync(targetPath);
         }
       }
 
-      this.log.info(`Successfully undeployed ${deployment.name}`);
+      this.log.info(`Successfully undeployed ${deployName}`);
       return ok(undefined);
     } catch (error) {
       this.log.error('Failed to undeploy application', error);
@@ -549,5 +566,22 @@ export class TomcatPlugin implements IServerPlugin {
         }
       }
     }
+  }
+
+  /**
+   * Helper methods for deployment path management
+   */
+  private extractNameFromPath(sourcePath: string): string {
+    return sourcePath?.split('/').pop()?.replace('.war', '') || 'deployment';
+  }
+
+  private detectTypeFromPath(sourcePath: string): 'war' | 'exploded' {
+    return sourcePath?.endsWith('.war') ? 'war' : 'exploded';
+  }
+
+  private generateTargetPath(webappsDir: string, deployName: string, type: 'war' | 'exploded'): string {
+    return type === 'war' 
+      ? path.join(webappsDir, `${deployName}.war`)
+      : path.join(webappsDir, deployName);
   }
 }

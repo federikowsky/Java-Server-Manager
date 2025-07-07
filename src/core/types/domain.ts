@@ -47,17 +47,40 @@ export interface ServerConfig {
 }
 
 /* ───────────── Deployment config ────────── */
+/**
+ * Deployment configuration that matches JSM schema exactly
+ * Only contains fields that are serialized to servers.json
+ */
 export interface DeploymentConfig {
-  id          : string;
-  name        : string;
-  sourcePath  : string;
-  targetPath  : string;
-  renameTo?   : string;            // nome finale su server
-  contextPath : string;
-  type        : DeployType;
-  state       : DeploymentState;
-  error?      : string;
-  ignoreGlobs?: string[];          // esclusioni AutoSync
+  id?         : string;           // Unique identifier (optional, auto-generated if not provided)
+  sourcePath  : string;           // Source path (WAR file or exploded directory) - REQUIRED
+  deployName? : string;           // Name for deployment in webapps folder (optional, auto-derived from sourcePath)
+  type?       : DeployType;       // Deployment type (optional, auto-detected from sourcePath)
+  ignoreGlobs?: string[];         // File patterns to ignore during sync
+}
+
+/**
+ * Runtime deployment state - NOT serialized to servers.json
+ * Persisted separately in extension storage
+ */
+export interface DeploymentRuntimeState {
+  deploymentId: string;                     // Reference to deployment ID
+  serverId    : string;                     // Reference to server ID
+  state       : DeploymentState;            // Current deployment state
+  error?      : string;                     // Last error message
+  lastUpdated : number;                     // Timestamp of last state update
+}
+
+/**
+ * Complete deployment runtime information combining config and state
+ */
+export interface DeploymentRuntime {
+  config: DeploymentConfig;
+  state : DeploymentRuntimeState;
+  // Computed fields for runtime use
+  displayName : string;                     // Display name derived from deployName or sourcePath
+  targetPath  : string;                     // Computed target path in webapps
+  contextPath : string;                     // Computed context path for URL
 }
 
 /* ───────────── Template globale ─────────── */

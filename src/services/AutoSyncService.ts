@@ -70,6 +70,14 @@ export class AutoSyncService {
     }
   }
 
+  /**
+   * Check if AutoSync is enabled for a deployment
+   */
+  isEnabled(serverId: string, depId: string): boolean {
+    const key = this.composeKey(serverId, depId);
+    return this.map.has(key);
+  }
+
   disposeAll(): void {
     for (const w of this.map.values()) w.close();
     this.map.clear();

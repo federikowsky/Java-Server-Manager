@@ -476,58 +476,6 @@ export function registerDeploymentCommands(
       } catch (error) {
         showErr(error);
       }
-    }),
-
-    commands.registerCommand('jsm.deployment.removeSoft', async (node: DeploymentNode) => {
-      const nodeData = validateDeploymentNode(node);
-      if (!nodeData) return;
-
-      try {
-        const deploymentName = node.data.deployName || node.data.sourcePath.split('/').pop()?.replace('.war', '') || nodeData.deploymentId;
-        const confirmation = await window.showWarningMessage(
-          `Remove deployment "${deploymentName}" configuration (keep files)?`,
-          { modal: true },
-          'Remove Config Only'
-        );
-
-        if (confirmation === 'Remove Config Only') {
-          const result = await dep.remove(nodeData.serverId, nodeData.deploymentId, false);
-          if (result.ok) {
-            showSuccess(`Deployment "${deploymentName}" configuration removed`);
-            await commands.executeCommand('jsm.treeview.refresh');
-          } else {
-            showErr(result.error);
-          }
-        }
-      } catch (error) {
-        showErr(error);
-      }
-    }),
-
-    commands.registerCommand('jsm.deployment.removeHard', async (node: DeploymentNode) => {
-      const nodeData = validateDeploymentNode(node);
-      if (!nodeData) return;
-
-      try {
-        const deploymentName = node.data.deployName || node.data.sourcePath.split('/').pop()?.replace('.war', '') || nodeData.deploymentId;
-        const confirmation = await window.showWarningMessage(
-          `Remove deployment "${deploymentName}" and delete all files?`,
-          { modal: true },
-          'Remove and Delete Files'
-        );
-
-        if (confirmation === 'Remove and Delete Files') {
-          const result = await dep.remove(nodeData.serverId, nodeData.deploymentId, true);
-          if (result.ok) {
-            showSuccess(`Deployment "${deploymentName}" removed and files deleted`);
-            await commands.executeCommand('jsm.treeview.refresh');
-          } else {
-            showErr(result.error);
-          }
-        }
-      } catch (error) {
-        showErr(error);
-      }
     })
   );
 }

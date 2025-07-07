@@ -128,7 +128,7 @@ export async function activate(ctx: ExtensionContext): Promise<void> {
     registerTemplateCommands(ctx, srvSvc);
 
     /* Tree-view */
-    const treeProv = new ServerTreeViewProvider(srvSvc, singleton.bus, singleton.logger);
+    const treeProv = new ServerTreeViewProvider(srvSvc, depSvc, syncSvc, singleton.bus, singleton.logger);
     ctx.subscriptions.push(treeProv);
     
     // Register the tree view

@@ -118,16 +118,6 @@
         "command": "jsm.treeview.refresh",
         "title": "Refresh",
         "icon": "$(refresh)"
-      },
-      {
-        "command": "jsm.deployment.removeSoft",
-        "title": "Remove Deployment (Config Only)",
-        "icon": "$(trash)"
-      },
-      {
-        "command": "jsm.deployment.removeHard",
-        "title": "Remove Deployment (And Files)",
-        "icon": "$(trash)"
       }
     ],
     "menus": {
@@ -258,16 +248,6 @@
           "command": "jsm.deployment.remove",
           "when": "view == javaServerManagerView && viewItem == deployment",
           "group": "9_danger@1"
-        },
-        {
-          "command": "jsm.deployment.removeSoft",
-          "when": "view == javaServerManagerView && viewItem == deployment",
-          "group": "9_danger@2"
-        },
-        {
-          "command": "jsm.deployment.removeHard",
-          "when": "view == javaServerManagerView && viewItem == deployment",
-          "group": "9_danger@3"
         }
       ]
     },

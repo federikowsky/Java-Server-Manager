@@ -3,7 +3,7 @@
  * Single responsibility: Deploy, undeploy, and manage deployment lifecycle
  */
 
-import { DeploymentConfig, ServerConfig, DeploymentRuntimeState, DeploymentRuntime } from '../core/types/domain';
+import { DeploymentConfig, ServerConfig, DeploymentRuntimeState, DeploymentRuntime, DeploymentState } from '../core/types/domain';
 import { Result, ok, err } from '../core/utils/result';
 import { JsmError } from '../core/errors/JsmError';
 import { ErrorCode } from '../core/errors/codes';
@@ -35,6 +35,14 @@ export class DeploymentService {
    */
   async initialize(workspaceUri: string): Promise<Result<void, JsmError>> {
     return await this.stateRepo.initialize(workspaceUri);
+  }
+
+  /**
+   * Get deployment state
+   */
+  getDeploymentState(deploymentId: string): DeploymentState {
+    const state = this.stateRepo.getState(deploymentId);
+    return state?.state || 'undeployed';
   }
 
   /* ───────────────────── Configuration Operations ─────────────────── */

@@ -91,12 +91,8 @@ export class DeploymentFormPanel {
           await DeploymentFormPanel.handleSubmitForm(message.data, panel);
           break;
 
-        case 'browseFile':
-          await DeploymentFormPanel.handleBrowseFile(panel);
-          break;
-
-        case 'browseFolder':
-          await DeploymentFormPanel.handleBrowseFolder(panel);
+        case 'browse':
+          await DeploymentFormPanel.handleBrowse(panel);
           break;
 
         case 'cancel':
@@ -201,13 +197,13 @@ export class DeploymentFormPanel {
     }
   }
 
-  private static async handleBrowseFile(panel: WebviewPanel): Promise<void> {
+  private static async handleBrowse(panel: WebviewPanel): Promise<void> {
     try {
       const fileUris = await window.showOpenDialog({
         canSelectFiles: true,
-        canSelectFolders: false,
+        canSelectFolders: true,
         canSelectMany: false,
-        openLabel: 'Select WAR File',
+        openLabel: 'Select WAR File or Exploded Directory',
         filters: {
           'WAR Files': ['war'],
           'All Files': ['*']
@@ -216,32 +212,12 @@ export class DeploymentFormPanel {
 
       if (fileUris && fileUris.length > 0) {
         panel.webview.postMessage({
-          command: 'fileSelected',
+          command: 'sourcePathSelected',
           path: fileUris[0].fsPath
         });
       }
     } catch (error) {
-      DeploymentFormPanel.log.error('Error browsing file:', error);
-    }
-  }
-
-  private static async handleBrowseFolder(panel: WebviewPanel): Promise<void> {
-    try {
-      const folderUris = await window.showOpenDialog({
-        canSelectFiles: false,
-        canSelectFolders: true,
-        canSelectMany: false,
-        openLabel: 'Select Exploded Directory'
-      });
-
-      if (folderUris && folderUris.length > 0) {
-        panel.webview.postMessage({
-          command: 'folderSelected',
-          path: folderUris[0].fsPath
-        });
-      }
-    } catch (error) {
-      DeploymentFormPanel.log.error('Error browsing folder:', error);
+      DeploymentFormPanel.log.error('Error browsing source:', error);
     }
   }
 
@@ -400,8 +376,7 @@ export class DeploymentFormPanel {
                     <div class="input-with-button">
                         <input type="text" id="sourcePath" name="sourcePath" required 
                                placeholder="/path/to/app.war or /path/to/exploded/dir">
-                        <button type="button" class="browse-btn" onclick="browseFile()">WAR</button>
-                        <button type="button" class="browse-btn" onclick="browseFolder()">Folder</button>
+                        <button type="button" class="browse-btn" onclick="browse()">Browse</button>
                     </div>
                     <div class="help-text">Path to WAR file or exploded directory</div>
                     <div class="error" id="sourcePathError"></div>
@@ -415,15 +390,7 @@ export class DeploymentFormPanel {
                     <div class="error" id="deployNameError"></div>
                 </div>
                 
-                <div class="form-group">
-                    <label for="type">Deployment Type</label>
-                    <select id="type" name="type">
-                        <option value="">Auto-detect from source path</option>
-                        <option value="war">WAR File</option>
-                        <option value="exploded">Exploded Directory</option>
-                    </select>
-                    <div class="help-text">Type will be auto-detected if not specified</div>
-                </div>
+
                 
                 <div class="form-group">
                     <label for="ignoreGlobs">Ignore Patterns</label>
@@ -476,7 +443,6 @@ export class DeploymentFormPanel {
                     id: ${deploymentId ? `'${deploymentId}'` : 'null'} || \`deployment-\${Date.now()}\`,
                     sourcePath: formData.get('sourcePath'),
                     deployName: formData.get('deployName') || undefined,
-                    type: formData.get('type') || undefined,
                     ignoreGlobs: formData.get('ignoreGlobs')
                         ? formData.get('ignoreGlobs').split('\\n').map(s => s.trim()).filter(s => s)
                         : ['**/.git/**', '**/node_modules/**', '**/.DS_Store']
@@ -489,13 +455,9 @@ export class DeploymentFormPanel {
                 });
             });
             
-            // Browse functions
-            function browseFile() {
-                vscode.postMessage({ command: 'browseFile' });
-            }
-            
-            function browseFolder() {
-                vscode.postMessage({ command: 'browseFolder' });
+            // Browse function
+            function browse() {
+                vscode.postMessage({ command: 'browse' });
             }
             
             function cancel() {
@@ -523,11 +485,7 @@ export class DeploymentFormPanel {
                         }
                         break;
                         
-                    case 'fileSelected':
-                        document.getElementById('sourcePath').value = message.path;
-                        break;
-                        
-                    case 'folderSelected':
+                    case 'sourcePathSelected':
                         document.getElementById('sourcePath').value = message.path;
                         break;
                         
@@ -540,7 +498,6 @@ export class DeploymentFormPanel {
             function populateForm(data) {
                 document.getElementById('sourcePath').value = data.sourcePath || '';
                 document.getElementById('deployName').value = data.deployName || '';
-                document.getElementById('type').value = data.type || '';
                 document.getElementById('ignoreGlobs').value = 
                     (data.ignoreGlobs || []).join('\\n');
             }
@@ -555,7 +512,6 @@ export class DeploymentFormPanel {
                     id: ${deploymentId ? `'${deploymentId}'` : 'null'} || \`deployment-\${Date.now()}\`,
                     sourcePath: formData.get('sourcePath'),
                     deployName: formData.get('deployName') || undefined,
-                    type: formData.get('type') || undefined,
                     ignoreGlobs: formData.get('ignoreGlobs')
                         ? formData.get('ignoreGlobs').split('\\n').map(s => s.trim()).filter(s => s)
                         : ['**/.git/**', '**/node_modules/**', '**/.DS_Store']

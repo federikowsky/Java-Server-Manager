@@ -16,8 +16,10 @@ import {
 } from 'vscode';
 
 import { ServerService } from '../../services/ServerService';
+import { DeploymentService } from '../../services/DeploymentService';
+import { AutoSyncService } from '../../services/AutoSyncService';
 import { EventBus, EventKey } from '../../core/EventBus';
-import { ServerConfig, DeploymentConfig, ServerState } from '../../core/types/domain';
+import { ServerConfig, DeploymentConfig, ServerState, DeploymentState } from '../../core/types/domain';
 import { Logger } from '../../core/utils/logger';
 import { PluginRegistry } from '../../core/server/plugins';
 import { SERVER_STATE_TO_CONTEXT, CONTEXT_VALUES } from '../../core/constants/TreeViewConstants';
@@ -65,13 +67,13 @@ export class ServerNode extends TreeItem {
 }
 
 export class DeploymentNode extends TreeItem {
-  constructor(readonly parent: ServerConfig, readonly data: DeploymentConfig) {
+  constructor(readonly parent: ServerConfig, readonly data: DeploymentConfig, readonly currentState: DeploymentState = 'undeployed', readonly autoSyncEnabled: boolean = false) {
     const displayName = data.deployName || data.sourcePath.split('/').pop()?.replace('.war', '') || 'deployment';
-    super(displayName, 0);
+    const autoSyncIndicator = autoSyncEnabled ? ' ✓AutoSync' : '';
+    super(`${displayName}${autoSyncIndicator}`, 0);
     this.contextValue = CONTEXT_VALUES.DEPLOYMENT;
     this.iconPath = new ThemeIcon('file-code');
-    // Simple tooltip with source path since contextPath needs to be computed
-    this.tooltip = `Source: ${data.sourcePath}`;
+    this.tooltip = `Source: ${data.sourcePath}\nState: ${currentState}${autoSyncEnabled ? '\nAutoSync: Enabled' : '\nAutoSync: Disabled'}`;
   }
 }
 
@@ -82,6 +84,8 @@ export class ServerTreeViewProvider implements TreeDataProvider<TreeItem>, Dispo
 
   constructor(
     private readonly srvSvc: ServerService,
+    private readonly depSvc: DeploymentService,
+    private readonly autoSyncSvc: AutoSyncService,
     bus: EventBus,
     private readonly log: Logger
   ) {
@@ -150,7 +154,11 @@ export class ServerTreeViewProvider implements TreeDataProvider<TreeItem>, Dispo
     }
 
     if (element instanceof ServerNode) {
-      const deployments = element.data.deployments?.map(d => new DeploymentNode(element.data, d)) || [];
+      const deployments = element.data.deployments?.map(d => {
+        const state = this.depSvc.getDeploymentState(d.id || '');
+        const autoSyncEnabled = this.autoSyncSvc.isEnabled(element.data.id, d.id || '');
+        return new DeploymentNode(element.data, d, state, autoSyncEnabled);
+      }) || [];
       console.log(`📦 TreeView: Server ${element.data.name} has ${deployments.length} deployments`);
       return deployments;
     }

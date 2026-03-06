@@ -32,7 +32,6 @@ export interface IServerPlugin {
   deployIncremental?(config: ServerConfig, deployment: DeploymentConfig): Promise<Result<void, JsmError>>;
 
   // Configuration
-  validateConfig(config: ServerConfig): Result<void, JsmError>;
   getDefaultConfig(): Partial<ServerConfig>;
 
   // Detection & cleanup

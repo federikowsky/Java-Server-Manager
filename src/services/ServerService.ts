@@ -310,19 +310,14 @@ export class ServerService {
 
       for (const server of allResult.value) {
         try {
-          // Create runtime for each server
+          // Create runtime for each server (all start with 'stopped' state)
           const registerResult = await this.serverManager.register(server);
           if (!registerResult.ok) {
             this.log.warn(`Failed to create runtime for server ${server.name}: ${registerResult.error.message}`);
             continue;
           }
 
-          // Health check for crash recovery (state is now managed by ServerRuntime)
-          const healthResult = await this.serverManager.healthCheck(server.id);
-          if (!healthResult.ok || !healthResult.value) {
-            this.log.info(`Server ${server.name} process not running - runtime state set to stopped`);
-          }
-
+          this.log.debug(`Server ${server.name} registered with 'stopped' state`);
           this.bus.emit('ServerAdded', server);
         } catch (error) {
           this.log.error(`Error processing server ${server.name}: ${error}`);

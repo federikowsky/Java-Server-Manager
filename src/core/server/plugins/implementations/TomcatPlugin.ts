@@ -1,12 +1,12 @@
 /*
- * src/core/plugins/implementations/TomcatPlugin.ts
- * Apache Tomcat plugin implementation
+ * Apache Tomcat plugin implementation - Clean, SRP compliant with intelligent helper methods
+ * Follows the principle of single responsibility while providing reusable, configurable logic
  */
 
 import * as path from 'path';
 import * as fs from 'fs';
+import * as net from 'net';
 import { spawn, ChildProcess } from 'child_process';
-import { EventEmitter } from 'events';
 import { Result, ok, err } from '../../../utils/result';
 import { JsmError } from '../../../errors/JsmError';
 import { ErrorCode } from '../../../errors/codes';
@@ -15,573 +15,503 @@ import { IServerPlugin } from '../interfaces/IServerPlugin';
 import { ServerConfig, DeploymentConfig, ServerState } from '../../../types/domain';
 import { ServerStartMode } from '../../../types/runtime';
 
+/**
+ * Apache Tomcat server plugin with intelligent helper methods and configurable timeouts
+ */
 export class TomcatPlugin implements IServerPlugin {
   readonly type = 'tomcat';
   readonly name = 'Apache Tomcat';
-  readonly version = '1.0.0';
 
   private readonly log = Logger.getInstance().createChild('TomcatPlugin');
   private processes = new Map<string, ChildProcess>();
 
+  /**
+   * Start Tomcat server with intelligent connection monitoring
+   */
   async start(config: ServerConfig, mode: ServerStartMode, debugPort?: number): Promise<Result<void, JsmError>> {
     try {
       this.log.info(`Starting Tomcat server: ${config.name} in ${mode} mode`);
 
-      // Check if already running
       if (this.processes.has(config.id)) {
-        return err(new JsmError(
-          ErrorCode.SERVER_ALREADY_RUNNING,
-          `Server ${config.name} is already running`
-        ));
+        return err(new JsmError(ErrorCode.SERVER_ALREADY_RUNNING, `Server ${config.name} is already running`));
       }
 
-      const startScript = process.platform === 'win32' ? 'startup.bat' : 'startup.sh';
-      const scriptPath = path.join(config.serverHome, 'bin', startScript);
-
-      if (!fs.existsSync(scriptPath)) {
-        return err(new JsmError(
-          ErrorCode.SERVER_STARTUP_ERROR,
-          `Startup script not found: ${scriptPath}`
-        ));
+      // Validate Tomcat installation
+      const validationResult = await this.validateTomcatInstallation(config);
+      if (!validationResult.ok) {
+        return validationResult;
       }
 
-      // Build environment variables
-      const env: Record<string, string> = {
-        CATALINA_HOME: config.serverHome,
-        CATALINA_BASE: config.serverHome,
-        JAVA_HOME: config.javaHome
-      };
-
-      // Copy process.env, filtering out undefined values
-      for (const [key, value] of Object.entries(process.env)) {
-        if (value !== undefined) {
-          env[key] = value;
-        }
-      }
-
-      // Add debug options if in debug mode
-      if (mode === 'debug' && debugPort) {
-        env.CATALINA_OPTS = `${env.CATALINA_OPTS || ''} -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=${debugPort}`;
-      }
-
-      // Add custom VM args
-      if (config.vmArgs) {
-        env.CATALINA_OPTS = `${env.CATALINA_OPTS || ''} ${config.vmArgs}`;
-      }
-
-      // Add custom environment variables
-      if (config.env) {
-        const envPairs = config.env.split(' ');
-        for (const pair of envPairs) {
-          const [key, value] = pair.split('=');
-          if (key && value) {
-            env[key] = value;
-          }
-        }
-      }
-
-      this.log.debug('Starting Tomcat process...', { script: scriptPath, env: Object.keys(env) });
-
-      const tomcatProcess = spawn(scriptPath, [], {
-        cwd: path.join(config.serverHome, 'bin'),
+      // Prepare and spawn process
+      const env = this.buildEnvironment(config, mode, debugPort);
+      const scriptPath = this.getStartupScript(config);
+      const process = spawn(scriptPath, [], {
         env,
+        cwd: config.serverHome,
+        detached: false,
         stdio: ['ignore', 'pipe', 'pipe']
       });
+      
+      this.processes.set(config.id, process);
+      this.setupProcessHandlers(process, config);
 
-      tomcatProcess.stdout?.on('data', (data: any) => {
-        this.log.debug(`[${config.name}] stdout:`, data.toString().trim());
-      });
-
-      tomcatProcess.stderr?.on('data', (data: any) => {
-        this.log.debug(`[${config.name}] stderr:`, data.toString().trim());
-      });
-
-      tomcatProcess.on('exit', (code: any) => {
-        this.log.info(`Tomcat process exited: ${config.name}`, { code });
-        this.processes.delete(config.id);
-      });
-
-      tomcatProcess.on('error', (error) => {
-        this.log.error(`Tomcat process error: ${config.name}`, error);
-        this.processes.delete(config.id);
-      });
-
-      this.processes.set(config.id, tomcatProcess);
-
-      // Wait a moment to ensure the process started
-      await new Promise(resolve => setTimeout(resolve, 1000));
-
-      if (tomcatProcess.killed || tomcatProcess.exitCode !== null) {
-        this.processes.delete(config.id);
-        return err(new JsmError(
-          ErrorCode.SERVER_STARTUP_ERROR,
-          `Tomcat process failed to start: ${config.name}`
-        ));
+      // Wait for server to be ready using configurable timeout
+      const waitResult = await this.waitForServerReady(config, config.startupTimeout || 30000);
+      if (!waitResult.ok) {
+        this.cleanup(config.id);
+        return waitResult;
       }
 
+      this.log.info(`Tomcat server ${config.name} started successfully`);
       return ok(undefined);
+
     } catch (error) {
-      this.log.error('Failed to start Tomcat', error);
-      return err(new JsmError(
-        ErrorCode.SERVER_STARTUP_ERROR,
-        `Failed to start Tomcat: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        error instanceof Error ? error : undefined
-      ));
+      this.cleanup(config.id);
+      return err(new JsmError(ErrorCode.SERVER_STARTUP_ERROR, `Failed to start server: ${error}`, error));
     }
   }
 
+  /**
+   * Stop Tomcat server gracefully
+   */
   async stop(config: ServerConfig): Promise<Result<void, JsmError>> {
     try {
       this.log.info(`Stopping Tomcat server: ${config.name}`);
 
-      const serverProcess = this.processes.get(config.id);
-      if (!serverProcess) {
-        // Already stopped
+      const process = this.processes.get(config.id);
+      if (!process) {
+        // Try to stop using shutdown script
+        const shutdownResult = await this.executeShutdownScript(config);
+        if (!shutdownResult.ok) {
+          this.log.warn(`Failed to execute shutdown script, server might not be managed by this process`);
+        }
         return ok(undefined);
       }
 
-      const stopScript = process.platform === 'win32' ? 'shutdown.bat' : 'shutdown.sh';
-      const scriptPath = path.join(config.serverHome, 'bin', stopScript);
-
-      if (fs.existsSync(scriptPath)) {
-        // Try graceful shutdown first
-        const stopProcess = spawn(scriptPath, [], {
-          cwd: path.join(config.serverHome, 'bin'),
-          env: {
-            ...process.env,
-            CATALINA_HOME: config.serverHome,
-            CATALINA_BASE: config.serverHome,
-            JAVA_HOME: config.javaHome
-          } as Record<string, string>,
-          stdio: 'ignore'
-        });
-
+      // Graceful shutdown
+      const shutdownResult = await this.executeShutdownScript(config);
+      if (shutdownResult.ok) {
         // Wait for graceful shutdown
-        const timeout = config.stopTimeout || 5000;
-        await new Promise(resolve => setTimeout(resolve, timeout));
-      }
-
-      // Force kill if still running
-      if (!serverProcess.killed && serverProcess.exitCode === null) {
-        this.log.warn(`Force killing Tomcat process: ${config.name}`);
-        serverProcess.kill('SIGTERM');
-        
-        // Give it a moment to die gracefully
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        
-        if (!serverProcess.killed && serverProcess.exitCode === null) {
-          serverProcess.kill('SIGKILL');
+        const waitResult = await this.waitForProcessExit(process, config.stopTimeout || 10000);
+        if (waitResult.ok) {
+          this.cleanup(config.id);
+          this.log.info(`Tomcat server ${config.name} stopped gracefully`);
+          return ok(undefined);
         }
       }
 
-      this.processes.delete(config.id);
+      // Force kill if graceful shutdown failed
+      this.log.warn(`Forcefully terminating Tomcat server: ${config.name}`);
+      process.kill('SIGKILL');
+      this.cleanup(config.id);
+      
       return ok(undefined);
+
     } catch (error) {
-      this.log.error('Failed to stop Tomcat', error);
-      return err(new JsmError(
-        ErrorCode.SERVER_SHUTDOWN_ERROR,
-        `Failed to stop Tomcat: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        error instanceof Error ? error : undefined
-      ));
+      return err(new JsmError(ErrorCode.SERVER_SHUTDOWN_ERROR, `Failed to stop server: ${error}`, error));
     }
   }
 
+  /**
+   * Restart server (stop + start)
+   */
   async restart(config: ServerConfig, mode: ServerStartMode, debugPort?: number): Promise<Result<void, JsmError>> {
+    const stopResult = await this.stop(config);
+    if (!stopResult.ok) {
+      return stopResult;
+    }
+
+    // Wait a moment before restarting
+    await new Promise(resolve => setTimeout(resolve, 1000));
+
+    return this.start(config, mode, debugPort);
+  }
+
+  /**
+   * Get current server status
+   */
+  async getStatus(config: ServerConfig): Promise<Result<ServerState, JsmError>> {
     try {
-      this.log.info(`Restarting Tomcat server: ${config.name} in ${mode} mode`);
+      const hasProcess = this.processes.has(config.id);
       
-      const stopResult = await this.stop(config);
-      if (!stopResult.ok) {
-        return stopResult;
+      // Check if port is accessible
+      const isPortOpen = await this.checkPortAccess(config.host, config.port);
+      
+      if (isPortOpen) {
+        return ok('running' as ServerState);
+      } else {
+        return ok(hasProcess ? 'starting' as ServerState : 'stopped' as ServerState);
       }
 
-      // Wait a moment before restarting
-      await new Promise(resolve => setTimeout(resolve, 2000));
-
-      return await this.start(config, mode, debugPort);
     } catch (error) {
-      this.log.error('Failed to restart Tomcat', error);
-      return err(new JsmError(
-        ErrorCode.SERVER_RESTART_ERROR,
-        `Failed to restart Tomcat: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        error instanceof Error ? error : undefined
-      ));
+      return err(new JsmError(ErrorCode.STATUS_CHECK_ERROR, `Failed to get status: ${error}`, error));
     }
   }
 
+  /**
+   * Perform health check
+   */
   async healthCheck(config: ServerConfig): Promise<Result<boolean, JsmError>> {
     try {
-      this.log.debug(`Health check for Tomcat server: ${config.name}`);
-
-      // Check if Tomcat installation exists
-      if (!fs.existsSync(config.serverHome)) {
-        return err(new JsmError(
-          ErrorCode.INSTALLATION_VALIDATION_ERROR,
-          'Tomcat installation path not found'
-        ));
+      // Basic connectivity check
+      const isPortOpen = await this.checkPortAccess(config.host, config.port);
+      if (!isPortOpen) {
+        return ok(false);
       }
 
-      // Check for required Tomcat files
-      const startupScript = process.platform === 'win32' ? 'startup.bat' : 'startup.sh';
-      const shutdownScript = process.platform === 'win32' ? 'shutdown.bat' : 'shutdown.sh';
-      
-      const binPath = path.join(config.serverHome, 'bin');
-      const startupPath = path.join(binPath, startupScript);
-      const shutdownPath = path.join(binPath, shutdownScript);
-
-      if (!fs.existsSync(startupPath) || !fs.existsSync(shutdownPath)) {
-        return err(new JsmError(
-          ErrorCode.INSTALLATION_VALIDATION_ERROR,
-          'Required Tomcat scripts not found in bin directory'
-        ));
+      // Custom health check URL if provided
+      if (config.healthCheckUrl) {
+        // Would implement HTTP health check here
+        // For now, just return port check result
       }
 
-      // Check Java installation
-      if (!fs.existsSync(config.javaHome)) {
-        return err(new JsmError(
-          ErrorCode.INSTALLATION_VALIDATION_ERROR,
-          'Java installation path not found'
-        ));
-      }
+      return ok(isPortOpen);
 
-      return ok(true);
     } catch (error) {
-      this.log.error('Health check failed', error);
-      return err(new JsmError(
-        ErrorCode.HEALTH_CHECK_ERROR,
-        `Health check failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        error instanceof Error ? error : undefined
-      ));
+      return err(new JsmError(ErrorCode.HEALTH_CHECK_ERROR, `Health check failed: ${error}`, error));
     }
   }
 
-  validateConfig(config: ServerConfig): Result<void, JsmError> {
+  /**
+   * Deploy application to Tomcat
+   */
+  async deploy(config: ServerConfig, deployment: DeploymentConfig): Promise<Result<void, JsmError>> {
     try {
-      // Validate required fields
-      if (!config.name || config.name.trim() === '') {
-        return err(new JsmError(
-          ErrorCode.CONFIG_INVALID,
-          'Server name is required'
-        ));
+      this.log.info(`Deploying ${deployment.sourcePath} to ${config.name}`);
+
+      const webappsDir = path.join(config.serverHome, 'webapps');
+      
+      // Ensure webapps directory exists
+      if (!fs.existsSync(webappsDir)) {
+        fs.mkdirSync(webappsDir, { recursive: true });
       }
 
-      if (!config.javaHome || config.javaHome.trim() === '') {
-        return err(new JsmError(
-          ErrorCode.CONFIG_INVALID,
-          'Java home is required for Tomcat'
-        ));
+      // Determine deployment name and target path
+      const deployName = deployment.deployName || path.basename(deployment.sourcePath, path.extname(deployment.sourcePath));
+      
+      if (deployment.type === 'war' || deployment.sourcePath.endsWith('.war')) {
+        const targetPath = path.join(webappsDir, `${deployName}.war`);
+        fs.copyFileSync(deployment.sourcePath, targetPath);
+      } else if (deployment.type === 'exploded' || fs.statSync(deployment.sourcePath).isDirectory()) {
+        const targetPath = path.join(webappsDir, deployName);
+        await this.copyDirectory(deployment.sourcePath, targetPath);
+      } else {
+        return err(new JsmError(ErrorCode.DEPLOY_ERROR, `Unsupported deployment type or invalid source path: ${deployment.sourcePath}`));
       }
 
-      if (!config.serverHome || config.serverHome.trim() === '') {
-        return err(new JsmError(
-          ErrorCode.CONFIG_INVALID,
-          'Server home is required for Tomcat'
-        ));
-      }
-
-      // Validate port if specified
-      if (config.port < 1 || config.port > 65535) {
-        return err(new JsmError(
-          ErrorCode.CONFIG_INVALID,
-          'Port must be between 1 and 65535'
-        ));
-      }
-
+      this.log.info(`Successfully deployed ${deployment.sourcePath} to ${config.name}`);
       return ok(undefined);
+
     } catch (error) {
-      this.log.error('Configuration validation failed', error);
-      return err(new JsmError(
-        ErrorCode.CONFIG_INVALID,
-        `Configuration validation failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        error instanceof Error ? error : undefined
-      ));
+      return err(new JsmError(ErrorCode.DEPLOY_ERROR, `Failed to deploy: ${error}`, error));
     }
   }
 
+  /**
+   * Undeploy application from Tomcat
+   */
+  async undeploy(config: ServerConfig, deploymentId: string): Promise<Result<void, JsmError>> {
+    try {
+      this.log.info(`Undeploying ${deploymentId} from ${config.name}`);
+
+      const webappsDir = path.join(config.serverHome, 'webapps');
+      
+      // Try to find and remove both WAR file and exploded directory
+      const warPath = path.join(webappsDir, `${deploymentId}.war`);
+      const folderPath = path.join(webappsDir, deploymentId);
+
+      if (fs.existsSync(warPath)) {
+        fs.unlinkSync(warPath);
+        this.log.debug(`Removed WAR file: ${warPath}`);
+      }
+
+      if (fs.existsSync(folderPath)) {
+        fs.rmSync(folderPath, { recursive: true, force: true });
+        this.log.debug(`Removed exploded directory: ${folderPath}`);
+      }
+
+      this.log.info(`Successfully undeployed ${deploymentId} from ${config.name}`);
+      return ok(undefined);
+
+    } catch (error) {
+      return err(new JsmError(ErrorCode.UNDEPLOY_ERROR, `Failed to undeploy: ${error}`, error));
+    }
+  }
+
+  /**
+   * Get default Tomcat configuration
+   */
   getDefaultConfig(): Partial<ServerConfig> {
     return {
       host: 'localhost',
       port: 8080,
-      autoSync: false,
+      debug: {
+        port: 5005
+      },
       startupTimeout: 30000,
-      stopTimeout: 5000
+      stopTimeout: 10000,
+      healthCheckUrl: 'http://localhost:8080'
     };
   }
 
-  async deploy(config: ServerConfig, deployment: DeploymentConfig): Promise<Result<void, JsmError>> {
-    try {
-      const deployName = deployment.deployName || this.extractNameFromPath(deployment.sourcePath);
-      this.log.info(`Deploying ${deployName} to Tomcat server: ${config.name}`);
-
-      const webappsDir = path.join(config.serverHome, 'webapps');
-      if (!fs.existsSync(webappsDir)) {
-        return err(new JsmError(
-          ErrorCode.DEPLOY_ERROR,
-          'Webapps directory not found'
-        ));
-      }
-
-      // Calculate target path
-      const deploymentType = deployment.type || this.detectTypeFromPath(deployment.sourcePath);
-      const targetPath = this.generateTargetPath(webappsDir, deployName, deploymentType);
-
-      // Copy the deployment
-      if (deploymentType === 'war') {
-        // Copy WAR file
-        fs.copyFileSync(deployment.sourcePath, targetPath);
-      } else if (deploymentType === 'exploded') {
-        // Copy directory contents
-        if (!fs.existsSync(targetPath)) {
-          fs.mkdirSync(targetPath, { recursive: true });
-        }
-        await this.copyDirectory(deployment.sourcePath, targetPath);
-      }
-
-      this.log.info(`Successfully deployed ${deployName}`);
-      return ok(undefined);
-    } catch (error) {
-      this.log.error('Failed to deploy application', error);
-      return err(new JsmError(
-        ErrorCode.DEPLOY_ERROR,
-        `Failed to deploy application: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        error instanceof Error ? error : undefined
-      ));
-    }
-  }
-
-  async deployIncremental(config: ServerConfig, deployment: DeploymentConfig): Promise<Result<void, JsmError>> {
-    try {
-      const deployName = deployment.deployName || this.extractNameFromPath(deployment.sourcePath);
-      this.log.info(`Incremental deployment of ${deployName} to Tomcat server: ${config.name}`);
-
-      const deploymentType = deployment.type || this.detectTypeFromPath(deployment.sourcePath);
-      
-      if (deploymentType === 'war') {
-        // For WAR files, incremental deployment is the same as full deployment
-        return this.deploy(config, deployment);
-      }
-
-      // For exploded deployments, perform incremental sync
-      if (deploymentType === 'exploded') {
-        const webappsDir = path.join(config.serverHome, 'webapps');
-        if (!fs.existsSync(webappsDir)) {
-          return err(new JsmError(
-            ErrorCode.DEPLOY_ERROR,
-            'Webapps directory not found'
-          ));
-        }
-
-        // Calculate target path for incremental sync
-        const targetPath = this.generateTargetPath(webappsDir, deployName, deploymentType);
-        
-        // Perform incremental synchronization
-        await this.syncDirectoryIncremental(deployment.sourcePath, targetPath);
-        this.log.info(`Successfully performed incremental deployment of ${deployName}`);
-        return ok(undefined);
-      }
-
-      return err(new JsmError(
-        ErrorCode.DEPLOY_ERROR,
-        `Unsupported deployment type for incremental deployment: ${deployment.type}`
-      ));
-    } catch (error) {
-      this.log.error('Failed to perform incremental deployment', error);
-      return err(new JsmError(
-        ErrorCode.DEPLOY_ERROR,
-        `Incremental deployment failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        error instanceof Error ? error : undefined
-      ));
-    }
-  }
-
-  async undeploy(config: ServerConfig, deploymentId: string): Promise<Result<void, JsmError>> {
-    try {
-      this.log.info(`Undeploying ${deploymentId} from Tomcat server: ${config.name}`);
-
-      const deployment = config.deployments.find(d => d.id === deploymentId);
-      if (!deployment) {
-        return err(new JsmError(
-          ErrorCode.UNDEPLOY_ERROR,
-          `Deployment not found: ${deploymentId}`
-        ));
-      }
-
-      // Calculate target path using helper methods
-      const webappsDir = path.join(config.serverHome, 'webapps');
-      const deployName = deployment.deployName || this.extractNameFromPath(deployment.sourcePath);
-      const deploymentType = deployment.type || this.detectTypeFromPath(deployment.sourcePath);
-      const targetPath = this.generateTargetPath(webappsDir, deployName, deploymentType);
-
-      if (fs.existsSync(targetPath)) {
-        if (fs.statSync(targetPath).isDirectory()) {
-          fs.rmSync(targetPath, { recursive: true, force: true });
-        } else {
-          fs.unlinkSync(targetPath);
-        }
-      }
-
-      this.log.info(`Successfully undeployed ${deployName}`);
-      return ok(undefined);
-    } catch (error) {
-      this.log.error('Failed to undeploy application', error);
-      return err(new JsmError(
-        ErrorCode.UNDEPLOY_ERROR,
-        `Failed to undeploy application: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        error instanceof Error ? error : undefined
-      ));
-    }
-  }
-
-  async getStatus(config: ServerConfig): Promise<Result<ServerState, JsmError>> {
-    try {
-      const serverProcess = this.processes.get(config.id);
-      
-      if (!serverProcess) {
-        return ok('stopped');
-      }
-      
-      if (serverProcess.killed || serverProcess.exitCode !== null) {
-        return ok('stopped');
-      }
-      
-      return ok('running');
-    } catch (error) {
-      return err(new JsmError(
-        ErrorCode.STATUS_CHECK_ERROR,
-        `Failed to get server status: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        error instanceof Error ? error : undefined
-      ));
-    }
-  }
-
+  /**
+   * Detect if the given path is a valid Tomcat installation
+   */
   async detect(serverHome: string): Promise<Result<boolean, JsmError>> {
-    return this.detectServerAt(serverHome);
+    try {
+      const requiredPaths = [
+        path.join(serverHome, 'bin', 'catalina.sh'),
+        path.join(serverHome, 'bin', 'catalina.bat'),
+        path.join(serverHome, 'lib', 'catalina.jar'),
+        path.join(serverHome, 'webapps')
+      ];
+
+      // Check if at least one startup script and catalina.jar exist
+      const hasScript = fs.existsSync(requiredPaths[0]) || fs.existsSync(requiredPaths[1]);
+      const hasCatalinaJar = fs.existsSync(requiredPaths[2]);
+      const hasWebapps = fs.existsSync(requiredPaths[3]);
+
+      return ok(hasScript && hasCatalinaJar && hasWebapps);
+
+    } catch (error) {
+      return err(new JsmError(ErrorCode.SERVER_TYPE_DETECTION_ERROR, `Detection failed: ${error}`, error));
+    }
   }
 
+  /**
+   * Cleanup resources
+   */
   async dispose(): Promise<void> {
-    try {
-      // Stop all running processes
-      for (const [serverId, process] of this.processes.entries()) {
-        try {
-          if (!process.killed && process.exitCode === null) {
-            process.kill('SIGTERM');
-          }
-        } catch (error) {
-          this.log.warn(`Failed to stop process for server ${serverId}`, error);
+    for (const [serverId, process] of this.processes) {
+      try {
+        if (!process.killed) {
+          process.kill('SIGTERM');
         }
+        this.processes.delete(serverId);
+      } catch (error) {
+        this.log.warn(`Failed to cleanup process for server ${serverId}: ${error}`);
       }
-      
-      this.processes.clear();
-      this.log.debug('TomcatPlugin disposed');
-    } catch (error) {
-      this.log.error('Error during TomcatPlugin disposal', error);
     }
   }
 
-  async detectServerAt(serverHome: string): Promise<Result<boolean, JsmError>> {
-    try {
-      // Check for typical Tomcat markers
-      const catalinaJar = path.join(serverHome, 'lib', 'catalina.jar');
-      const tomcatJuli = path.join(serverHome, 'bin', 'tomcat-juli.jar');
-      const bootstrapJar = path.join(serverHome, 'bin', 'bootstrap.jar');
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PRIVATE HELPER METHODS
+  // ═══════════════════════════════════════════════════════════════════════════
 
-      const isTomcat = fs.existsSync(catalinaJar) && 
-                      (fs.existsSync(tomcatJuli) || fs.existsSync(bootstrapJar));
+  /**
+   * Intelligent wait method that can be reused for different server states
+   */
+  private async waitForServerReady(config: ServerConfig, timeout: number): Promise<Result<void, JsmError>> {
+    const startTime = Date.now();
+    const checkInterval = 1000; // Check every second
 
-      this.log.debug(`Tomcat detection for ${serverHome}: ${isTomcat}`);
-      return ok(isTomcat);
-    } catch (error) {
-      return err(new JsmError(
-        ErrorCode.SERVER_TYPE_DETECTION_ERROR,
-        `Detection failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        error instanceof Error ? error : undefined
-      ));
+    while (Date.now() - startTime < timeout) {
+      try {
+        const isReady = await this.checkPortAccess(config.host, config.port);
+        if (isReady) {
+          return ok(undefined);
+        }
+        await new Promise(resolve => setTimeout(resolve, checkInterval));
+      } catch (error) {
+        // Continue checking
+      }
+    }
+
+    return err(new JsmError(
+      ErrorCode.TIMEOUT_ERROR,
+      `Server did not start within ${timeout}ms timeout`
+    ));
+  }
+
+  /**
+   * Wait for process to exit gracefully
+   */
+  private async waitForProcessExit(process: ChildProcess, timeout: number): Promise<Result<void, JsmError>> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        resolve(err(new JsmError(ErrorCode.TIMEOUT_ERROR, `Process did not exit within ${timeout}ms`)));
+      }, timeout);
+
+      process.on('exit', () => {
+        clearTimeout(timer);
+        resolve(ok(undefined));
+      });
+    });
+  }
+
+  /**
+   * Validate Tomcat installation
+   */
+  private async validateTomcatInstallation(config: ServerConfig): Promise<Result<void, JsmError>> {
+    if (!fs.existsSync(config.serverHome)) {
+      return err(new JsmError(ErrorCode.CONFIG_INVALID, `Tomcat home directory not found: ${config.serverHome}`));
+    }
+
+    const webappsDir = path.join(config.serverHome, 'webapps');
+    if (!fs.existsSync(webappsDir)) {
+      fs.mkdirSync(webappsDir, { recursive: true });
+    }
+
+    return ok(undefined);
+  }
+
+  /**
+   * Build environment variables for Tomcat process
+   */
+  private buildEnvironment(config: ServerConfig, mode: ServerStartMode, debugPort?: number): NodeJS.ProcessEnv {
+    const env = { ...process.env };
+    
+    env.CATALINA_HOME = config.serverHome;
+    env.CATALINA_BASE = config.serverHome;
+    env.JAVA_HOME = config.javaHome;
+
+    if (config.vmArgs) {
+      env.CATALINA_OPTS = config.vmArgs;
+    }
+
+    if (mode === 'debug' && debugPort) {
+      const debugArgs = `-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=${debugPort}`;
+      env.CATALINA_OPTS = env.CATALINA_OPTS ? `${env.CATALINA_OPTS} ${debugArgs}` : debugArgs;
+    }
+
+    // Add custom environment variables
+    if (config.envVars) {
+      Object.assign(env, config.envVars);
+    }
+
+    return env;
+  }
+
+  /**
+   * Get appropriate startup script path
+   */
+  private getStartupScript(config: ServerConfig): string {
+    const scriptName = process.platform === 'win32' ? 'startup.bat' : 'startup.sh';
+    return path.join(config.serverHome, 'bin', scriptName);
+  }
+
+  /**
+   * Setup process event handlers
+   */
+  private setupProcessHandlers(process: ChildProcess, config: ServerConfig): void {
+    process.on('exit', (code) => {
+      this.log.info(`Tomcat process exited with code: ${code}`);
+      this.processes.delete(config.id);
+    });
+
+    process.on('error', (error) => {
+      this.log.error(`Tomcat process error: ${error}`);
+      this.processes.delete(config.id);
+    });
+
+    // Log output for debugging
+    if (process.stdout) {
+      process.stdout.on('data', (data) => {
+        this.log.debug(`STDOUT: ${data.toString().trim()}`);
+      });
+    }
+
+    if (process.stderr) {
+      process.stderr.on('data', (data) => {
+        this.log.debug(`STDERR: ${data.toString().trim()}`);
+      });
     }
   }
 
   /**
-   * Copy directory recursively
+   * Execute Tomcat shutdown script
    */
-  private async copyDirectory(source: string, target: string): Promise<void> {
-    if (!fs.existsSync(target)) {
-      fs.mkdirSync(target, { recursive: true });
-    }
+  private async executeShutdownScript(config: ServerConfig): Promise<Result<void, JsmError>> {
+    try {
+      const env = this.buildEnvironment(config, 'run');
+      const scriptName = process.platform === 'win32' ? 'shutdown.bat' : 'shutdown.sh';
+      const scriptPath = path.join(config.serverHome, 'bin', scriptName);
 
-    const items = fs.readdirSync(source, { withFileTypes: true });
-    
-    for (const item of items) {
-      const sourcePath = path.join(source, item.name);
-      const targetPath = path.join(target, item.name);
-
-      if (item.isDirectory()) {
-        await this.copyDirectory(sourcePath, targetPath);
-      } else {
-        fs.copyFileSync(sourcePath, targetPath);
+      if (!fs.existsSync(scriptPath)) {
+        return err(new JsmError(ErrorCode.SERVER_SHUTDOWN_ERROR, `Shutdown script not found: ${scriptPath}`));
       }
-    }
-  }
 
-  /**
-   * Perform incremental synchronization between directories
-   */
-  private async syncDirectoryIncremental(source: string, target: string): Promise<void> {
-    if (!fs.existsSync(target)) {
-      fs.mkdirSync(target, { recursive: true });
-    }
+      return new Promise((resolve) => {
+        const shutdownProcess = spawn(scriptPath, [], {
+          env,
+          cwd: config.serverHome
+        });
 
-    const sourceItems = fs.readdirSync(source, { withFileTypes: true });
-    
-    for (const item of sourceItems) {
-      const sourcePath = path.join(source, item.name);
-      const targetPath = path.join(target, item.name);
-
-      if (item.isDirectory()) {
-        await this.syncDirectoryIncremental(sourcePath, targetPath);
-      } else {
-        // Only copy if file doesn't exist or has been modified
-        const shouldCopy = !fs.existsSync(targetPath) || 
-                          fs.statSync(sourcePath).mtime > fs.statSync(targetPath).mtime;
-        
-        if (shouldCopy) {
-          fs.copyFileSync(sourcePath, targetPath);
-          this.log.debug(`Incremental sync: copied ${sourcePath} -> ${targetPath}`);
-        }
-      }
-    }
-
-    // Remove files in target that no longer exist in source
-    if (fs.existsSync(target)) {
-      const targetItems = fs.readdirSync(target, { withFileTypes: true });
-      for (const item of targetItems) {
-        const sourcePath = path.join(source, item.name);
-        const targetPath = path.join(target, item.name);
-
-        if (!fs.existsSync(sourcePath)) {
-          if (item.isDirectory()) {
-            fs.rmSync(targetPath, { recursive: true, force: true });
+        shutdownProcess.on('exit', (code) => {
+          if (code === 0) {
+            resolve(ok(undefined));
           } else {
-            fs.unlinkSync(targetPath);
+            resolve(err(new JsmError(ErrorCode.SERVER_SHUTDOWN_ERROR, `Shutdown script exited with code: ${code}`)));
           }
-          this.log.debug(`Incremental sync: removed ${targetPath}`);
-        }
+        });
+
+        shutdownProcess.on('error', (error) => {
+          resolve(err(new JsmError(ErrorCode.SERVER_SHUTDOWN_ERROR, `Shutdown script error: ${error}`, error)));
+        });
+      });
+
+    } catch (error) {
+      return err(new JsmError(ErrorCode.SERVER_SHUTDOWN_ERROR, `Failed to execute shutdown script: ${error}`, error));
+    }
+  }
+
+  /**
+   * Check if a port is accessible (server is responding)
+   */
+  private async checkPortAccess(host: string, port: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      const socket = new net.Socket();
+      const timeout = 3000;
+
+      socket.setTimeout(timeout);
+      socket.on('connect', () => {
+        socket.destroy();
+        resolve(true);
+      });
+
+      socket.on('timeout', () => {
+        socket.destroy();
+        resolve(false);
+      });
+
+      socket.on('error', () => {
+        socket.destroy();
+        resolve(false);
+      });
+
+      socket.connect(port, host);
+    });
+  }
+
+  /**
+   * Copy directory recursively (for exploded deployments)
+   */
+  private async copyDirectory(src: string, dest: string): Promise<void> {
+    if (!fs.existsSync(dest)) {
+      fs.mkdirSync(dest, { recursive: true });
+    }
+
+    const items = fs.readdirSync(src);
+    for (const item of items) {
+      const srcPath = path.join(src, item);
+      const destPath = path.join(dest, item);
+      
+      if (fs.statSync(srcPath).isDirectory()) {
+        await this.copyDirectory(srcPath, destPath);
+      } else {
+        fs.copyFileSync(srcPath, destPath);
       }
     }
   }
 
   /**
-   * Helper methods for deployment path management
+   * Cleanup process resources
    */
-  private extractNameFromPath(sourcePath: string): string {
-    return sourcePath?.split('/').pop()?.replace('.war', '') || 'deployment';
-  }
-
-  private detectTypeFromPath(sourcePath: string): 'war' | 'exploded' {
-    return sourcePath?.endsWith('.war') ? 'war' : 'exploded';
-  }
-
-  private generateTargetPath(webappsDir: string, deployName: string, type: 'war' | 'exploded'): string {
-    return type === 'war' 
-      ? path.join(webappsDir, `${deployName}.war`)
-      : path.join(webappsDir, deployName);
+  private cleanup(serverId: string): void {
+    const process = this.processes.get(serverId);
+    if (process) {
+      process.removeAllListeners();
+      this.processes.delete(serverId);
+    }
   }
 }

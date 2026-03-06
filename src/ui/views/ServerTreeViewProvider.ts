@@ -70,8 +70,13 @@ export class DeploymentNode extends TreeItem {
   constructor(readonly parent: ServerConfig, readonly data: DeploymentConfig, readonly currentState: DeploymentState = 'undeployed', readonly autoSyncEnabled: boolean = false) {
     const displayName = data.deployName || data.sourcePath.split('/').pop()?.replace('.war', '') || 'deployment';
     const autoSyncIndicator = autoSyncEnabled ? ' ✓AutoSync' : '';
-    super(`${displayName}${autoSyncIndicator}`, 0);
-    this.contextValue = CONTEXT_VALUES.DEPLOYMENT;
+    super(`${displayName} (${currentState}) ${autoSyncIndicator}`, 0);
+    this.contextValue = {
+      undeployed: CONTEXT_VALUES.DEPLOYMENT_UNDEPLOYED,
+      deploying: CONTEXT_VALUES.DEPLOYMENT_DEPLOYING,
+      synced: CONTEXT_VALUES.DEPLOYMENT_SYNCED,
+      error: CONTEXT_VALUES.DEPLOYMENT_ERROR
+    }[currentState];
     this.iconPath = new ThemeIcon('file-code');
     this.tooltip = `Source: ${data.sourcePath}\nState: ${currentState}${autoSyncEnabled ? '\nAutoSync: Enabled' : '\nAutoSync: Disabled'}`;
   }

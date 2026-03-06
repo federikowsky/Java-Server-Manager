@@ -116,15 +116,15 @@ export async function activate(ctx: ExtensionContext): Promise<void> {
       return;
     }
     
-    const logSvc = new LogService(pluginRegistry, singleton.configManager);
+    const logSvc = new LogService(singleton.configManager);
     
     singleton.logger.info('Modern services initialized successfully');
 
     const syncSvc = new AutoSyncService(depSvc);
 
     /* Register VSCode commands */
-    registerServerCommands(ctx, srvSvc, logSvc);
-    registerDeploymentCommands(ctx, depSvc, syncSvc);
+    registerServerCommands(ctx, srvSvc, depSvc, logSvc);
+    registerDeploymentCommands(ctx, depSvc, syncSvc, logSvc);
     registerTemplateCommands(ctx, srvSvc);
 
     /* Tree-view */
@@ -139,12 +139,10 @@ export async function activate(ctx: ExtensionContext): Promise<void> {
     ctx.subscriptions.push(treeView);
 
     /* Load workspace servers using server service */
-    const loadResult = await srvSvc.getAllServers();
+    const loadResult = await srvSvc.loadWorkspace();
     if (!loadResult.ok) {
-      console.error('❌ JSM: Failed to load servers:', loadResult.error);
-      window.showErrorMessage('JSM: unable to load servers configuration.');
-    } else {
-      console.log(`✅ JSM: Loaded ${loadResult.value.length} servers successfully`);
+      console.error('❌ JSM: Failed to load workspace servers:', loadResult.error);
+      window.showErrorMessage('JSM: unable to load server configurations.');
     }
 
     /* cleanup on deactivate */

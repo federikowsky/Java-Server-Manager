@@ -9,6 +9,7 @@ import {
   window,
   env,
   Uri,
+  workspace,
   QuickPickItem,
   QuickPickItemKind,
   ThemeIcon
@@ -21,14 +22,35 @@ import { AutoSyncService } from '../services/AutoSyncService';
 import { Logger } from '../core/utils/logger';
 import { JsmError } from '../core/errors/JsmError';
 import { ErrorCode } from '../core/errors/codes';
+import { Result, err, ok } from '../core/utils/result';
 import { DeploymentConfig, ServerTemplate } from '../core/types/domain';
 import { ServerFormPanel } from '../ui/webviews/ServerFormPanel';
 import { DeploymentFormPanel } from '../ui/webviews/DeploymentFormPanel';
 import { LogService } from '../services/LogService';
 import { TemplateManager } from '../core/templates/TemplateManager';
 import { PluginRegistry } from '../core/server/plugins/registry/PluginRegistry';
+import { EventBus } from '../core/EventBus';
 
 const log = Logger.getInstance().createChild('Commands');
+const COMMAND_IDS = {
+  REFRESH: 'jsm.view.refresh',
+  ADD_SERVER: 'jsm.server.add',
+  REMOVE_SERVER: 'jsm.server.remove',
+  OPEN_HOME: 'jsm.server.openHome',
+  OPEN_CONFIG: 'jsm.server.openConfig',
+  OPEN_OUTPUT: 'jsm.server.openOutput',
+  OPEN_LOGS: 'jsm.server.openLogs',
+  SYNC_ALL: 'jsm.server.syncAllDeployments',
+  FULL_REDEPLOY_ALL: 'jsm.server.fullRedeployAll',
+  COPY_DIAGNOSTICS: 'jsm.diagnostics.copy',
+  OPEN_DOCS: 'jsm.docs.open',
+  DEPLOYMENT_SYNC: 'jsm.deployment.sync',
+  DEPLOYMENT_FULL_REDEPLOY: 'jsm.deployment.fullRedeploy',
+  DEPLOYMENT_UNDEPLOY: 'jsm.deployment.undeploy',
+  DEPLOYMENT_OPEN_LOGS: 'jsm.deployment.openLogs'
+} as const;
+const WORKSPACE_CONFIG_PATH = ['.vscode', 'servers.json'] as const;
+const DOCS_PATH = ['docs', 'specs.md'] as const;
 
 // ==================== UTILITIES ====================
 
@@ -68,18 +90,99 @@ function validateDeploymentNode(node: DeploymentNode): { serverId: string; deplo
   return { serverId, deploymentId };
 }
 
+function getPrimaryWorkspaceFolder(): string | null {
+  return workspace.workspaceFolders?.[0]?.uri.fsPath ?? null;
+}
+
+async function openWorkspaceFile(pathSegments: readonly string[]): Promise<void> {
+  const workspaceFolder = getPrimaryWorkspaceFolder();
+  if (!workspaceFolder) {
+    throw new JsmError(ErrorCode.INVALID_CONFIGURATION, 'An open workspace is required');
+  }
+
+  await commands.executeCommand('vscode.open', Uri.file(path.join(workspaceFolder, ...pathSegments)));
+}
+
+function openOutputChannel(): void {
+  Logger.getInstance().getChannel().show(true);
+}
+
+async function copyDiagnostics(serverService: ServerService, serverId?: string): Promise<void> {
+  const allServersResult = await serverService.getAllServers();
+  if (!allServersResult.ok) {
+    throw allServersResult.error;
+  }
+
+  const allServers = allServersResult.value;
+  const selectedServer = serverId ? allServers.find((server) => server.id === serverId) : undefined;
+  const selectedState = serverId ? serverService.getServerState(serverId) : undefined;
+
+  const diagnostics = [
+    'Java Server Manager Diagnostics',
+    `Generated: ${new Date().toISOString()}`,
+    `Workspace: ${getPrimaryWorkspaceFolder() ?? 'unavailable'}`,
+    `Configured servers: ${allServers.length}`,
+    selectedServer ? `Server: ${selectedServer.name} (${selectedServer.id})` : 'Server: all',
+    selectedServer ? `Host: ${selectedServer.host}:${selectedServer.port}` : undefined,
+    selectedServer ? `Home: ${selectedServer.serverHome}` : undefined,
+    selectedServer ? `Deployments: ${selectedServer.deployments.length}` : undefined,
+    selectedState?.ok ? `State: ${selectedState.value}` : undefined
+  ].filter(Boolean).join('\n');
+
+  await env.clipboard.writeText(diagnostics);
+}
+
+function registerMany(ctx: ExtensionContext, ids: readonly string[], handler: (...args: any[]) => unknown): void {
+  for (const id of ids) {
+    ctx.subscriptions.push(commands.registerCommand(id, handler));
+  }
+}
+
+async function publishServerDeployments(
+  dep: DeploymentService,
+  serverId: string,
+  deployments: DeploymentConfig[],
+  mode: 'full' | 'incremental'
+): Promise<Result<void, JsmError>> {
+  const failures: string[] = [];
+
+  for (const deployment of deployments) {
+    const deploymentId = deployment.id;
+    if (!deploymentId) {
+      failures.push(`${deployment.deployName || deployment.sourcePath}: missing deployment id`);
+      continue;
+    }
+
+    const result = await dep.publish(serverId, deploymentId, mode);
+    if (!result.ok) {
+      failures.push(`${deployment.deployName || deployment.sourcePath}: ${result.error.message}`);
+    }
+  }
+
+  if (failures.length > 0) {
+    return err(new JsmError(ErrorCode.DEPLOY_ERROR, failures.join('\n')));
+  }
+
+  return ok(undefined);
+}
+
 // ==================== SERVER COMMANDS ====================
 
-export function registerServerCommands(ctx: ExtensionContext, srv: ServerService, logSvc?: LogService) {
-  ctx.subscriptions.push(
-    commands.registerCommand('jsm.server.add', async () => {
-      try {
-        await showAddServerMenu(srv);
-      } catch (error) {
-        showErr(error);
-      }
-    }),
+export function registerServerCommands(
+  ctx: ExtensionContext,
+  srv: ServerService,
+  dep: DeploymentService,
+  logSvc?: LogService
+) {
+  registerMany(ctx, [COMMAND_IDS.ADD_SERVER], async () => {
+    try {
+      await showAddServerMenu(srv);
+    } catch (error) {
+      showErr(error);
+    }
+  });
 
+  ctx.subscriptions.push(
     commands.registerCommand('jsm.server.startRun', async (node: ServerNode) => {
       const serverId = validateServerNode(node);
       if (!serverId) return;
@@ -178,7 +281,7 @@ export function registerServerCommands(ctx: ExtensionContext, srv: ServerService
         const updateResult = await srv.updateFromUserInput(serverId, panelResult.value);
         if (updateResult.ok) {
           showSuccess(`Server "${updateResult.value.name}" updated successfully!`);
-          await commands.executeCommand('jsm.treeview.refresh');
+          await commands.executeCommand(COMMAND_IDS.REFRESH);
         } else {
           showErr(updateResult.error);
         }
@@ -187,7 +290,7 @@ export function registerServerCommands(ctx: ExtensionContext, srv: ServerService
       }
     }),
 
-    commands.registerCommand('jsm.server.delete', async (node: ServerNode) => {
+    commands.registerCommand(COMMAND_IDS.REMOVE_SERVER, async (node: ServerNode) => {
       const serverId = validateServerNode(node);
       if (!serverId) return;
 
@@ -203,7 +306,7 @@ export function registerServerCommands(ctx: ExtensionContext, srv: ServerService
           const result = await srv.delete(serverId);
           if (result.ok) {
             showSuccess(`Server "${serverName}" deleted successfully`);
-            await commands.executeCommand('jsm.treeview.refresh');
+            await commands.executeCommand(COMMAND_IDS.REFRESH);
           } else {
             showErr(result.error);
           }
@@ -213,7 +316,7 @@ export function registerServerCommands(ctx: ExtensionContext, srv: ServerService
       }
     }),
 
-    commands.registerCommand('jsm.server.openDir', async (node: ServerNode) => {
+    commands.registerCommand(COMMAND_IDS.OPEN_HOME, async (node: ServerNode) => {
       const serverHome = node?.data?.serverHome;
       if (!serverHome) {
         showErr(new JsmError(ErrorCode.INVALID_CONFIGURATION, 'No server home directory'));
@@ -228,27 +331,7 @@ export function registerServerCommands(ctx: ExtensionContext, srv: ServerService
       }
     }),
 
-    commands.registerCommand('jsm.server.copyInfo', async (node: ServerNode) => {
-      const serverData = node?.data;
-      if (!serverData) {
-        showErr(new JsmError(ErrorCode.INVALID_CONFIGURATION, 'No server selected'));
-        return;
-      }
-
-      try {
-        const info = `Server: ${serverData.name}
-ID: ${serverData.id}
-Host: ${serverData.host}:${serverData.port}
-Home: ${serverData.serverHome}`;
-
-        await env.clipboard.writeText(info);
-        showSuccess('Server info copied to clipboard');
-      } catch (error) {
-        showErr(error);
-      }
-    }),
-
-    commands.registerCommand('jsm.server.deployChanges', async (node: ServerNode) => {
+    commands.registerCommand(COMMAND_IDS.SYNC_ALL, async (node: ServerNode) => {
       const serverId = validateServerNode(node);
       if (!serverId) return;
 
@@ -267,14 +350,20 @@ Home: ${serverData.serverHome}`;
         }
 
         showInfo(`Deploying ${deployments.length} deployment(s) incrementally...`);
-        // This would typically be handled by DeploymentService
+        const publishResult = await publishServerDeployments(dep, serverId, deployments, 'incremental');
+        if (!publishResult.ok) {
+          showErr(publishResult.error);
+          return;
+        }
+
+        await commands.executeCommand(COMMAND_IDS.REFRESH);
         showSuccess('Incremental deployment completed');
       } catch (error) {
         showErr(error);
       }
     }),
 
-    commands.registerCommand('jsm.server.fullRedeploy', async (node: ServerNode) => {
+    commands.registerCommand(COMMAND_IDS.FULL_REDEPLOY_ALL, async (node: ServerNode) => {
       const serverId = validateServerNode(node);
       if (!serverId) return;
 
@@ -299,7 +388,13 @@ Home: ${serverData.serverHome}`;
 
         if (confirmation === 'Full Redeploy') {
           showInfo(`Starting full redeploy of ${deployments.length} deployment(s)...`);
-          // This would typically be handled by DeploymentService
+          const publishResult = await publishServerDeployments(dep, serverId, deployments, 'full');
+          if (!publishResult.ok) {
+            showErr(publishResult.error);
+            return;
+          }
+
+          await commands.executeCommand(COMMAND_IDS.REFRESH);
           showSuccess('Full redeploy completed');
         }
       } catch (error) {
@@ -307,7 +402,7 @@ Home: ${serverData.serverHome}`;
       }
     }),
 
-    commands.registerCommand('jsm.server.viewLogs', async (node: ServerNode) => {
+    commands.registerCommand(COMMAND_IDS.OPEN_LOGS, async (node: ServerNode) => {
       const serverId = validateServerNode(node);
       if (!serverId) return;
 
@@ -323,14 +418,44 @@ Home: ${serverData.serverHome}`;
       }
     }),
 
-    commands.registerCommand('jsm.treeview.refresh', async () => {
+    commands.registerCommand(COMMAND_IDS.REFRESH, async () => {
       try {
         const result = await srv.getAllServers();
         if (result.ok) {
+          EventBus.getInstance().emit('ConfigChanged', { source: 'api', servers: result.value });
           showInfo(`Refreshed: ${result.value.length} servers loaded`);
         } else {
           showErr(result.error);
         }
+      } catch (error) {
+        showErr(error);
+      }
+    }),
+
+    commands.registerCommand(COMMAND_IDS.OPEN_OUTPUT, async () => {
+      openOutputChannel();
+    }),
+
+    commands.registerCommand(COMMAND_IDS.OPEN_CONFIG, async () => {
+      try {
+        await openWorkspaceFile(WORKSPACE_CONFIG_PATH);
+      } catch (error) {
+        showErr(error);
+      }
+    }),
+
+    commands.registerCommand(COMMAND_IDS.OPEN_DOCS, async () => {
+      try {
+        await openWorkspaceFile(DOCS_PATH);
+      } catch (error) {
+        showErr(error);
+      }
+    }),
+
+    commands.registerCommand(COMMAND_IDS.COPY_DIAGNOSTICS, async (node?: ServerNode) => {
+      try {
+        await copyDiagnostics(srv, node?.data?.id);
+        showSuccess('Diagnostics copied to clipboard');
       } catch (error) {
         showErr(error);
       }
@@ -341,7 +466,8 @@ Home: ${serverData.serverHome}`;
 export function registerDeploymentCommands(
   ctx: ExtensionContext,
   dep: DeploymentService,
-  sync: AutoSyncService
+  sync: AutoSyncService,
+  logSvc?: LogService
 ) {
   ctx.subscriptions.push(
     commands.registerCommand('jsm.deployment.add', async (node: ServerNode) => {
@@ -363,7 +489,7 @@ export function registerDeploymentCommands(
           showSuccess(`Deployment "${panelResult.value.deployName || 'New Deployment'}" created successfully!`);
           
           // Refresh the tree view to show the new deployment
-          await commands.executeCommand('jsm.treeview.refresh');
+          await commands.executeCommand(COMMAND_IDS.REFRESH);
         } else {
           showErr(createResult.error);
         }
@@ -393,7 +519,7 @@ export function registerDeploymentCommands(
           showSuccess(`Deployment "${panelResult.value.deployName || 'Deployment'}" updated successfully!`);
           
           // Refresh the tree view to show changes
-          await commands.executeCommand('jsm.treeview.refresh');
+          await commands.executeCommand(COMMAND_IDS.REFRESH);
         } else {
           showErr(updateResult.error);
         }
@@ -418,7 +544,7 @@ export function registerDeploymentCommands(
           const result = await dep.remove(nodeData.serverId, nodeData.deploymentId, true);
           if (result.ok) {
             showSuccess(`Deployment "${deploymentName}" removed successfully`);
-            await commands.executeCommand('jsm.treeview.refresh');
+            await commands.executeCommand(COMMAND_IDS.REFRESH);
           } else {
             showErr(result.error);
           }
@@ -428,7 +554,7 @@ export function registerDeploymentCommands(
       }
     }),
 
-    commands.registerCommand('jsm.deployment.forceDeploy', async (node: DeploymentNode) => {
+    commands.registerCommand(COMMAND_IDS.DEPLOYMENT_SYNC, async (node: DeploymentNode) => {
       const nodeData = validateDeploymentNode(node);
       if (!nodeData) return;
 
@@ -436,6 +562,7 @@ export function registerDeploymentCommands(
         const result = await dep.publish(nodeData.serverId, nodeData.deploymentId);
         if (result.ok) {
           showSuccess('Deployment published successfully');
+          await commands.executeCommand(COMMAND_IDS.REFRESH);
         } else {
           showErr(result.error);
         }
@@ -444,7 +571,7 @@ export function registerDeploymentCommands(
       }
     }),
 
-    commands.registerCommand('jsm.deployment.undeploySoft', async (node: DeploymentNode) => {
+    commands.registerCommand(COMMAND_IDS.DEPLOYMENT_UNDEPLOY, async (node: DeploymentNode) => {
       const nodeData = validateDeploymentNode(node);
       if (!nodeData) return;
 
@@ -452,6 +579,7 @@ export function registerDeploymentCommands(
         const result = await dep.undeploy(nodeData.serverId, nodeData.deploymentId);
         if (result.ok) {
           showSuccess('Deployment undeployed successfully');
+          await commands.executeCommand(COMMAND_IDS.REFRESH);
         } else {
           showErr(result.error);
         }
@@ -469,10 +597,43 @@ export function registerDeploymentCommands(
         if (result.ok) {
           const status = result.value === 'enabled' ? 'enabled' : 'disabled';
           showSuccess(`AutoSync ${status} for deployment`);
-          await commands.executeCommand('jsm.treeview.refresh');
+          await commands.executeCommand(COMMAND_IDS.REFRESH);
         } else {
           showErr(result.error);
         }
+      } catch (error) {
+        showErr(error);
+      }
+    }),
+
+    commands.registerCommand(COMMAND_IDS.DEPLOYMENT_FULL_REDEPLOY, async (node: DeploymentNode) => {
+      const nodeData = validateDeploymentNode(node);
+      if (!nodeData) return;
+
+      try {
+        const result = await dep.publish(nodeData.serverId, nodeData.deploymentId, 'full');
+        if (result.ok) {
+          showSuccess('Deployment fully redeployed successfully');
+          await commands.executeCommand(COMMAND_IDS.REFRESH);
+        } else {
+          showErr(result.error);
+        }
+      } catch (error) {
+        showErr(error);
+      }
+    }),
+
+    commands.registerCommand(COMMAND_IDS.DEPLOYMENT_OPEN_LOGS, async (node: DeploymentNode) => {
+      try {
+        const serverId = node?.parent?.id;
+        if (!serverId) {
+          throw new JsmError(ErrorCode.INVALID_CONFIGURATION, 'No deployment server selected');
+        }
+        if (!logSvc) {
+          throw new JsmError(ErrorCode.PLUGIN_ERROR, 'Log service not available');
+        }
+
+        await logSvc.openServerLog(serverId);
       } catch (error) {
         showErr(error);
       }
@@ -796,7 +957,7 @@ async function createInstanceFromTemplate(service: ServerService, template: Serv
     showSuccess(`Server instance "${createResult.value.name}" created successfully!`);
     
     // Refresh the tree view to show the new server
-    await commands.executeCommand('jsm.treeview.refresh');
+    await commands.executeCommand(COMMAND_IDS.REFRESH);
   } else {
     showErr(createResult.error);
   }

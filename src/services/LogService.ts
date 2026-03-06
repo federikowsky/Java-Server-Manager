@@ -1,10 +1,11 @@
 /*
  * LogService - KISS approach
- * Opens server log files in VSCode using plugin system
+ * Opens server log files in VSCode using the configured server paths.
  */
 
-import { window, workspace } from 'vscode';
-import { PluginRegistry } from '../core/server/plugins/index';
+import * as fs from 'fs';
+import * as path from 'path';
+import { Uri, window, workspace } from 'vscode';
 import { ConfigManager } from '../core/config/ConfigManager';
 import { Logger } from '../core/utils/logger';
 
@@ -12,7 +13,6 @@ export class LogService {
   private readonly log = Logger.getInstance().createChild('LogService');
 
   constructor(
-    private readonly pluginRegistry: PluginRegistry,
     private readonly configManager?: ConfigManager
   ) {}
 
@@ -33,38 +33,59 @@ export class LogService {
       }
 
       const server = serverResult.value;
-      
-      // Detect server type from serverHome
-      const serverTypeResult = await this.pluginRegistry.detectServerType(server.serverHome);
-      if (!serverTypeResult.ok) {
-        window.showErrorMessage(`Could not detect server type for: ${server.serverHome}`);
-        return;
-      }
-      
-      // Get plugin for server type
-      const pluginResult = this.pluginRegistry.get(serverTypeResult.value);
-      if (!pluginResult.ok) {
-        window.showErrorMessage(`No plugin found for server type: ${serverTypeResult.value}`);
+      const logPath = await this.resolveLogPath(server);
+      if (!logPath) {
+        window.showWarningMessage(`No log file found for server: ${server.name}`);
         return;
       }
 
-      // Get log path from plugin
-      if ('getLogPath' in pluginResult.value) {
-        const logPath = (pluginResult.value as any).getLogPath(server);
-        if (logPath) {
-          // Open log file in VSCode
-          const uri = workspace.asRelativePath(logPath);
-          const doc = await workspace.openTextDocument(uri);
-          await window.showTextDocument(doc);
-        } else {
-          window.showWarningMessage(`No log file found for server: ${server.name}`);
-        }
-      } else {
-        window.showWarningMessage(`Plugin for ${serverTypeResult.value} does not support log viewing`);
-      }
+      const doc = await workspace.openTextDocument(Uri.file(logPath));
+      await window.showTextDocument(doc);
     } catch (error) {
       this.log.error(`Failed to open server log: ${error}`);
       window.showErrorMessage(`Failed to open server log: ${error}`);
+    }
+  }
+
+  private async resolveLogPath(server: { serverHome: string; logPath?: string; instancePath?: string }): Promise<string | undefined> {
+    const configuredLogPath = server.logPath?.trim();
+    if (configuredLogPath && await this.pathExists(configuredLogPath)) {
+      return configuredLogPath;
+    }
+
+    const baseDir = server.instancePath || server.serverHome;
+    const logsDir = path.join(baseDir, 'logs');
+    if (!(await this.pathExists(logsDir))) {
+      return undefined;
+    }
+
+    const preferredFiles = [
+      path.join(logsDir, 'catalina.out'),
+      path.join(logsDir, 'catalina.log'),
+      path.join(logsDir, 'stdout.log')
+    ];
+
+    for (const candidate of preferredFiles) {
+      if (await this.pathExists(candidate)) {
+        return candidate;
+      }
+    }
+
+    const logFiles = await fs.promises.readdir(logsDir);
+    const fallback = logFiles
+      .filter((entry) => entry.endsWith('.log') || entry.endsWith('.out') || entry.includes('catalina'))
+      .sort()
+      .pop();
+
+    return fallback ? path.join(logsDir, fallback) : undefined;
+  }
+
+  private async pathExists(targetPath: string): Promise<boolean> {
+    try {
+      await fs.promises.access(targetPath, fs.constants.F_OK);
+      return true;
+    } catch {
+      return false;
     }
   }
 }

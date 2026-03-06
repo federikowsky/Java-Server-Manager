@@ -4,78 +4,20 @@ All notable changes to the Java Server Manager extension will be documented in t
 
 ## [Unreleased]
 
-### Added - TomcatRuntime Production Implementation
-- **Complete TomcatRuntime Implementation**: Production-ready Apache Tomcat support
-  - Full `buildLaunchCommand` implementation with platform detection
-  - Comprehensive JVM optimization (G1GC, memory management, performance tuning)
-  - Advanced debug support with JPDA configuration
-  - Environment variable management (CATALINA_HOME, JAVA_HOME, custom vars)
-  
-- **Deployment Management**: Enterprise-grade deployment capabilities
-  - WAR file deployment with timestamp checking
-  - Exploded directory deployment with incremental updates
-  - Smart incremental copy (only changed files)
-  - Work directory cleanup during undeploy
-  - Soft vs hard undeploy options
-  
-- **Configuration Validation**: Robust server configuration validation
-  - JAVA_HOME and CATALINA_HOME validation
-  - Required Tomcat directory structure checks (bin, conf, lib, webapps)
-  - Catalina script existence and permission validation
-  - Comprehensive error reporting
-  
-- **JVM Optimization**: Production-ready JVM configuration
-  - Default memory settings (Xmx512m, Xms128m)
-  - G1 Garbage Collector with string deduplication
-  - Security settings (headless mode, entropy sources)
-  - JMX monitoring configuration
-  - Custom VM arguments support
-  
-- **Debug Support**: Advanced debugging capabilities
-  - Automatic JPDA configuration
-  - Custom debug port assignment
-  - JPDA_OPTS support for custom debug arguments
-  - VSCode integration for seamless debugging
-  
-- **Documentation**: Comprehensive documentation
-  - Complete Tomcat runtime implementation guide
-  - Server configuration examples (dev, prod, debug)
-  - Deployment configuration examples
-  - Global template examples
-  - Troubleshooting guide
+### Repository cleanup
+- moved the canonical product specification to [docs/specs.md](./docs/specs.md)
+- moved the extended specification to [docs/specs-extended.md](./docs/specs-extended.md)
+- added a [docs/README.md](./docs/README.md) index for project documentation
+- removed stale scaffold and placeholder files from the active project surface
 
-### Enhanced - Server Configuration
-- **Enhanced ServerConfig**: Updated example configurations
-  - Development server with debug enabled
-  - Production server with optimized JVM settings
-  - Multiple deployment examples (WAR and exploded)
-  - Environment variable examples
-  
-- **Template System**: Improved template support
-  - Development template with debug and auto-sync
-  - Production template with performance optimization
-  - Microservice template with minimal footprint
-  - Template usage guidelines
-
-### Technical Improvements
-- **Error Handling**: Comprehensive error handling with specific error codes
-- **Logging**: Detailed logging for debugging and monitoring
-- **Platform Support**: Cross-platform Windows, macOS, Linux support
-- **Type Safety**: Full TypeScript type safety with proper interfaces
-- **Performance**: Optimized for enterprise-scale server management
-
-### Fixed
-- **TomcatRuntime Issues**: Resolved all implementation gaps
-  - Fixed missing `buildLaunchCommand` method
-  - Removed orphaned `buildStartCommand` method
-  - Implemented proper deploy/undeploy functionality
-  - Added missing parameter validation
+### AI customization
+- normalized custom agent tool usage to avoid obsolete `usages` references
+- added dedicated security and performance review agents
+- added supporting security-review and performance-review skills
 
 ### Documentation
-- **README.md**: Complete rewrite with features, setup, and usage
-- **tomcat-runtime.md**: Detailed technical documentation
-- **server-configuration-examples.md**: Practical configuration examples
-- **global-templates-example.md**: Template system documentation
+- rewrote [README.md](./README.md) to reflect the current MVP status instead of production-ready claims
+- aligned reconciliation prompts and skills with the new docs layout
 
 ---
 

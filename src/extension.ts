@@ -1,6 +1,6 @@
 /*
  * src/extension.ts
- * VS Code entry‑point for Java Server Manager
+ * VS Code entry-point for Java Server Manager with new ConfigManager system
  */
 
 import {
@@ -12,16 +12,20 @@ import {
 } from 'vscode';
 
 import { Logger } from './core/utils/logger';
+import { FileUtils } from './core/utils/FileUtils';
+import { TemplateManager } from './core/templates/TemplateManager';
 import { EventBus } from './core/EventBus';
 import { HookManager } from './core/hooks/HookManager';
 import { PidManager } from './core/pid/PidManager';
 import { DebugManager } from './core/debug/DebugManager';
-import { ConfigService } from './core/config/ConfigService';
+import { ConfigManager } from './core/config/ConfigManager';
+import { PluginRegistry } from './core/server/plugins/index';
 import { ServerManager } from './core/server/ServerManager';
+import { PluginAdapter } from './core/server/PluginAdapter';
 import { ServerService } from './services/ServerService';
 import { DeploymentService } from './services/DeploymentService';
 import { AutoSyncService } from './services/AutoSyncService';
-import { LogService } from './services/LogService';
+import { ServerLogChannel } from './services/ServerLogChannel';
 
 /* UI */
 import { ServerTreeViewProvider } from './ui/views/ServerTreeViewProvider';
@@ -33,14 +37,15 @@ import {
 
 /* ────────────────────────────────────────────────────────────────── */
 const singleton = {
-  logger:  Logger.getInstance(),
-  bus:     EventBus.getInstance(),
-  hooks:   HookManager.getInstance()
+  logger: Logger.getInstance(),
+  bus: EventBus.getInstance(),
+  hooks: HookManager.getInstance(),
+  configManager: null as ConfigManager | null,
+  serverLogChannel: null as ServerLogChannel | null
 };
 
 export async function activate(ctx: ExtensionContext): Promise<void> {
-  console.log('🚀 JSM: Starting activation...');
-  singleton.logger.info('Activating Java Server Manager…');
+  singleton.logger.info('Activating Java Server Manager with new configuration system…');
 
   // Check if workspace folders exist
   if (!workspace.workspaceFolders || workspace.workspaceFolders.length === 0) {
@@ -49,67 +54,164 @@ export async function activate(ctx: ExtensionContext): Promise<void> {
     return;
   }
 
-  console.log('✅ JSM: Workspace folder found:', workspace.workspaceFolders[0].uri.fsPath);
+  try {
+    /* Initialize File System Utilities */
+    singleton.logger.info('Initializing file system utilities...');
+    FileUtils.initialize(ctx);
 
-  /* Services instantiation  */
-  const pidMgr  = new PidManager();
-  const dbgMgr  = new DebugManager();
-  const cfgSvc  = new ConfigService(workspace.workspaceFolders![0].uri);
-  const srvMgr  = new ServerManager();
-  const srvSvc  = new ServerService(cfgSvc, pidMgr, srvMgr, singleton.bus, singleton.hooks, dbgMgr);
-  const depSvc  = new DeploymentService(cfgSvc, srvMgr, singleton.bus, singleton.hooks);
-  const syncSvc = new AutoSyncService(depSvc);
-  const logSvc  = new LogService(srvMgr);
+    /* Initialize New Configuration System */
+    singleton.logger.info('Initializing new configuration system...');
+    
+    const initResult = await ConfigManager.initialize(workspace.workspaceFolders![0].uri);
+    if (!initResult.ok) {
+      singleton.logger.error('Failed to initialize configuration system:', initResult.error);
+      window.showErrorMessage(`Configuration system initialization failed: ${initResult.error.message}`);
+      return;
+    }
 
-  /* Register VSCode commands */
-  registerServerCommands(ctx, srvSvc);
-  registerDeploymentCommands(ctx, depSvc, syncSvc);
-  registerTemplateCommands(ctx);
+    singleton.configManager = ConfigManager.getInstance();
+    
+    singleton.logger.info('Configuration system initialized successfully');
 
-  /* Tree‑view */
-  console.log('🌳 JSM: Creating TreeView...');
-  const treeProv = new ServerTreeViewProvider(srvSvc, singleton.bus, singleton.logger);
-  ctx.subscriptions.push(treeProv);
-  
-  // Register the tree view
-  console.log('🌳 JSM: Registering TreeView with ID: javaServerManagerView');
-  const treeView = window.createTreeView('javaServerManagerView', {
-    treeDataProvider: treeProv,
-    showCollapseAll: true
-  });
-  ctx.subscriptions.push(treeView);
-  console.log('✅ JSM: TreeView registered successfully');
+    /* Initialize Template Manager */
+    singleton.logger.info('Initializing template management system...');
+    const templateManager = TemplateManager.getInstance();
+    const templateInitResult = await templateManager.initialize();
+    if (!templateInitResult.ok) {
+      singleton.logger.error('Failed to initialize template manager:', templateInitResult.error);
+      window.showErrorMessage(`Template system initialization failed: ${templateInitResult.error.message}`);
+      return;
+    }
+    
+    singleton.logger.info(`Template system initialized successfully. Loaded ${templateManager.getAllTemplates().length} templates.`);
 
-  /* Load workspace servers */
-  console.log('📂 JSM: Loading workspace servers...');
-  const res = await srvSvc.loadWorkspace();
-  if (!res.ok) {
-    console.error('❌ JSM: Failed to load servers:', res.error);
-    window.showErrorMessage('JSM: unable to load servers configuration.');
-  } else {
-    console.log('✅ JSM: Servers loaded successfully');
+    /* Initialize Modernized Plugin System */
+    singleton.logger.info('Initializing modernized plugin system...');
+    
+    // Simple plugin configuration - no complex manager needed
+    const pluginRegistry = PluginRegistry.getInstance();
+    
+    // Log plugin system status
+    const supportedTypes = pluginRegistry.getSupportedTypes();
+    singleton.logger.info(`Plugin registry initialized with ${supportedTypes.length} supported server types: ${supportedTypes.join(', ')}`);
+
+    /* Services instantiation with new configuration system */
+    const pidMgr = new PidManager();
+    const dbgMgr = new DebugManager();
+    
+    // Create services using new ConfigManager and new architecture
+    singleton.logger.info('Creating services with new event-driven architecture');
+    
+    // Initialize the new event-driven ServerManager
+    const serverManager = ServerManager.getInstance();
+    const pluginAdapter = PluginAdapter.getInstance();
+    
+    const srvSvc = new ServerService(pidMgr, singleton.bus, singleton.hooks, dbgMgr);
+    const depSvc = new DeploymentService(singleton.configManager, pluginRegistry, singleton.bus, singleton.hooks);
+    
+    // Initialize deployment state repository
+    const depStateInitResult = await depSvc.initialize(workspace.workspaceFolders![0].uri.toString());
+    if (!depStateInitResult.ok) {
+      singleton.logger.error('Failed to initialize deployment state repository:', depStateInitResult.error);
+      window.showErrorMessage(`Deployment state initialization failed: ${depStateInitResult.error.message}`);
+      return;
+    }
+    
+    singleton.logger.info('Modern services initialized successfully');
+
+    const syncSvc = new AutoSyncService(depSvc);
+
+    const serverLogChannel = new ServerLogChannel();
+    singleton.serverLogChannel = serverLogChannel;
+
+    // Wire per-server live log tailing to server state changes
+    ctx.subscriptions.push(
+      singleton.bus.on('ServerStateChanged', async ({ id, state }) => {
+        if (state === 'running') {
+          const configResult = await singleton.configManager!.getServer(id);
+          if (configResult.ok) {
+            // attach is not awaited — channel is created synchronously inside
+            // before the first await so show() works immediately after
+            serverLogChannel.attach(configResult.value);
+            serverLogChannel.show(id);
+          }
+        } else if (state === 'stopped' || state === 'error') {
+          serverLogChannel.detach(id);
+        }
+      }),
+      singleton.bus.on('ServerDeleted', ({ id }) => {
+        serverLogChannel.dispose(id);
+      })
+    );
+
+    /* Register VSCode commands */
+    registerServerCommands(ctx, srvSvc, depSvc, serverLogChannel);
+    registerDeploymentCommands(ctx, depSvc, syncSvc);
+    registerTemplateCommands(ctx, srvSvc);
+
+    /* Tree-view */
+    const treeProv = new ServerTreeViewProvider(srvSvc, depSvc, syncSvc, singleton.bus, singleton.logger);
+    ctx.subscriptions.push(treeProv);
+    
+    // Register the tree view
+    const treeView = window.createTreeView('javaServerManagerView', {
+      treeDataProvider: treeProv,
+      showCollapseAll: true
+    });
+    ctx.subscriptions.push(treeView);
+
+    /* Load workspace servers using server service */
+    const loadResult = await srvSvc.loadWorkspace();
+    if (!loadResult.ok) {
+      console.error('❌ JSM: Failed to load workspace servers:', loadResult.error);
+      window.showErrorMessage('JSM: unable to load server configurations.');
+    }
+
+    /* cleanup on deactivate */
+    ctx.subscriptions.push(new Disposable(async () => {
+      await deactivate();
+    }));
+
+    singleton.logger.info('JSM activated with new configuration system');
+  } catch (error) {
+    singleton.logger.error('Failed to activate JSM:', error);
+    console.error('❌ JSM: Activation failed:', error);
+    window.showErrorMessage(`Java Server Manager: Activation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
-
-  /* cleanup on deactivate */
-  ctx.subscriptions.push(new Disposable(async () => {
-    await deactivate();
-  }));
-
-  console.log('🎉 JSM: Activation completed!');
-  singleton.logger.info('JSM activated');
 }
 
 export async function deactivate(): Promise<void> {
   singleton.logger.info('Deactivating JSM…');
-  const pidMgr = new PidManager();
-  const srvSvc = new ServerService(
-    new ConfigService(workspace.workspaceFolders![0].uri),
-    pidMgr,
-    new ServerManager(),
-    singleton.bus,
-    singleton.hooks,
-    new DebugManager()
-  );
-  await srvSvc.stopAllRunning();
-  singleton.bus.disposeAllListeners();
+  
+  try {
+    // Dispose per-server log channels
+    if (singleton.serverLogChannel) {
+      singleton.serverLogChannel.disposeAll();
+      singleton.serverLogChannel = null;
+    }
+
+    // Dispose configuration manager
+    if (singleton.configManager) {
+      await singleton.configManager.dispose();
+      singleton.configManager = null;
+    }
+
+    // Stop all running servers using ServerManager
+    if (workspace.workspaceFolders && workspace.workspaceFolders.length > 0) {
+      const serverManager = ServerManager.getInstance();
+      await serverManager.dispose();
+    }
+
+    // Dispose plugin registry
+    const pluginRegistry = PluginRegistry.getInstance();
+    await pluginRegistry.dispose();
+
+    // Dispose event bus
+    singleton.bus.disposeAllListeners();
+
+    singleton.logger.info('JSM deactivated');
+  } catch (error) {
+    singleton.logger.error('Error during deactivation:', error);
+    console.error('❌ JSM: Deactivation error:', error);
+  }
 }

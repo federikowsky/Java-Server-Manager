@@ -16,26 +16,69 @@ import {
 } from 'vscode';
 
 import { ServerService } from '../../services/ServerService';
+import { DeploymentService } from '../../services/DeploymentService';
+import { AutoSyncService } from '../../services/AutoSyncService';
 import { EventBus, EventKey } from '../../core/EventBus';
-import { ServerConfig, DeploymentConfig } from '../../core/types/domain';
+import { ServerConfig, DeploymentConfig, ServerState, DeploymentState } from '../../core/types/domain';
 import { Logger } from '../../core/utils/logger';
+import { PluginRegistry } from '../../core/server/plugins';
+import { SERVER_STATE_TO_CONTEXT, CONTEXT_VALUES } from '../../core/constants/TreeViewConstants';
 
 /* ───────────────────────── Tree Items ───────────────────────── */
 export class ServerNode extends TreeItem {
-  constructor(readonly data: ServerConfig) {
-    super(data.name, data.state === 'running' ? 1 : 0);
-    this.iconPath = new ThemeIcon(data.state === 'running' ? 'play-circle' : 'circle-outline');
-    this.contextValue = 'server';
-    this.tooltip = `${data.type} @ ${data.host}:${data.port}`;
+  constructor(readonly data: ServerConfig, readonly currentState: ServerState = 'stopped') {
+    // Show server name with state only (no port)
+    const displayName = `${data.name} (${currentState})`;
+    const hasDeployments = data.deployments && data.deployments.length > 0;
+    super(displayName, hasDeployments ? 1 : 0);
+    
+    // Set icon based on state
+    let iconName: string;
+    switch (currentState) {
+      case 'running':
+        iconName = 'play-circle';
+        break;
+      case 'starting':
+        iconName = 'loading~spin';
+        break;
+      case 'stopping':
+        iconName = 'loading~spin';
+        break;
+      case 'error':
+        iconName = 'error';
+        break;
+      case 'stopped':
+      default:
+        iconName = 'circle-outline';
+        break;
+    }
+    
+    this.iconPath = new ThemeIcon(iconName);
+    // Use centralized context value mapping
+    this.contextValue = SERVER_STATE_TO_CONTEXT[currentState] || SERVER_STATE_TO_CONTEXT.stopped;
+    
+    // For now, show a simplified tooltip without server type detection
+    // Server type detection is async and TreeItem constructor can't be async
+    this.tooltip = `Server @ ${data.host}:${data.port} (${currentState})${data.instancePath ? '\nInstance Path: ' + data.instancePath : ''}`;
+    
+    // Debug logging for context value assignment
+    console.log(`🏷️ ServerNode created: ${data.name} | state: ${currentState} | contextValue: ${this.contextValue}`);
   }
 }
 
-class DeploymentNode extends TreeItem {
-  constructor(readonly parent: ServerConfig, readonly data: DeploymentConfig) {
-    super(data.name, 0);
-    this.contextValue = 'deployment';
+export class DeploymentNode extends TreeItem {
+  constructor(readonly parent: ServerConfig, readonly data: DeploymentConfig, readonly currentState: DeploymentState = 'undeployed', readonly autoSyncEnabled: boolean = false) {
+    const displayName = data.deployName || data.sourcePath.split('/').pop()?.replace('.war', '') || 'deployment';
+    const autoSyncIndicator = autoSyncEnabled ? ' ✓AutoSync' : '';
+    super(`${displayName} (${currentState}) ${autoSyncIndicator}`, 0);
+    this.contextValue = {
+      undeployed: CONTEXT_VALUES.DEPLOYMENT_UNDEPLOYED,
+      deploying: CONTEXT_VALUES.DEPLOYMENT_DEPLOYING,
+      synced: CONTEXT_VALUES.DEPLOYMENT_SYNCED,
+      error: CONTEXT_VALUES.DEPLOYMENT_ERROR
+    }[currentState];
     this.iconPath = new ThemeIcon('file-code');
-    this.tooltip = data.contextPath;
+    this.tooltip = `Source: ${data.sourcePath}\nState: ${currentState}${autoSyncEnabled ? '\nAutoSync: Enabled' : '\nAutoSync: Disabled'}`;
   }
 }
 
@@ -46,22 +89,29 @@ export class ServerTreeViewProvider implements TreeDataProvider<TreeItem>, Dispo
 
   constructor(
     private readonly srvSvc: ServerService,
+    private readonly depSvc: DeploymentService,
+    private readonly autoSyncSvc: AutoSyncService,
     bus: EventBus,
     private readonly log: Logger
   ) {
-    console.log('🌳 TreeViewProvider: Constructor called');
     // subscribe to relevant events to refresh UI
     const events: EventKey[] = [
+      'WorkspaceLoaded',
       'ServerAdded',
-      'ServerUpdated',
+      'ServerUpdated', 
       'ServerDeleted',
       'DeploymentAdded',
       'DeploymentRemoved',
       'DeploymentStateChanged',
-      'ServerStateChanged'
+      'ServerStateChanged',
+      'ConfigChanged'
     ];
-    events.forEach(e => bus.on(e, () => this.refresh()));
-    console.log('🌳 TreeViewProvider: Event listeners registered');
+    events.forEach(e => {
+      bus.on(e, (data) => {
+        this.log.info(`🔄 TreeView refresh triggered by event: ${e}`);
+        this.refresh();
+      });
+    });
   }
 
   refresh(node?: TreeItem) {
@@ -70,26 +120,51 @@ export class ServerTreeViewProvider implements TreeDataProvider<TreeItem>, Dispo
 
   /* get children */
   async getChildren(element?: TreeItem): Promise<TreeItem[]> {
-    console.log('🌳 TreeViewProvider: getChildren called, element:', element ? element.label : 'ROOT');
     
     if (!element) {
-      const res = this.srvSvc.get(''); // dirty but we need list; re-query config directly
-      const all = this.srvSvc['cfgSvc'].loadAll(); // access internal; ok for provider
+      // Get servers directly from ServerService 
+      const all = await this.srvSvc.getAllServers();
       if (!all.ok) {
         console.error('❌ TreeView load error:', all.error);
         this.log.error('TreeView load error', all.error);
         return [];
       }
-      console.log('📊 TreeViewProvider: Found servers:', all.value.length);
-      const nodes = all.value.map(s => new ServerNode(s));
-      console.log('🌳 TreeViewProvider: Created server nodes:', nodes.map(n => n.label));
-      return nodes;
+      
+      // Update states from runtime info - this is critical for buttons visibility
+      const serversWithState = all.value.map((server: ServerConfig) => {
+        let currentState: ServerState = 'stopped'; // Default state
+        
+        try {
+          // Get real-time state from ServerService
+          const stateResult = this.srvSvc.getServerState(server.id);
+          if (stateResult.ok) {
+            currentState = stateResult.value;
+            console.log(`🔄 Server ${server.name} runtime state: ${currentState}`);
+          } else {
+            console.warn(`⚠️ Failed to get state for server ${server.name}: ${stateResult.error?.message}`);
+            console.warn(`   This means the server is not registered in ServerManager`);
+          }
+        } catch (error) {
+          console.warn(`⚠️ Error getting state for server ${server.name}:`, error);
+        }
+        
+        return { server, currentState };
+      });
+      
+      const serverNodes = serversWithState.map(({ server, currentState }) => new ServerNode(server, currentState));
+      console.log(`🌳 TreeView: Created ${serverNodes.length} server nodes with contexts:`, 
+        serverNodes.map(n => `${n.label} → ${n.contextValue}`));
+      
+      return serverNodes;
     }
 
     if (element instanceof ServerNode) {
-      console.log('🌳 TreeViewProvider: Getting deployments for server:', element.label);
-      const deployments = element.data.deployments.map(d => new DeploymentNode(element.data, d));
-      console.log('📦 TreeViewProvider: Found deployments:', deployments.map(d => d.label));
+      const deployments = element.data.deployments?.map(d => {
+        const state = this.depSvc.getDeploymentState(d.id || '');
+        const autoSyncEnabled = this.autoSyncSvc.isEnabled(element.data.id, d.id || '');
+        return new DeploymentNode(element.data, d, state, autoSyncEnabled);
+      }) || [];
+      console.log(`📦 TreeView: Server ${element.data.name} has ${deployments.length} deployments`);
       return deployments;
     }
     return [];

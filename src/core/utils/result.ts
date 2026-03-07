@@ -31,7 +31,7 @@ export async function fromPromise<T, E = unknown>(
 export const map = <T, U, E>(
   r: Result<T, E>,
   fn: (v: T) => U
-): Result<U, E> => (r.ok ? ok(fn(r.value)) : r);
+): Result<U, E> => (r.ok ? ok(fn(r.value)) : r as Err<E>);
 
 /**
  * Transform the error side.
@@ -39,7 +39,7 @@ export const map = <T, U, E>(
 export const mapErr = <T, E, F>(
   r: Result<T, E>,
   fn: (e: E) => F
-): Result<T, F> => (r.ok ? r : err(fn(r.error)));
+): Result<T, F> => (r.ok ? r as Ok<T> : err(fn((r as Err<E>).error)));
 
 /**
  * Chain computations that themselves return a `Result`.

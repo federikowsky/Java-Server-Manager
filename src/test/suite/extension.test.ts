@@ -1,17 +1,38 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
 
-suite('Extension Test Suite', () => {
-    vscode.window.showInformationMessage('Start all tests.');
+suite('Java Server Manager', () => {
+	test('activates and registers core commands', async () => {
+		const extension = vscode.extensions.all.find(
+			(candidate) => candidate.packageJSON?.name === 'java-server-manager'
+		);
 
-    test('Extension should be present', () => {
-        // Extension is loaded by VS Code test framework, so this test just verifies basic functionality
-        assert.ok(true, 'Extension test framework is working');
-    });
+		assert.ok(extension, 'Extension should be available in the test host');
 
-    test('Extension should activate', async () => {
-        // Test basic VS Code functionality since we don't have a published extension ID yet
-        assert.ok(vscode.window, 'VS Code window API is available');
-        assert.ok(vscode.commands, 'VS Code commands API is available');
-    });
+		await extension!.activate();
+
+		assert.strictEqual(extension!.isActive, true, 'Extension should activate successfully');
+
+		const registeredCommands = await vscode.commands.getCommands(true);
+		for (const commandId of [
+			'jsm.server.add',
+			'jsm.server.startRun',
+			'jsm.server.startDebug',
+			'jsm.server.stop',
+			'jsm.server.openLogs',
+			'jsm.server.syncAllDeployments',
+			'jsm.deployment.sync',
+			'jsm.view.refresh',
+			'jsm.diagnostics.copy'
+		]) {
+			assert.ok(
+				registeredCommands.includes(commandId),
+				`Expected command ${commandId} to be registered`
+			);
+		}
+
+		await assert.doesNotReject(async () => {
+			await vscode.commands.executeCommand('jsm.view.refresh');
+		});
+	});
 });

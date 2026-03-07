@@ -26,7 +26,7 @@ export class AutoSyncService {
    * Enable/disable autosync on a deployment.
    * Returns `enabled` if a watcher is created, `disabled` if removed.
    */
-  toggle(serverId: string, depId: string): Result<'enabled' | 'disabled', JsmError> {
+  async toggle(serverId: string, depId: string): Promise<Result<'enabled' | 'disabled', JsmError>> {
     const key = this.composeKey(serverId, depId);
 
     // Disable
@@ -39,10 +39,10 @@ export class AutoSyncService {
     }
 
     // Enable
-    const dep = this.depSvc.get(serverId, depId);
-    if (!dep.ok) return err(dep.error);
+    const depResult = await this.depSvc.getDeployment(serverId, depId);
+    if (!depResult.ok) return depResult as any;
 
-    const { sourcePath, ignoreGlobs = [] } = dep.value;
+    const { sourcePath, ignoreGlobs = [] } = depResult.value;
 
     try {
       const watcher = chokidar.watch(sourcePath, {
@@ -51,7 +51,7 @@ export class AutoSyncService {
       });
 
       const publish = () => {
-        this.depSvc.publishIncremental(serverId, depId).then(r => {
+        this.depSvc.publish(serverId, depId, 'incremental').then(r => {
           if (!r.ok) this.log.error(`AutoSync publish failed`, r.error);
         });
       };
@@ -68,6 +68,14 @@ export class AutoSyncService {
     } catch (e) {
       return err(new JsmError(ErrorCode.AUTOSYNC_TOGGLE_ERROR, 'Unable to create watcher', e));
     }
+  }
+
+  /**
+   * Check if AutoSync is enabled for a deployment
+   */
+  isEnabled(serverId: string, depId: string): boolean {
+    const key = this.composeKey(serverId, depId);
+    return this.map.has(key);
   }
 
   disposeAll(): void {

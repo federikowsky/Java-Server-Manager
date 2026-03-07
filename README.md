@@ -1,71 +1,61 @@
-# java-server-manager README
+# Java Server Manager
 
-This is the README for your extension "java-server-manager". After writing up a brief description, we recommend including the following sections.
+Java Server Manager is a VS Code extension for managing local Java application servers, currently Tomcat-first and plugin-oriented.
 
-## Features
+## Status
 
-Describe specific features of your extension including screenshots of your extension in action. Image paths are relative to this README file.
+The repository is an advanced MVP, not a production-ready release.
 
-For example if there is an image subfolder under your extension project workspace:
+- Implemented: Tomcat server CRUD, run/debug lifecycle, deployment management, template management, tree view, and webview forms.
+- Partial: autosync, logging UX, deployment orchestration, manifest/spec alignment.
+- Missing for production readiness: stable test pipeline, CI, diagnostics, stronger runtime hardening, and full spec reconciliation.
 
-\!\[feature X\]\(images/feature-x.png\)
-
-> Tip: Many popular extensions utilize animations. This is an excellent way to show off your extension! We recommend short, focused animations that are easy to follow.
+For the current assessment, see [PROJECT_TECHNICAL_AUDIT.md](./PROJECT_TECHNICAL_AUDIT.md).
 
 ## Requirements
 
-If you have any requirements or dependencies, add a section describing those and how to install and configure them.
+- VS Code 1.100.0 or newer
+- Node.js 18+
+- A local Java JDK
+- A local Tomcat installation for runtime testing
 
-## Extension Settings
+## Development
 
-Include if your extension adds any VS Code settings through the `contributes.configuration` extension point.
+```bash
+npm install
+npm run check-types
+npm run lint
+npm run compile
+```
 
-For example:
+To launch the extension in development, open the workspace in VS Code and press `F5`.
 
-This extension contributes the following settings:
+## Repository layout
 
-* `myExtension.enable`: Enable/disable this extension.
-* `myExtension.thing`: Set to `blah` to do something.
+- [src](./src): extension source code
+- [docs](./docs): canonical specifications and supporting project documents
+- [.github](./.github): shared Copilot customizations, agents, prompts, skills, and hooks
 
-## Known Issues
+## Key documents
 
-Calling out known issues can help limit users opening duplicate issues against your extension.
+- [docs/specs.md](./docs/specs.md): canonical frozen specification
+- [docs/specs-extended.md](./docs/specs-extended.md): extended supporting specification
+- [PROJECT_TECHNICAL_AUDIT.md](./PROJECT_TECHNICAL_AUDIT.md): implementation audit and production blocker baseline
+- [PROJECT_DOSSIER.md](./PROJECT_DOSSIER.md): architecture and status dossier
 
-## Release Notes
+## Current focus areas
 
-Users appreciate release notes as you update your extension.
+- close the spec-to-code gap
+- restore a working automated test path
+- harden Tomcat runtime and deployment behavior
+- improve diagnostics, logging, and release confidence
 
-### 1.0.0
+## Verification commands
 
-Initial release of ...
+```bash
+npm run check-types
+npm run lint
+npm test
+```
 
-### 1.0.1
-
-Fixed issue #.
-
-### 1.1.0
-
-Added features X, Y, and Z.
-
----
-
-## Following extension guidelines
-
-Ensure that you've read through the extensions guidelines and follow the best practices for creating your extension.
-
-* [Extension Guidelines](https://code.visualstudio.com/api/references/extension-guidelines)
-
-## Working with Markdown
-
-You can author your README using Visual Studio Code. Here are some useful editor keyboard shortcuts:
-
-* Split the editor (`Cmd+\` on macOS or `Ctrl+\` on Windows and Linux).
-* Toggle preview (`Shift+Cmd+V` on macOS or `Shift+Ctrl+V` on Windows and Linux).
-* Press `Ctrl+Space` (Windows, Linux, macOS) to see a list of Markdown snippets.
-
-## For more information
-
-* [Visual Studio Code's Markdown Support](http://code.visualstudio.com/docs/languages/markdown)
-* [Markdown Syntax Reference](https://help.github.com/articles/markdown-basics/)
-
-**Enjoy!**
+`npm test` is expected to remain the main readiness gate to fix before claiming production quality.

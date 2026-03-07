@@ -68,6 +68,14 @@ export class PidManager {
     }
   }
 
+  /** 
+   * Clean up a specific PID file (remove the file)
+   * Used by plugin architecture to clean up after server shutdown
+   */
+  async cleanup(fileName: string): Promise<void> {
+    await this.remove(fileName);
+  }
+
   private isProcessAlive(pid: number): boolean {
     try {
       process.kill(pid, 0);

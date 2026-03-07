@@ -1,0 +1,15 @@
+
+.vscode/*
+!.vscode/launch.json
+.cursor/
+node_modules/
+dist/
+out/
+coverage/
+jsm_pids/
+.vscode-test/
+data/
+
+
+.env
+.DS_Store

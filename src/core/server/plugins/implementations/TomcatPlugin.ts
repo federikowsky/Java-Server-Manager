@@ -179,7 +179,8 @@ export class TomcatPlugin implements IServerPlugin {
     try {
       this.log.info(`Deploying ${deployment.sourcePath} to ${config.name}`);
 
-      const webappsDir = path.join(config.serverHome, 'webapps');
+      const instanceBase = config.instancePath || config.serverHome;
+      const webappsDir = path.join(instanceBase, 'webapps');
       
       // Ensure webapps directory exists
       if (!fs.existsSync(webappsDir)) {
@@ -214,7 +215,8 @@ export class TomcatPlugin implements IServerPlugin {
     try {
       this.log.info(`Undeploying ${deploymentId} from ${config.name}`);
 
-      const webappsDir = path.join(config.serverHome, 'webapps');
+      const instanceBase = config.instancePath || config.serverHome;
+      const webappsDir = path.join(instanceBase, 'webapps');
       
       // Try to find and remove both WAR file and exploded directory
       const warPath = path.join(webappsDir, `${deploymentId}.war`);
@@ -347,7 +349,8 @@ export class TomcatPlugin implements IServerPlugin {
       return err(new JsmError(ErrorCode.CONFIG_INVALID, `Tomcat home directory not found: ${config.serverHome}`));
     }
 
-    const webappsDir = path.join(config.serverHome, 'webapps');
+    const instanceBase = config.instancePath || config.serverHome;
+    const webappsDir = path.join(instanceBase, 'webapps');
     if (!fs.existsSync(webappsDir)) {
       fs.mkdirSync(webappsDir, { recursive: true });
     }
@@ -360,9 +363,10 @@ export class TomcatPlugin implements IServerPlugin {
    */
   private buildEnvironment(config: ServerConfig, mode: ServerStartMode, debugPort?: number): NodeJS.ProcessEnv {
     const env = { ...process.env };
+    const instanceBase = config.instancePath || config.serverHome;
     
     env.CATALINA_HOME = config.serverHome;
-    env.CATALINA_BASE = config.serverHome;
+    env.CATALINA_BASE = instanceBase;
     env.JAVA_HOME = config.javaHome;
 
     if (config.vmArgs) {

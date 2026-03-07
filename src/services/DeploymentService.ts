@@ -251,7 +251,7 @@ export class DeploymentService {
    * Generate target path in webapps directory
    */
   private generateTargetPath(deploymentConfig: DeploymentConfig, server: ServerConfig): string {
-    const effectivePath = (server as any).instancePath || server.serverHome;
+    const effectivePath = server.instancePath || server.serverHome;
     const webappsDir = `${effectivePath}/webapps`;
     const deployName = deploymentConfig.deployName || this.extractNameFromPath(deploymentConfig.sourcePath);
     const type = deploymentConfig.type || this.detectTypeFromPath(deploymentConfig.sourcePath);

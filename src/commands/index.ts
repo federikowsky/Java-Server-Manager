@@ -8,7 +8,6 @@ import {
   commands,
   window,
   env,
-  Uri,
   workspace,
   QuickPickItem,
   QuickPickItemKind,
@@ -26,7 +25,7 @@ import { Result, err, ok } from '../core/utils/result';
 import { DeploymentConfig, ServerTemplate } from '../core/types/domain';
 import { ServerFormPanel } from '../ui/webviews/ServerFormPanel';
 import { DeploymentFormPanel } from '../ui/webviews/DeploymentFormPanel';
-import { LogService } from '../services/LogService';
+import { ServerLogChannel } from '../services/ServerLogChannel';
 import { TemplateManager } from '../core/templates/TemplateManager';
 import { PluginRegistry } from '../core/server/plugins/registry/PluginRegistry';
 import { EventBus } from '../core/EventBus';
@@ -36,22 +35,14 @@ const COMMAND_IDS = {
   REFRESH: 'jsm.view.refresh',
   ADD_SERVER: 'jsm.server.add',
   REMOVE_SERVER: 'jsm.server.remove',
-  OPEN_HOME: 'jsm.server.openHome',
-  OPEN_CONFIG: 'jsm.server.openConfig',
-  OPEN_OUTPUT: 'jsm.server.openOutput',
   OPEN_LOGS: 'jsm.server.openLogs',
   SYNC_ALL: 'jsm.server.syncAllDeployments',
   FULL_REDEPLOY_ALL: 'jsm.server.fullRedeployAll',
   COPY_DIAGNOSTICS: 'jsm.diagnostics.copy',
-  OPEN_DOCS: 'jsm.docs.open',
   DEPLOYMENT_SYNC: 'jsm.deployment.sync',
   DEPLOYMENT_FULL_REDEPLOY: 'jsm.deployment.fullRedeploy',
-  DEPLOYMENT_UNDEPLOY: 'jsm.deployment.undeploy',
-  DEPLOYMENT_OPEN_LOGS: 'jsm.deployment.openLogs'
+  DEPLOYMENT_UNDEPLOY: 'jsm.deployment.undeploy'
 } as const;
-const WORKSPACE_CONFIG_PATH = ['.vscode', 'servers.json'] as const;
-const DOCS_PATH = ['docs', 'specs.md'] as const;
-
 // ==================== UTILITIES ====================
 
 function showErr(e: unknown): void {
@@ -92,19 +83,6 @@ function validateDeploymentNode(node: DeploymentNode): { serverId: string; deplo
 
 function getPrimaryWorkspaceFolder(): string | null {
   return workspace.workspaceFolders?.[0]?.uri.fsPath ?? null;
-}
-
-async function openWorkspaceFile(pathSegments: readonly string[]): Promise<void> {
-  const workspaceFolder = getPrimaryWorkspaceFolder();
-  if (!workspaceFolder) {
-    throw new JsmError(ErrorCode.INVALID_CONFIGURATION, 'An open workspace is required');
-  }
-
-  await commands.executeCommand('vscode.open', Uri.file(path.join(workspaceFolder, ...pathSegments)));
-}
-
-function openOutputChannel(): void {
-  Logger.getInstance().getChannel().show(true);
 }
 
 async function copyDiagnostics(serverService: ServerService, serverId?: string): Promise<void> {
@@ -172,7 +150,7 @@ export function registerServerCommands(
   ctx: ExtensionContext,
   srv: ServerService,
   dep: DeploymentService,
-  logSvc?: LogService
+  serverLogChannel?: ServerLogChannel
 ) {
   registerMany(ctx, [COMMAND_IDS.ADD_SERVER], async () => {
     try {
@@ -316,21 +294,6 @@ export function registerServerCommands(
       }
     }),
 
-    commands.registerCommand(COMMAND_IDS.OPEN_HOME, async (node: ServerNode) => {
-      const serverHome = node?.data?.serverHome;
-      if (!serverHome) {
-        showErr(new JsmError(ErrorCode.INVALID_CONFIGURATION, 'No server home directory'));
-        return;
-      }
-
-      try {
-        const uri = Uri.file(serverHome);
-        await commands.executeCommand('revealFileInOS', uri);
-      } catch (error) {
-        showErr(error);
-      }
-    }),
-
     commands.registerCommand(COMMAND_IDS.SYNC_ALL, async (node: ServerNode) => {
       const serverId = validateServerNode(node);
       if (!serverId) return;
@@ -407,12 +370,15 @@ export function registerServerCommands(
       if (!serverId) return;
 
       try {
-        if (!logSvc) {
-          showErr(new JsmError(ErrorCode.PLUGIN_ERROR, 'Log service not available'));
+        if (!serverLogChannel) {
+          showErr(new JsmError(ErrorCode.PLUGIN_ERROR, 'Log channel not available'));
           return;
         }
 
-        await logSvc.openServerLog(serverId);
+        const shown = serverLogChannel.show(serverId);
+        if (!shown) {
+          showInfo('Start the server to see live logs');
+        }
       } catch (error) {
         showErr(error);
       }
@@ -432,26 +398,6 @@ export function registerServerCommands(
       }
     }),
 
-    commands.registerCommand(COMMAND_IDS.OPEN_OUTPUT, async () => {
-      openOutputChannel();
-    }),
-
-    commands.registerCommand(COMMAND_IDS.OPEN_CONFIG, async () => {
-      try {
-        await openWorkspaceFile(WORKSPACE_CONFIG_PATH);
-      } catch (error) {
-        showErr(error);
-      }
-    }),
-
-    commands.registerCommand(COMMAND_IDS.OPEN_DOCS, async () => {
-      try {
-        await openWorkspaceFile(DOCS_PATH);
-      } catch (error) {
-        showErr(error);
-      }
-    }),
-
     commands.registerCommand(COMMAND_IDS.COPY_DIAGNOSTICS, async (node?: ServerNode) => {
       try {
         await copyDiagnostics(srv, node?.data?.id);
@@ -466,8 +412,7 @@ export function registerServerCommands(
 export function registerDeploymentCommands(
   ctx: ExtensionContext,
   dep: DeploymentService,
-  sync: AutoSyncService,
-  logSvc?: LogService
+  sync: AutoSyncService
 ) {
   ctx.subscriptions.push(
     commands.registerCommand('jsm.deployment.add', async (node: ServerNode) => {
@@ -623,21 +568,6 @@ export function registerDeploymentCommands(
       }
     }),
 
-    commands.registerCommand(COMMAND_IDS.DEPLOYMENT_OPEN_LOGS, async (node: DeploymentNode) => {
-      try {
-        const serverId = node?.parent?.id;
-        if (!serverId) {
-          throw new JsmError(ErrorCode.INVALID_CONFIGURATION, 'No deployment server selected');
-        }
-        if (!logSvc) {
-          throw new JsmError(ErrorCode.PLUGIN_ERROR, 'Log service not available');
-        }
-
-        await logSvc.openServerLog(serverId);
-      } catch (error) {
-        showErr(error);
-      }
-    })
   );
 }
 

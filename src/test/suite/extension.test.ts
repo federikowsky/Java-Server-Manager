@@ -19,11 +19,10 @@ suite('Java Server Manager', () => {
 			'jsm.server.startRun',
 			'jsm.server.startDebug',
 			'jsm.server.stop',
-			'jsm.server.openOutput',
+			'jsm.server.openLogs',
 			'jsm.server.syncAllDeployments',
 			'jsm.deployment.sync',
 			'jsm.view.refresh',
-			'jsm.docs.open',
 			'jsm.diagnostics.copy'
 		]) {
 			assert.ok(

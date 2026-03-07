@@ -25,7 +25,7 @@ import { PluginAdapter } from './core/server/PluginAdapter';
 import { ServerService } from './services/ServerService';
 import { DeploymentService } from './services/DeploymentService';
 import { AutoSyncService } from './services/AutoSyncService';
-import { LogService } from './services/LogService';
+import { ServerLogChannel } from './services/ServerLogChannel';
 
 /* UI */
 import { ServerTreeViewProvider } from './ui/views/ServerTreeViewProvider';
@@ -40,7 +40,8 @@ const singleton = {
   logger: Logger.getInstance(),
   bus: EventBus.getInstance(),
   hooks: HookManager.getInstance(),
-  configManager: null as ConfigManager | null
+  configManager: null as ConfigManager | null,
+  serverLogChannel: null as ServerLogChannel | null
 };
 
 export async function activate(ctx: ExtensionContext): Promise<void> {
@@ -116,15 +117,36 @@ export async function activate(ctx: ExtensionContext): Promise<void> {
       return;
     }
     
-    const logSvc = new LogService(singleton.configManager);
-    
     singleton.logger.info('Modern services initialized successfully');
 
     const syncSvc = new AutoSyncService(depSvc);
 
+    const serverLogChannel = new ServerLogChannel();
+    singleton.serverLogChannel = serverLogChannel;
+
+    // Wire per-server live log tailing to server state changes
+    ctx.subscriptions.push(
+      singleton.bus.on('ServerStateChanged', async ({ id, state }) => {
+        if (state === 'running') {
+          const configResult = await singleton.configManager!.getServer(id);
+          if (configResult.ok) {
+            // attach is not awaited — channel is created synchronously inside
+            // before the first await so show() works immediately after
+            serverLogChannel.attach(configResult.value);
+            serverLogChannel.show(id);
+          }
+        } else if (state === 'stopped' || state === 'error') {
+          serverLogChannel.detach(id);
+        }
+      }),
+      singleton.bus.on('ServerDeleted', ({ id }) => {
+        serverLogChannel.dispose(id);
+      })
+    );
+
     /* Register VSCode commands */
-    registerServerCommands(ctx, srvSvc, depSvc, logSvc);
-    registerDeploymentCommands(ctx, depSvc, syncSvc, logSvc);
+    registerServerCommands(ctx, srvSvc, depSvc, serverLogChannel);
+    registerDeploymentCommands(ctx, depSvc, syncSvc);
     registerTemplateCommands(ctx, srvSvc);
 
     /* Tree-view */
@@ -162,6 +184,12 @@ export async function deactivate(): Promise<void> {
   singleton.logger.info('Deactivating JSM…');
   
   try {
+    // Dispose per-server log channels
+    if (singleton.serverLogChannel) {
+      singleton.serverLogChannel.disposeAll();
+      singleton.serverLogChannel = null;
+    }
+
     // Dispose configuration manager
     if (singleton.configManager) {
       await singleton.configManager.dispose();

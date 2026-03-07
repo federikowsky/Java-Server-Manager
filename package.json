@@ -75,21 +75,6 @@
         "icon": "$(trash)"
       },
       {
-        "command": "jsm.server.openHome",
-        "title": "Open Server Home",
-        "icon": "$(folder-opened)"
-      },
-      {
-        "command": "jsm.server.openConfig",
-        "title": "Open Server Config",
-        "icon": "$(settings-gear)"
-      },
-      {
-        "command": "jsm.server.openOutput",
-        "title": "Open Output",
-        "icon": "$(output)"
-      },
-      {
         "command": "jsm.diagnostics.copy",
         "title": "Copy Diagnostics",
         "icon": "$(copy)"
@@ -130,19 +115,9 @@
         "icon": "$(sync)"
       },
       {
-        "command": "jsm.deployment.openLogs",
-        "title": "Open Deployment Logs",
-        "icon": "$(file)"
-      },
-      {
         "command": "jsm.view.refresh",
         "title": "Refresh",
         "icon": "$(refresh)"
-      },
-      {
-        "command": "jsm.docs.open",
-        "title": "Open Docs",
-        "icon": "$(book)"
       }
     ],
     "menus": {
@@ -156,11 +131,6 @@
           "command": "jsm.view.refresh",
           "when": "view == javaServerManagerView",
           "group": "navigation@2"
-        },
-        {
-          "command": "jsm.docs.open",
-          "when": "view == javaServerManagerView",
-          "group": "navigation@3"
         }
       ],
       "view/item/context": [
@@ -180,11 +150,6 @@
           "group": "inline@3"
         },
         {
-          "command": "jsm.server.openOutput",
-          "when": "view == javaServerManagerView && viewItem == jsm.server.stopped",
-          "group": "inline@4"
-        },
-        {
           "command": "jsm.server.stop",
           "when": "view == javaServerManagerView && viewItem == jsm.server.running",
           "group": "inline@1"
@@ -200,16 +165,7 @@
           "group": "inline@3"
         },
         {
-          "command": "jsm.server.openOutput",
-          "when": "view == javaServerManagerView && viewItem == jsm.server.running",
-          "group": "inline@4"
-        },
-        {
-          "command": "jsm.server.openOutput",
-          "when": "view == javaServerManagerView && viewItem =~ /jsm\\.server\\.(starting|stopping)/",
-          "group": "inline@1"
-        },
-        {
+
           "command": "jsm.server.startRun",
           "when": "view == javaServerManagerView && viewItem == jsm.server.error",
           "group": "inline@1"
@@ -225,11 +181,7 @@
           "group": "inline@3"
         },
         {
-          "command": "jsm.server.openOutput",
-          "when": "view == javaServerManagerView && viewItem == jsm.server.error",
-          "group": "inline@4"
-        },
-        {
+
           "command": "jsm.server.startRun",
           "when": "view == javaServerManagerView && viewItem =~ /jsm\\.server\\..*/",
           "group": "lifecycle@1"
@@ -280,26 +232,13 @@
           "group": "manage@2"
         },
         {
-          "command": "jsm.server.openConfig",
-          "when": "view == javaServerManagerView && viewItem =~ /jsm\\.server\\..*/",
-          "group": "manage@3"
-        },
-        {
-          "command": "jsm.server.openHome",
-          "when": "view == javaServerManagerView && viewItem =~ /jsm\\.server\\..*/",
-          "group": "manage@4"
-        },
-        {
+
           "command": "jsm.server.openLogs",
           "when": "view == javaServerManagerView && viewItem =~ /jsm\\.server\\..*/",
           "group": "troubleshooting@1"
         },
         {
-          "command": "jsm.server.openOutput",
-          "when": "view == javaServerManagerView && viewItem =~ /jsm\\.server\\..*/",
-          "group": "troubleshooting@2"
-        },
-        {
+
           "command": "jsm.diagnostics.copy",
           "when": "view == javaServerManagerView && viewItem =~ /jsm\\.server\\..*/",
           "group": "troubleshooting@3"
@@ -348,11 +287,6 @@
           "command": "jsm.deployment.remove",
           "when": "view == javaServerManagerView && viewItem =~ /jsm\\.deployment\\..*/",
           "group": "manage@2"
-        },
-        {
-          "command": "jsm.deployment.openLogs",
-          "when": "view == javaServerManagerView && viewItem =~ /jsm\\.deployment\\..*/",
-          "group": "troubleshooting@1"
         }
       ]
     },

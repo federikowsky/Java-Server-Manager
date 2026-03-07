@@ -632,6 +632,13 @@ async function showAddServerMenu(service: ServerService): Promise<void> {
     };
   }));
 
+  // Always offer a path to template management at the bottom
+  items.push({ label: '', kind: QuickPickItemKind.Separator });
+  items.push({
+    label: '$(settings-gear) Manage Templates',
+    description: 'Add, remove, or view registered templates'
+  });
+
   const selection = await window.showQuickPick(items, {
     title: 'Add Server from Template',
     placeHolder: 'Select a template to create server instance',
@@ -639,6 +646,11 @@ async function showAddServerMenu(service: ServerService): Promise<void> {
   });
 
   if (!selection) return;
+
+  if (selection.label.includes('Manage Templates')) {
+    await showTemplateManagementMenu(service);
+    return;
+  }
 
   // Find selected template and create instance
   const template = allTemplates.find((t: ServerTemplate) => t.name === selection.label);

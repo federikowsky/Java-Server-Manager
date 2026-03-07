@@ -102,7 +102,7 @@ async function copyDiagnostics(serverService: ServerService, serverId?: string):
     `Configured servers: ${allServers.length}`,
     selectedServer ? `Server: ${selectedServer.name} (${selectedServer.id})` : 'Server: all',
     selectedServer ? `Host: ${selectedServer.host}:${selectedServer.port}` : undefined,
-    selectedServer ? `Home: ${selectedServer.serverHome}` : undefined,
+    selectedServer ? `Home: ${selectedServer.homePath}` : undefined,
     selectedServer ? `Deployments: ${selectedServer.deployments.length}` : undefined,
     selectedState?.ok ? `State: ${selectedState.value}` : undefined
   ].filter(Boolean).join('\n');
@@ -618,16 +618,16 @@ async function showAddServerMenu(service: ServerService): Promise<void> {
   // Show available templates only
   const items: QuickPickItem[] = await Promise.all(allTemplates.map(async (template: ServerTemplate) => {
     // Detect server type from template's default config
-    const serverHome = template.defaultConfig.serverHome;
+    const homePath = template.defaultConfig.homePath;
     let detectedType = 'Unknown';
-    if (serverHome) {
-      const result = await PluginRegistry.getInstance().detectServerType(serverHome);
+    if (homePath) {
+      const result = await PluginRegistry.getInstance().detectServerType(homePath);
       detectedType = result.ok ? result.value : 'Unknown';
     }
     return {
       label: template.name,
       description: detectedType,
-      detail: `Create instance from: ${serverHome || 'Unknown'}`,
+      detail: `Create instance from: ${homePath || 'Unknown'}`,
       iconPath: new ThemeIcon('server')
     };
   }));
@@ -673,10 +673,10 @@ async function showTemplateManagementMenu(service: ServerService): Promise<void>
   if (allTemplates.length > 0) {
     for (const template of allTemplates) {
       // Detect server type from template's default config  
-      const serverHome = template.defaultConfig.serverHome;
+      const homePath = template.defaultConfig.homePath;
       let detectedType = 'Unknown';
-      if (serverHome) {
-        const result = await PluginRegistry.getInstance().detectServerType(serverHome);
+      if (homePath) {
+        const result = await PluginRegistry.getInstance().detectServerType(homePath);
         detectedType = result.ok ? result.value : 'Unknown';
       }
       items.push({
@@ -809,7 +809,7 @@ async function showAddTemplateWorkflow(service: ServerService): Promise<void> {
     name: templateName.trim(),
     defaultConfig: {
       ...defaultConfigResult.value,
-      serverHome: serverPath,
+      homePath: serverPath,
       javaHome: process.env.JAVA_HOME || '',
       host: 'localhost',
       port: serverType === 'tomcat' ? 8080 : 8081,
@@ -851,16 +851,16 @@ async function showAddServerFromTemplateMenu(service: ServerService): Promise<vo
   // Show available templates
   const items: QuickPickItem[] = await Promise.all(allTemplates.map(async (template: ServerTemplate) => {
     // Detect server type from template's default config
-    const serverHome = template.defaultConfig.serverHome;
+    const homePath = template.defaultConfig.homePath;
     let detectedType = 'Unknown';
-    if (serverHome) {
-      const result = await PluginRegistry.getInstance().detectServerType(serverHome);
+    if (homePath) {
+      const result = await PluginRegistry.getInstance().detectServerType(homePath);
       detectedType = result.ok ? result.value : 'Unknown';
     }
     return {
       label: template.name,
       description: detectedType,
-      detail: `Create instance from: ${serverHome || 'Unknown'}`,
+      detail: `Create instance from: ${homePath || 'Unknown'}`,
       iconPath: new ThemeIcon('server')
     };
   }));

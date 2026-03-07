@@ -110,8 +110,8 @@ export class DeploymentService {
     if (!serverResult.ok) return serverResult as any;
     if (!deploymentResult.ok) return deploymentResult as any;
 
-    // Detect server type from serverHome since type field was removed
-    const typeResult = await this.pluginRegistry.detectServerType(serverResult.value.serverHome);
+    // Detect server type from homePath
+    const typeResult = await this.pluginRegistry.detectServerType(serverResult.value.homePath);
     if (!typeResult.ok) return typeResult as any;
 
     const pluginResult = this.pluginRegistry.get(typeResult.value);
@@ -141,8 +141,8 @@ export class DeploymentService {
     const serverResult = await this.getServerConfig(serverId);
     if (!serverResult.ok) return serverResult as any;
 
-    // Detect server type from serverHome since type field was removed
-    const typeResult = await this.pluginRegistry.detectServerType(serverResult.value.serverHome);
+    // Detect server type from homePath
+    const typeResult = await this.pluginRegistry.detectServerType(serverResult.value.homePath);
     if (!typeResult.ok) return typeResult as any;
 
     const pluginResult = this.pluginRegistry.get(typeResult.value);
@@ -251,7 +251,7 @@ export class DeploymentService {
    * Generate target path in webapps directory
    */
   private generateTargetPath(deploymentConfig: DeploymentConfig, server: ServerConfig): string {
-    const effectivePath = server.instancePath || server.serverHome;
+    const effectivePath = server.instancePath || server.homePath;
     const webappsDir = `${effectivePath}/webapps`;
     const deployName = deploymentConfig.deployName || this.extractNameFromPath(deploymentConfig.sourcePath);
     const type = deploymentConfig.type || this.detectTypeFromPath(deploymentConfig.sourcePath);

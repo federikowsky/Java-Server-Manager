@@ -194,11 +194,11 @@ export class ServerLogChannel {
     return undefined;
   }
 
-  async resolveLogPath(config: Pick<ServerConfig, 'serverHome' | 'logPath' | 'instancePath'>): Promise<string | undefined> {
+  async resolveLogPath(config: Pick<ServerConfig, 'homePath' | 'logPath' | 'instancePath'>): Promise<string | undefined> {
     const configured = config.logPath?.trim();
     if (configured && (await this.exists(configured))) return configured;
 
-    const base = config.instancePath || config.serverHome;
+    const base = config.instancePath || config.homePath;
     const logsDir = path.join(base, 'logs');
     if (!(await this.exists(logsDir))) return undefined;
 

@@ -47,13 +47,13 @@ export class LogService {
     }
   }
 
-  private async resolveLogPath(server: { serverHome: string; logPath?: string; instancePath?: string }): Promise<string | undefined> {
+  private async resolveLogPath(server: { homePath: string; logPath?: string; instancePath?: string }): Promise<string | undefined> {
     const configuredLogPath = server.logPath?.trim();
     if (configuredLogPath && await this.pathExists(configuredLogPath)) {
       return configuredLogPath;
     }
 
-    const baseDir = server.instancePath || server.serverHome;
+    const baseDir = server.instancePath || server.homePath;
     const logsDir = path.join(baseDir, 'logs');
     if (!(await this.pathExists(logsDir))) {
       return undefined;

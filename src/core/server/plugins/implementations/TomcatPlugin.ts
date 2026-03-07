@@ -47,7 +47,7 @@ export class TomcatPlugin implements IServerPlugin {
       const scriptPath = this.getStartupScript(config);
       const process = spawn(scriptPath, [], {
         env,
-        cwd: config.serverHome,
+        cwd: config.homePath,
         detached: false,
         stdio: ['ignore', 'pipe', 'pipe']
       });
@@ -179,7 +179,7 @@ export class TomcatPlugin implements IServerPlugin {
     try {
       this.log.info(`Deploying ${deployment.sourcePath} to ${config.name}`);
 
-      const instanceBase = config.instancePath || config.serverHome;
+      const instanceBase = config.instancePath || config.homePath;
       const webappsDir = path.join(instanceBase, 'webapps');
       
       // Ensure webapps directory exists
@@ -215,7 +215,7 @@ export class TomcatPlugin implements IServerPlugin {
     try {
       this.log.info(`Undeploying ${deploymentId} from ${config.name}`);
 
-      const instanceBase = config.instancePath || config.serverHome;
+      const instanceBase = config.instancePath || config.homePath;
       const webappsDir = path.join(instanceBase, 'webapps');
       
       // Try to find and remove both WAR file and exploded directory
@@ -259,13 +259,13 @@ export class TomcatPlugin implements IServerPlugin {
   /**
    * Detect if the given path is a valid Tomcat installation
    */
-  async detect(serverHome: string): Promise<Result<boolean, JsmError>> {
+  async detect(homePath: string): Promise<Result<boolean, JsmError>> {
     try {
       const requiredPaths = [
-        path.join(serverHome, 'bin', 'catalina.sh'),
-        path.join(serverHome, 'bin', 'catalina.bat'),
-        path.join(serverHome, 'lib', 'catalina.jar'),
-        path.join(serverHome, 'webapps')
+        path.join(homePath, 'bin', 'catalina.sh'),
+        path.join(homePath, 'bin', 'catalina.bat'),
+        path.join(homePath, 'lib', 'catalina.jar'),
+        path.join(homePath, 'webapps')
       ];
 
       // Check if at least one startup script and catalina.jar exist
@@ -345,11 +345,11 @@ export class TomcatPlugin implements IServerPlugin {
    * Validate Tomcat installation
    */
   private async validateTomcatInstallation(config: ServerConfig): Promise<Result<void, JsmError>> {
-    if (!fs.existsSync(config.serverHome)) {
-      return err(new JsmError(ErrorCode.CONFIG_INVALID, `Tomcat home directory not found: ${config.serverHome}`));
+    if (!fs.existsSync(config.homePath)) {
+      return err(new JsmError(ErrorCode.CONFIG_INVALID, `Tomcat home directory not found: ${config.homePath}`));
     }
 
-    const instanceBase = config.instancePath || config.serverHome;
+    const instanceBase = config.instancePath || config.homePath;
     const webappsDir = path.join(instanceBase, 'webapps');
     if (!fs.existsSync(webappsDir)) {
       fs.mkdirSync(webappsDir, { recursive: true });
@@ -363,9 +363,9 @@ export class TomcatPlugin implements IServerPlugin {
    */
   private buildEnvironment(config: ServerConfig, mode: ServerStartMode, debugPort?: number): NodeJS.ProcessEnv {
     const env = { ...process.env };
-    const instanceBase = config.instancePath || config.serverHome;
+    const instanceBase = config.instancePath || config.homePath;
     
-    env.CATALINA_HOME = config.serverHome;
+    env.CATALINA_HOME = config.homePath;
     env.CATALINA_BASE = instanceBase;
     env.JAVA_HOME = config.javaHome;
 
@@ -391,7 +391,7 @@ export class TomcatPlugin implements IServerPlugin {
    */
   private getStartupScript(config: ServerConfig): string {
     const scriptName = process.platform === 'win32' ? 'startup.bat' : 'startup.sh';
-    return path.join(config.serverHome, 'bin', scriptName);
+    return path.join(config.homePath, 'bin', scriptName);
   }
 
   /**
@@ -429,7 +429,7 @@ export class TomcatPlugin implements IServerPlugin {
     try {
       const env = this.buildEnvironment(config, 'run');
       const scriptName = process.platform === 'win32' ? 'shutdown.bat' : 'shutdown.sh';
-      const scriptPath = path.join(config.serverHome, 'bin', scriptName);
+      const scriptPath = path.join(config.homePath, 'bin', scriptName);
 
       if (!fs.existsSync(scriptPath)) {
         return err(new JsmError(ErrorCode.SERVER_SHUTDOWN_ERROR, `Shutdown script not found: ${scriptPath}`));
@@ -438,7 +438,7 @@ export class TomcatPlugin implements IServerPlugin {
       return new Promise((resolve) => {
         const shutdownProcess = spawn(scriptPath, [], {
           env,
-          cwd: config.serverHome
+          cwd: config.homePath
         });
 
         shutdownProcess.on('exit', (code) => {

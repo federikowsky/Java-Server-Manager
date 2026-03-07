@@ -59,7 +59,7 @@ export class ServerNode extends TreeItem {
     
     // For now, show a simplified tooltip without server type detection
     // Server type detection is async and TreeItem constructor can't be async
-    this.tooltip = `Server @ ${data.host}:${data.port} (${currentState})${data.instancePath ? '\nInstance Path: ' + data.instancePath : ''}`;
+    this.tooltip = `Server @ ${data.host}:${data.port} (${currentState})${data.instancePath ? '\nInstance Path: ' + data.instancePath : (data.homePath ? '\nHome: ' + data.homePath : '')}`;
     
     // Debug logging for context value assignment
     console.log(`🏷️ ServerNode created: ${data.name} | state: ${currentState} | contextValue: ${this.contextValue}`);

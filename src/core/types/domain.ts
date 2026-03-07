@@ -14,12 +14,32 @@ export interface DebugSettings {
   attachDelay?: number;            // ms prima di auto-attach
 }
 
+/* ───────────── Plugin-specific config ───── */
+
+/**
+ * Tomcat-specific configuration. Stored under ServerConfig.pluginConfig when type === 'tomcat'.
+ * Contains options with no generic equivalent across servlet containers.
+ */
+export interface TomcatPluginConfig {
+  type         : 'tomcat';
+  shutdownPort : number;           // Tomcat SHUTDOWN command port (default: 8005)
+  disableAjp   : boolean;          // Remove AJP connector from server.xml on instancePath init (default: true)
+}
+
+/**
+ * Discriminated union of all plugin-specific config blocks.
+ * Add a new member here when a new plugin is introduced (e.g. JettyPluginConfig).
+ * `ServerConfig` only ever references this union — never a concrete plugin type.
+ */
+export type PluginConfig = TomcatPluginConfig; // | JettyPluginConfig | WildflyPluginConfig
+
 /* ───────────── Server config ────────────── */
 export interface ServerConfig {
   id          : string;
   name        : string;
   javaHome    : string;
-  serverHome  : string;
+  /** Absolute path to server installation (generic; plugin maps to its env var, e.g. CATALINA_HOME) */
+  homePath    : string;
   host        : string;
   port        : number;
   debug       : DebugSettings;
@@ -41,9 +61,14 @@ export interface ServerConfig {
 
   deployments    : DeploymentConfig[];
   
-  /* Additional fields for compatibility */
-  env?           : string;         // Legacy environment variables as string
-  instancePath?  : string;         // Path for instance-based servers
+  /* Generic instance directory (plugin maps to its env var, e.g. CATALINA_BASE) */
+  instancePath?  : string;
+
+  /* Plugin-specific extensions — discriminated union, grows as plugins are added */
+  pluginConfig?  : PluginConfig;
+
+  /* Legacy environment variables as string */
+  env?           : string;
 }
 
 /* ───────────── Deployment config ────────── */

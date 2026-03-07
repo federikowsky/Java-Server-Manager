@@ -57,18 +57,18 @@ export class PluginAdapter {
   /**
    * Detect server type with caching
    */
-  async detectServerType(serverHome: string): Promise<Result<ServerType, JsmError>> {
+  async detectServerType(homePath: string): Promise<Result<ServerType, JsmError>> {
     // Check cache first
-    const cached = this.detectionCache.get(serverHome);
+    const cached = this.detectionCache.get(homePath);
     if (cached) {
       return ok(cached);
     }
 
     // Detect and cache result
-    const detectionResult = await this.registry.detectServerType(serverHome);
+    const detectionResult = await this.registry.detectServerType(homePath);
     if (detectionResult.ok) {
-      this.detectionCache.set(serverHome, detectionResult.value as ServerType);
-      this.log.debug(`Cached detection result for ${serverHome}: ${detectionResult.value}`);
+      this.detectionCache.set(homePath, detectionResult.value as ServerType);
+      this.log.debug(`Cached detection result for ${homePath}: ${detectionResult.value}`);
     }
 
     return detectionResult as any;

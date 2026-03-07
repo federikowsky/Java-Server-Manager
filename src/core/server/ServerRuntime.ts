@@ -66,8 +66,8 @@ export class ServerRuntime {
     this.updateState('starting');
 
     try {
-      // Detect server type from serverHome
-      const typeResult = await this.pluginAdapter.detectServerType(this.config.serverHome);
+      // Detect server type from homePath
+      const typeResult = await this.pluginAdapter.detectServerType(this.config.homePath);
       if (!typeResult.ok) {
         this.updateState('error');
         return err(new JsmError(ErrorCode.SERVER_TYPE_DETECTION_ERROR, 'Failed to detect server type'));
@@ -108,8 +108,8 @@ export class ServerRuntime {
     this.updateState('stopping');
 
     try {
-      // Detect server type from serverHome
-      const typeResult = await this.pluginAdapter.detectServerType(this.config.serverHome);
+      // Detect server type from homePath
+      const typeResult = await this.pluginAdapter.detectServerType(this.config.homePath);
       if (!typeResult.ok) {
         this.updateState('error');
         return err(new JsmError(ErrorCode.SERVER_TYPE_DETECTION_ERROR, 'Failed to detect server type'));
@@ -168,8 +168,8 @@ export class ServerRuntime {
     this.log.info(`Deploying ${deployName} to ${this.config.name}`);
 
     try {
-      // Detect server type from serverHome
-      const typeResult = await this.pluginAdapter.detectServerType(this.config.serverHome);
+      // Detect server type from homePath
+      const typeResult = await this.pluginAdapter.detectServerType(this.config.homePath);
       if (!typeResult.ok) {
         return err(new JsmError(ErrorCode.SERVER_TYPE_DETECTION_ERROR, 'Failed to detect server type'));
       }
@@ -200,8 +200,8 @@ export class ServerRuntime {
     this.log.info(`Undeploying ${deploymentId} from ${this.config.name}`);
 
     try {
-      // Detect server type from serverHome
-      const typeResult = await this.pluginAdapter.detectServerType(this.config.serverHome);
+      // Detect server type from homePath
+      const typeResult = await this.pluginAdapter.detectServerType(this.config.homePath);
       if (!typeResult.ok) {
         return err(new JsmError(ErrorCode.SERVER_TYPE_DETECTION_ERROR, 'Failed to detect server type'));
       }
@@ -230,8 +230,8 @@ export class ServerRuntime {
    */
   async healthCheck(): Promise<Result<boolean, JsmError>> {
     try {
-      // Detect server type from serverHome
-      const typeResult = await this.pluginAdapter.detectServerType(this.config.serverHome);
+      // Detect server type from homePath
+      const typeResult = await this.pluginAdapter.detectServerType(this.config.homePath);
       if (!typeResult.ok) {
         return err(new JsmError(ErrorCode.SERVER_TYPE_DETECTION_ERROR, 'Failed to detect server type'));
       }

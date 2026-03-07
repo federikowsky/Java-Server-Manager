@@ -54,9 +54,7 @@ export class HookManager {
       const fn = impl[key];
       if (typeof fn === 'function') {
         try {
-          // const fn = impl[key] as (...a:any[]) => unknown;
-          // await fn(...args as any);
-          (await fn as any)(...args);
+          await (fn as any)(...args);
         } catch (err) {
           this.logger.error(`hook "${name}" failed on ${String(key)}`);
           // fallback to onError hook if present

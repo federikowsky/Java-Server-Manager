@@ -35,6 +35,6 @@ export interface IServerPlugin {
   getDefaultConfig(): Partial<ServerConfig>;
 
   // Detection & cleanup
-  detect(serverHome: string): Promise<Result<boolean, JsmError>>;
+  detect(homePath: string): Promise<Result<boolean, JsmError>>;
   dispose(): Promise<void>;
 }

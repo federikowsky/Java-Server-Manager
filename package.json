@@ -131,6 +131,11 @@
           "command": "jsm.view.refresh",
           "when": "view == javaServerManagerView",
           "group": "navigation@2"
+        },
+        {
+          "command": "jsm.templates.manage",
+          "when": "view == javaServerManagerView",
+          "group": "navigation@3"
         }
       ],
       "view/item/context": [
@@ -145,11 +150,6 @@
           "group": "inline@2"
         },
         {
-          "command": "jsm.server.edit",
-          "when": "view == javaServerManagerView && viewItem == jsm.server.stopped",
-          "group": "inline@3"
-        },
-        {
           "command": "jsm.server.stop",
           "when": "view == javaServerManagerView && viewItem == jsm.server.running",
           "group": "inline@1"
@@ -174,42 +174,6 @@
           "command": "jsm.server.startDebug",
           "when": "view == javaServerManagerView && viewItem == jsm.server.error",
           "group": "inline@2"
-        },
-        {
-          "command": "jsm.server.edit",
-          "when": "view == javaServerManagerView && viewItem == jsm.server.error",
-          "group": "inline@3"
-        },
-        {
-
-          "command": "jsm.server.startRun",
-          "when": "view == javaServerManagerView && viewItem =~ /jsm\\.server\\..*/",
-          "group": "lifecycle@1"
-        },
-        {
-          "command": "jsm.server.startDebug",
-          "when": "view == javaServerManagerView && viewItem =~ /jsm\\.server\\..*/",
-          "group": "lifecycle@2"
-        },
-        {
-          "command": "jsm.server.stop",
-          "when": "view == javaServerManagerView && viewItem =~ /jsm\\.server\\..*/",
-          "group": "lifecycle@3"
-        },
-        {
-          "command": "jsm.server.restartRun",
-          "when": "view == javaServerManagerView && viewItem =~ /jsm\\.server\\..*/",
-          "group": "lifecycle@4"
-        },
-        {
-          "command": "jsm.server.restartDebug",
-          "when": "view == javaServerManagerView && viewItem =~ /jsm\\.server\\..*/",
-          "group": "lifecycle@5"
-        },
-        {
-          "command": "jsm.view.refresh",
-          "when": "view == javaServerManagerView && viewItem =~ /jsm\\.server\\..*/",
-          "group": "lifecycle@6"
         },
         {
           "command": "jsm.server.syncAllDeployments",
@@ -221,8 +185,11 @@
           "when": "view == javaServerManagerView && viewItem =~ /jsm\\.server\\..*/",
           "group": "deploy@2"
         },
-        {
-          "command": "jsm.server.edit",
+        {          "command": "jsm.deployment.add",
+          "when": "view == javaServerManagerView && viewItem =~ /jsm\\.server\\..*/",
+          "group": "deploy@3"
+        },
+        {          "command": "jsm.server.edit",
           "when": "view == javaServerManagerView && viewItem =~ /jsm\\.server\\..*/",
           "group": "manage@1"
         },
@@ -248,22 +215,9 @@
           "when": "view == javaServerManagerView && viewItem =~ /jsm\\.deployment\\..*/",
           "group": "inline@1"
         },
+
         {
-          "command": "jsm.deployment.undeploy",
-          "when": "view == javaServerManagerView && viewItem =~ /jsm\\.deployment\\..*/",
-          "group": "inline@2"
-        },
-        {
-          "command": "jsm.deployment.edit",
-          "when": "view == javaServerManagerView && viewItem =~ /jsm\\.deployment\\..*/",
-          "group": "inline@3"
-        },
-        {
-          "command": "jsm.deployment.sync",
-          "when": "view == javaServerManagerView && viewItem =~ /jsm\\.deployment\\..*/",
-          "group": "actions@1"
-        },
-        {
+
           "command": "jsm.deployment.fullRedeploy",
           "when": "view == javaServerManagerView && viewItem =~ /jsm\\.deployment\\..*/",
           "group": "actions@2"

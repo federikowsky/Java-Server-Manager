@@ -381,9 +381,9 @@ export class ServerService {
   /**
    * Detect server type from server home directory
    */
-  async detectServerType(serverHome: string): Promise<Result<ServerType, JsmError>> {
+  async detectServerType(homePath: string): Promise<Result<ServerType, JsmError>> {
     const pluginAdapter = PluginAdapter.getInstance();
-    return await pluginAdapter.detectServerType(serverHome);
+    return await pluginAdapter.detectServerType(homePath);
   }
 
   /**

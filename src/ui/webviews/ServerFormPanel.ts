@@ -274,11 +274,11 @@ export class ServerFormPanel {
                 </div>
                 
                 <div class="form-group">
-                    <label for="serverHome">Server Home *</label>
-                    <input type="text" id="serverHome" name="serverHome" required 
+                    <label for="homePath">Server Home *</label>
+                    <input type="text" id="homePath" name="homePath" required 
                            minlength="1"
                            placeholder="/opt/tomcat">
-                    <div class="error" id="serverHomeError"></div>
+                    <div class="error" id="homePathError"></div>
                 </div>
                 
                 <div class="form-group">
@@ -403,7 +403,7 @@ export class ServerFormPanel {
                 const data = {
                     name: formData.get('name'),
                     javaHome: formData.get('javaHome'),
-                    serverHome: formData.get('serverHome'),
+                    homePath: formData.get('homePath'),
                     host: formData.get('host') || undefined,
                     port: formData.get('port') ? parseInt(formData.get('port')) : undefined,
                     vmArgs: formData.get('vmArgs') || undefined,

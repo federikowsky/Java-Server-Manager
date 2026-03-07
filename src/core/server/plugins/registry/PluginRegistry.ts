@@ -56,11 +56,11 @@ export class PluginRegistry {
     return Array.from(this.plugins.keys()) as ServerType[];
   }
 
-  async detectServerType(serverHome: string): Promise<Result<ServerType, JsmError>> {
+  async detectServerType(homePath: string): Promise<Result<ServerType, JsmError>> {
     const detectionPromises = Array.from(this.plugins.entries()).map(async ([type, factory]) => {
       try {
         const plugin = factory();
-        const result = await plugin.detect(serverHome);
+        const result = await plugin.detect(homePath);
         return result.ok ? type : null;
       } catch {
         return null;
@@ -77,7 +77,7 @@ export class PluginRegistry {
       ? ok(detectedType as ServerType)
       : err(new JsmError(
           ErrorCode.SERVER_TYPE_DETECTION_ERROR,
-          `Unable to detect server type from: ${serverHome}`
+          `Unable to detect server type from: ${homePath}`
         ));
   }
 

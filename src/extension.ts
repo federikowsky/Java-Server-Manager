@@ -153,7 +153,6 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
     validator,
     bus: eventBus,
     logger,
-    workspaceFolder,
   });
 
   // TrustGate (§12.8): injected into services that perform side-effecting operations

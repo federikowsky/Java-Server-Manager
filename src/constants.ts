@@ -43,8 +43,6 @@ export const RING_BUFFER_MAX_BYTES = 1 * 1024 * 1024; // 1 MB
 // ── Hooks ───────────────────────────────────────────────────────────────────
 export const HOOK_PHASE_BUDGET_MS = 120_000; // 120 s
 
-// ── Schema ──────────────────────────────────────────────────────────────────
-export const SCHEMA_VERSION = 1;
 
 // ── Security ────────────────────────────────────────────────────────────────
 export const DEPLOY_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;

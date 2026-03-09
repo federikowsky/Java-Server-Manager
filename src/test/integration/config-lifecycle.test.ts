@@ -76,7 +76,7 @@ describe('Config → Repo → EventBus integration', () => {
     // Register a permissive schema so validate() always passes
     validator.addSchema('server-config', { type: 'object' });
 
-    service = new ConfigService({ repo, validator, bus, logger, workspaceFolder: tmpDir });
+    service = new ConfigService({ repo, validator, bus, logger });
 
     events.length = 0;
     const trackEvents: EventKey[] = [

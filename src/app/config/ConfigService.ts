@@ -12,8 +12,6 @@ import { ErrorCode } from '@core/errors/codes';
 import type { EventBus } from '@core/events/EventBus';
 import type { SchemaValidator } from '@core/validation/SchemaValidator';
 import type { ConfigRepo } from '@infra/fs/ConfigRepo';
-import type { WorkspaceConfig } from '@core/policy/ConfigNormalizer';
-import { migrateV0toV1 } from '@core/policy/ConfigNormalizer';
 import { validateSecurityPolicy } from '@core/policy/SecurityPolicy';
 
 /**
@@ -25,24 +23,21 @@ export class ConfigService {
   private readonly validator: SchemaValidator;
   private readonly bus: EventBus;
   private readonly logger: Logger;
-  private readonly workspaceFolder: string;
 
   constructor(deps: {
     repo: ConfigRepo;
     validator: SchemaValidator;
     bus: EventBus;
     logger: Logger;
-    workspaceFolder: string;
   }) {
     this.repo = deps.repo;
     this.validator = deps.validator;
     this.bus = deps.bus;
     this.logger = deps.logger;
-    this.workspaceFolder = deps.workspaceFolder;
   }
 
   /**
-   * Load workspace config, running migration if needed (§4.7).
+   * Load workspace config.
    * Returns all loaded server configs.
    */
   async loadWorkspace(): Promise<Result<ServerConfig[], JsmError>> {
@@ -52,14 +47,6 @@ export class ConfigService {
     const servers = loadResult.value;
     this.logger.info(`ConfigService: loaded ${servers.length} servers`);
     return ok(servers);
-  }
-
-  /**
-   * Migrate legacy config data (v0) to v1 format.
-   * Pure — does not write to disk; caller decides persistence.
-   */
-  migrate(legacyData: unknown): Result<WorkspaceConfig, JsmError> {
-    return migrateV0toV1(legacyData, this.workspaceFolder);
   }
 
   /** Get a single server by ID. */

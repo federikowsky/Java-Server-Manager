@@ -98,7 +98,6 @@ describe('ConfigService', () => {
       validator: validator as never,
       bus: bus as never,
       logger: mockLogger(),
-      workspaceFolder: '/ws',
     });
   });
 

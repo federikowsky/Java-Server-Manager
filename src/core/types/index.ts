@@ -22,6 +22,7 @@ export type {
 export type {
   ServerRuntimeState,
   DeploymentRuntimeState,
+  TrustGate,
   OperationKind,
   CancellationToken,
   OutputSink,

@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
+import type { OperationContext } from '@core/types';
 import type { ServerLifecycle } from '@app/server/ServerLifecycle';
 import type { ConfigService } from '@app/config/ConfigService';
+import type { DeploymentService } from '@app/deployment/DeploymentService';
 import type { DiagnosticsService } from '@app/diagnostics/DiagnosticsService';
 import type { ServerLogChannel } from '@ui/channels/ServerLogChannel';
 import type { ServerTreeViewProvider } from '@ui/tree/ServerTreeViewProvider';
@@ -18,11 +20,27 @@ import {
 export interface ServerCommandsDeps {
   lifecycle: ServerLifecycle;
   configService: ConfigService;
+  deployService: DeploymentService;
   diagnosticsService: DiagnosticsService;
   logChannel: ServerLogChannel;
   treeProvider: ServerTreeViewProvider;
   serverFormPanel: ServerFormPanel;
   configFilePath: string;
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
+function makeOpCtx(serverId: string, kind: OperationContext['kind']): OperationContext {
+  return {
+    operationId: `cmd-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    serverId,
+    kind,
+    startedAt: Date.now(),
+    timeoutMs: 60_000,
+    cancel: { isCancelled: false, onCancelled: () => ({ dispose: () => {} }) },
+    progress: { report: () => {} },
+    output: { append: () => {}, appendLine: () => {}, clear: () => {} },
+  };
 }
 
 // ── Registration ────────────────────────────────────────────────────────────
@@ -33,6 +51,7 @@ export function registerServerCommands(
   const {
     lifecycle,
     configService,
+    deployService,
     diagnosticsService,
     logChannel,
     treeProvider,
@@ -91,7 +110,8 @@ export function registerServerCommands(
     // §8.1 — jsm.server.refreshStatus
     ['jsm.server.refreshStatus', (arg: unknown) => {
       if (!isServerNode(arg)) return;
-      treeProvider.requestRefresh();
+      const result = lifecycle.refreshStatus(arg.serverId);
+      if (!result.ok) showErr(result.error);
     }],
 
     // §8.1 — jsm.server.edit
@@ -137,21 +157,23 @@ export function registerServerCommands(
     }],
 
     // §8.1 — jsm.server.syncAllDeployments
-    ['jsm.server.syncAllDeployments', (arg: unknown) => {
+    ['jsm.server.syncAllDeployments', async (arg: unknown) => {
       if (!isServerNode(arg)) return;
-      void vscode.window.showInformationMessage(
-        `Sync All queued for "${arg.serverConfig.name}".`,
-      );
-      // Full wiring requires OperationContext; handled via queue in Phase 8.
+      const config = configService.getServer(arg.serverId);
+      if (!config || config.deployments.length === 0) return;
+      const ctx = makeOpCtx(arg.serverId, 'SyncAll');
+      await deployService.redeployAll(ctx, config);
+      showSuccess(`Sync All completed for "${arg.serverConfig.name}".`);
     }],
 
     // §8.1 — jsm.server.fullRedeployAll
-    ['jsm.server.fullRedeployAll', (arg: unknown) => {
+    ['jsm.server.fullRedeployAll', async (arg: unknown) => {
       if (!isServerNode(arg)) return;
-      void vscode.window.showInformationMessage(
-        `Full Redeploy All queued for "${arg.serverConfig.name}".`,
-      );
-      // Full wiring requires OperationContext; handled via queue in Phase 8.
+      const config = configService.getServer(arg.serverId);
+      if (!config || config.deployments.length === 0) return;
+      const ctx = makeOpCtx(arg.serverId, 'RedeployAll');
+      await deployService.redeployAll(ctx, config);
+      showSuccess(`Full Redeploy All completed for "${arg.serverConfig.name}".`);
     }],
 
     // §8.3 — jsm.view.refresh

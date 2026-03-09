@@ -23,6 +23,13 @@ export interface DeploymentRuntimeState {
   lastError?: JsmError;
 }
 
+// ── Workspace Trust ─────────────────────────────────────────────────────────
+
+/** Injected gate that checks vscode.workspace.isTrusted (§12.8). */
+export interface TrustGate {
+  isTrusted(): boolean;
+}
+
 // ── Operation Types ─────────────────────────────────────────────────────────
 
 export type OperationKind =

@@ -184,6 +184,24 @@ describe('ConfigService', () => {
       expect(result.ok).toBe(false);
       expect(bus.emit).not.toHaveBeenCalled();
     });
+
+    it('rejects config with blocked env key (§12.9)', async () => {
+      const srv = makeServer();
+      srv.run.env = { LD_PRELOAD: '/evil.so' };
+      const result = await service.addServer(srv);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe(ErrorCode.SecurityPolicyViolation);
+      expect(repo.save).not.toHaveBeenCalled();
+    });
+
+    it('rejects config with blocked vmArg (§12.9)', async () => {
+      const srv = makeServer();
+      srv.run.vmArgs = ['-javaagent:/evil.jar'];
+      const result = await service.addServer(srv);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe(ErrorCode.SecurityPolicyViolation);
+      expect(repo.save).not.toHaveBeenCalled();
+    });
   });
 
   /* ── updateServer ────────────────────────────────────────────────────── */

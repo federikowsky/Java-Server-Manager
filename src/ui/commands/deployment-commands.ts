@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
-import type { SyncMode } from '@core/types';
+import type { SyncMode, OperationContext } from '@core/types';
 import type { ConfigService } from '@app/config/ConfigService';
+import type { DeploymentService } from '@app/deployment/DeploymentService';
 import type { ServerTreeViewProvider } from '@ui/tree/ServerTreeViewProvider';
 import type { DeploymentFormPanel } from '@ui/webviews/panels/DeploymentFormPanel';
 import {
@@ -16,6 +17,7 @@ import {
 
 export interface DeploymentCommandsDeps {
   configService: ConfigService;
+  deployService: DeploymentService;
   treeProvider: ServerTreeViewProvider;
   deploymentFormPanel: DeploymentFormPanel;
 }
@@ -27,12 +29,26 @@ function nextSyncMode(current: SyncMode): SyncMode {
   return cycle[(cycle.indexOf(current) + 1) % cycle.length];
 }
 
+function makeOpCtx(serverId: string, kind: OperationContext['kind'], deploymentId?: string): OperationContext {
+  return {
+    operationId: `cmd-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    serverId,
+    kind,
+    targetDeploymentId: deploymentId,
+    startedAt: Date.now(),
+    timeoutMs: 60_000,
+    cancel: { isCancelled: false, onCancelled: () => ({ dispose: () => {} }) },
+    progress: { report: () => {} },
+    output: { append: () => {}, appendLine: () => {}, clear: () => {} },
+  };
+}
+
 // ── Registration ────────────────────────────────────────────────────────────
 
 export function registerDeploymentCommands(
   deps: DeploymentCommandsDeps,
 ): vscode.Disposable[] {
-  const { configService, treeProvider, deploymentFormPanel } = deps;
+  const { configService, deployService, treeProvider, deploymentFormPanel } = deps;
 
   return registerMany([
 
@@ -43,30 +59,39 @@ export function registerDeploymentCommands(
     }],
 
     // §8.2 — jsm.deployment.sync
-    ['jsm.deployment.sync', (arg: unknown) => {
+    ['jsm.deployment.sync', async (arg: unknown) => {
       if (!isDeploymentNode(arg)) return;
-      void vscode.window.showInformationMessage(
-        `Sync queued for "${arg.deploymentConfig.deployName}".`,
-      );
-      // Full wiring requires OperationContext; handled via queue in Phase 8.
+      const config = configService.getServer(arg.serverId);
+      const dep = config?.deployments.find(d => d.id === arg.deploymentId);
+      if (!config || !dep) return;
+      const ctx = makeOpCtx(arg.serverId, 'DeployFull', arg.deploymentId);
+      const result = await deployService.fullRedeploy(ctx, config, dep);
+      if (!result.ok) { showErr(result.error); return; }
+      showSuccess(`Sync completed for "${dep.deployName}".`);
     }],
 
     // §8.2 — jsm.deployment.fullRedeploy
-    ['jsm.deployment.fullRedeploy', (arg: unknown) => {
+    ['jsm.deployment.fullRedeploy', async (arg: unknown) => {
       if (!isDeploymentNode(arg)) return;
-      void vscode.window.showInformationMessage(
-        `Full Redeploy queued for "${arg.deploymentConfig.deployName}".`,
-      );
-      // Full wiring requires OperationContext; handled via queue in Phase 8.
+      const config = configService.getServer(arg.serverId);
+      const dep = config?.deployments.find(d => d.id === arg.deploymentId);
+      if (!config || !dep) return;
+      const ctx = makeOpCtx(arg.serverId, 'DeployFull', arg.deploymentId);
+      const result = await deployService.fullRedeploy(ctx, config, dep);
+      if (!result.ok) { showErr(result.error); return; }
+      showSuccess(`Full Redeploy completed for "${dep.deployName}".`);
     }],
 
     // §8.2 — jsm.deployment.undeploy
-    ['jsm.deployment.undeploy', (arg: unknown) => {
+    ['jsm.deployment.undeploy', async (arg: unknown) => {
       if (!isDeploymentNode(arg)) return;
-      void vscode.window.showInformationMessage(
-        `Undeploy queued for "${arg.deploymentConfig.deployName}".`,
-      );
-      // Full wiring requires OperationContext; handled via queue in Phase 8.
+      const config = configService.getServer(arg.serverId);
+      const dep = config?.deployments.find(d => d.id === arg.deploymentId);
+      if (!config || !dep) return;
+      const ctx = makeOpCtx(arg.serverId, 'Undeploy', arg.deploymentId);
+      const result = await deployService.undeploy(ctx, config, dep);
+      if (!result.ok) { showErr(result.error); return; }
+      showSuccess(`Undeployed "${dep.deployName}".`);
     }],
 
     // §8.2 — jsm.deployment.toggleAutosync

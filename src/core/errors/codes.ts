@@ -24,6 +24,8 @@ export enum ErrorCode {
   HookFailed = 'HookFailed',
   Cancelled = 'Cancelled',
   Unsupported = 'Unsupported',
+  WorkspaceUntrusted = 'WorkspaceUntrusted',
+  SecurityPolicyViolation = 'SecurityPolicyViolation',
   Unknown = 'Unknown',
 }
 
@@ -57,6 +59,8 @@ const DEFAULT_SEVERITY: Record<ErrorCode, ErrorSeverity> = {
   [ErrorCode.HookFailed]: 'warning',
   [ErrorCode.Cancelled]: 'info',
   [ErrorCode.Unsupported]: 'error',
+  [ErrorCode.WorkspaceUntrusted]: 'warning',
+  [ErrorCode.SecurityPolicyViolation]: 'error',
   [ErrorCode.Unknown]: 'error',
 };
 

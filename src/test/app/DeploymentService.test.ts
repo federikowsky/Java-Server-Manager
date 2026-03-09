@@ -161,4 +161,38 @@ describe('DeploymentService', () => {
       service.fullRedeploy({} as never, config, makeDep()),
     ).rejects.toThrow();
   });
+
+  describe('TrustGate (§12.8)', () => {
+    let untrustedService: DeploymentService;
+
+    beforeEach(() => {
+      untrustedService = new DeploymentService({
+        pluginRegistry: mockRegistry,
+        bus,
+        logger: mockLogger(),
+        trustGate: { isTrusted: () => false },
+      });
+    });
+
+    it('blocks fullRedeploy in untrusted workspace', async () => {
+      const result = await untrustedService.fullRedeploy({} as never, makeConfig(), makeDep());
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe(ErrorCode.WorkspaceUntrusted);
+    });
+
+    it('blocks sync in untrusted workspace', async () => {
+      const batch = { changes: [], totalFiles: 0, totalBytes: 0 };
+      const result = await untrustedService.sync({} as never, makeConfig(), makeDep(), batch);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe(ErrorCode.WorkspaceUntrusted);
+    });
+
+    it('blocks undeploy in untrusted workspace', async () => {
+      // First deploy in a trusted service, then try to undeploy in untrusted
+      await service.fullRedeploy({} as never, makeConfig(), makeDep());
+      const result = await untrustedService.undeploy({} as never, makeConfig(), makeDep());
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe(ErrorCode.WorkspaceUntrusted);
+    });
+  });
 });

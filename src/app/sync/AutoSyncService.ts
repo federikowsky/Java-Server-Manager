@@ -6,6 +6,7 @@ import type {
   Logger,
   FileChangeBatch,
   FileChange,
+  TrustGate,
 } from '@core/types';
 import type { EventBus } from '@core/events/EventBus';
 import type { Disposable } from '@core/types/disposable';
@@ -52,6 +53,7 @@ export class AutoSyncService {
   private readonly bus: EventBus;
   private readonly watcherFactory: FileWatcherFactory;
   private readonly logger: Logger;
+  private readonly trustGate?: TrustGate;
   private readonly onSyncRequest: (
     serverId: ServerId,
     deploymentId: DeploymentId,
@@ -75,6 +77,7 @@ export class AutoSyncService {
     bus: EventBus;
     watcherFactory: FileWatcherFactory;
     logger: Logger;
+    trustGate?: TrustGate;
     onSyncRequest: (
       serverId: ServerId,
       deploymentId: DeploymentId,
@@ -84,6 +87,7 @@ export class AutoSyncService {
     this.bus = deps.bus;
     this.watcherFactory = deps.watcherFactory;
     this.logger = deps.logger;
+    this.trustGate = deps.trustGate;
     this.onSyncRequest = deps.onSyncRequest;
   }
 
@@ -95,6 +99,10 @@ export class AutoSyncService {
    */
   enable(config: ServerConfig): void {
     if (!config.autosync.enabled) return;
+    if (this.trustGate && !this.trustGate.isTrusted()) {
+      this.logger.warn('AutoSyncService: watchers blocked — workspace is untrusted');
+      return;
+    }
 
     for (const dep of config.deployments) {
       if (dep.syncMode === 'off') continue;

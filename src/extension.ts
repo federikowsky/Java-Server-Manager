@@ -156,6 +156,9 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
     workspaceFolder,
   });
 
+  // TrustGate (§12.8): injected into services that perform side-effecting operations
+  const trustGate = { isTrusted: () => vscode.workspace.isTrusted };
+
   const lifecycle = new ServerLifecycle({
     pluginRegistry,
     bus: eventBus,
@@ -163,18 +166,21 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
     portScanner,
     debugAttacher: debugAdapter,
     logger,
+    trustGate,
   });
 
   const deployService = new DeploymentService({
     pluginRegistry,
     bus: eventBus,
     logger,
+    trustGate,
   });
 
   const autoSyncService = new AutoSyncService({
     bus: eventBus,
     watcherFactory: fileWatcherAdapter,
     logger,
+    trustGate,
     onSyncRequest: async (
       serverId: ServerId,
       _deploymentId: DeploymentId,
@@ -261,6 +267,7 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
     ...registerServerCommands({
       lifecycle,
       configService,
+      deployService,
       diagnosticsService,
       logChannel,
       treeProvider,
@@ -269,6 +276,7 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
     }),
     ...registerDeploymentCommands({
       configService,
+      deployService,
       treeProvider,
       deploymentFormPanel,
     }),

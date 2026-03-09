@@ -4,6 +4,7 @@ import type {
   HookEvent,
   ServerId,
   Logger,
+  TrustGate,
 } from '@core/types';
 import type { Result } from '@core/result';
 import { ok, err } from '@core/result';
@@ -38,10 +39,12 @@ export interface HookRunResult {
 export class HookRunner {
   private readonly executor: HookExecutor;
   private readonly logger: Logger;
+  private readonly trustGate?: TrustGate;
 
-  constructor(deps: { executor: HookExecutor; logger: Logger }) {
+  constructor(deps: { executor: HookExecutor; logger: Logger; trustGate?: TrustGate }) {
     this.executor = deps.executor;
     this.logger = deps.logger;
+    this.trustGate = deps.trustGate;
   }
 
   /**
@@ -55,6 +58,13 @@ export class HookRunner {
     event: HookEvent,
     hooks: readonly HookConfig[],
   ): Promise<Result<HookRunResult, JsmError>> {
+    if (this.trustGate && !this.trustGate.isTrusted()) {
+      return err(new JsmError({
+        code: ErrorCode.WorkspaceUntrusted,
+        message: 'Hooks are disabled in untrusted workspaces.',
+      }));
+    }
+
     const matching = hooks.filter(h => h.enabled && h.phase === phase && h.event === event);
 
     const result: HookRunResult = {

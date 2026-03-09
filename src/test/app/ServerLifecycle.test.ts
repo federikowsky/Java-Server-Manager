@@ -303,4 +303,81 @@ describe('ServerLifecycle', () => {
       expect(bus.emit).toHaveBeenCalledWith('WorkspaceLoaded', { serverCount: 0 });
     });
   });
+
+  /* ── refreshStatus ───────────────────────────────────────────────── */
+
+  describe('refreshStatus', () => {
+    it('enqueues StatusRefresh for registered server', () => {
+      const queue = mockQueue();
+      lifecycle.register(makeServer(), queue as never);
+      const result = lifecycle.refreshStatus('srv-1');
+      expect(result.ok).toBe(true);
+      expect(queue.enqueue).toHaveBeenCalledWith({ kind: 'StatusRefresh' });
+    });
+
+    it('rejects for unknown server', () => {
+      const result = lifecycle.refreshStatus('nope');
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe(ErrorCode.InvalidConfig);
+    });
+  });
+
+  /* ── TrustGate (§12.8) ──────────────────────────────────────────── */
+
+  describe('TrustGate', () => {
+    let untrustedLifecycle: ServerLifecycle;
+
+    beforeEach(() => {
+      untrustedLifecycle = new ServerLifecycle({
+        pluginRegistry: pluginRegistry as never,
+        bus: bus as never,
+        pidManager: pidManager as never,
+        portScanner: portScanner as never,
+        debugAttacher: debugAttacher as never,
+        logger: mockLogger(),
+        trustGate: { isTrusted: () => false },
+      });
+    });
+
+    it('blocks start in untrusted workspace', () => {
+      const queue = mockQueue();
+      untrustedLifecycle.register(makeServer(), queue as never);
+      const result = untrustedLifecycle.start('srv-1', 'run');
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe(ErrorCode.WorkspaceUntrusted);
+    });
+
+    it('blocks stop in untrusted workspace', () => {
+      const queue = mockQueue();
+      const runtime = untrustedLifecycle.register(makeServer(), queue as never);
+      runtime.forceState('running', { pid: 123 });
+      const result = untrustedLifecycle.stop('srv-1');
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe(ErrorCode.WorkspaceUntrusted);
+    });
+
+    it('blocks restart in untrusted workspace', () => {
+      const queue = mockQueue();
+      untrustedLifecycle.register(makeServer(), queue as never);
+      const result = untrustedLifecycle.restart('srv-1', 'run');
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe(ErrorCode.WorkspaceUntrusted);
+    });
+
+    it('allows operations when trusted', () => {
+      const trustedLifecycle = new ServerLifecycle({
+        pluginRegistry: pluginRegistry as never,
+        bus: bus as never,
+        pidManager: pidManager as never,
+        portScanner: portScanner as never,
+        debugAttacher: debugAttacher as never,
+        logger: mockLogger(),
+        trustGate: { isTrusted: () => true },
+      });
+      const queue = mockQueue();
+      trustedLifecycle.register(makeServer(), queue as never);
+      const result = trustedLifecycle.start('srv-1', 'run');
+      expect(result.ok).toBe(true);
+    });
+  });
 });

@@ -7,6 +7,7 @@ import type {
   OperationContext,
   Logger,
   FileChangeBatch,
+  TrustGate,
 } from '@core/types';
 import type { Result } from '@core/result';
 import { ok, err } from '@core/result';
@@ -44,16 +45,19 @@ export class DeploymentService {
   private readonly pluginRegistry: PluginRegistry;
   private readonly bus: EventBus;
   private readonly logger: Logger;
+  private readonly trustGate?: TrustGate;
   private readonly states = new Map<string, DeploymentEntry>();
 
   constructor(deps: {
     pluginRegistry: PluginRegistry;
     bus: EventBus;
     logger: Logger;
+    trustGate?: TrustGate;
   }) {
     this.pluginRegistry = deps.pluginRegistry;
     this.bus = deps.bus;
     this.logger = deps.logger;
+    this.trustGate = deps.trustGate;
   }
 
   // ── State Management ──────────────────────────────────────────────
@@ -100,6 +104,9 @@ export class DeploymentService {
     config: ServerConfig,
     dep: DeploymentConfig,
   ): Promise<Result<void, JsmError>> {
+    const trustCheck = this.checkTrust();
+    if (!trustCheck.ok) return trustCheck;
+
     const plugin = this.getPlugin(config);
 
     this.transitionDeploy(config.id, dep.id, 'deploying');
@@ -137,6 +144,9 @@ export class DeploymentService {
     dep: DeploymentConfig,
     changes: FileChangeBatch,
   ): Promise<Result<void, JsmError>> {
+    const trustCheck = this.checkTrust();
+    if (!trustCheck.ok) return trustCheck;
+
     const plugin = this.getPlugin(config);
 
     if (!plugin.deployIncremental) {
@@ -179,6 +189,9 @@ export class DeploymentService {
     config: ServerConfig,
     dep: DeploymentConfig,
   ): Promise<Result<void, JsmError>> {
+    const trustCheck = this.checkTrust();
+    if (!trustCheck.ok) return trustCheck;
+
     const plugin = this.getPlugin(config);
     const currentState = this.getDeploymentState(config.id, dep.id);
 
@@ -234,5 +247,15 @@ export class DeploymentService {
       });
     }
     return plugin;
+  }
+
+  private checkTrust(): Result<void, JsmError> {
+    if (this.trustGate && !this.trustGate.isTrusted()) {
+      return err(new JsmError({
+        code: ErrorCode.WorkspaceUntrusted,
+        message: 'Grant workspace trust to manage deployments.',
+      }));
+    }
+    return ok(undefined);
   }
 }

@@ -111,4 +111,19 @@ describe('HookRunner', () => {
     expect(executor.runVscodeTask).toHaveBeenCalledOnce();
     expect(executor.runCommand).not.toHaveBeenCalled();
   });
+
+  describe('TrustGate (§12.8)', () => {
+    it('blocks hooks in untrusted workspace', async () => {
+      const untrustedRunner = new HookRunner({
+        executor,
+        logger: mockLogger(),
+        trustGate: { isTrusted: () => false },
+      });
+      const hooks = [makeHook()];
+      const result = await untrustedRunner.runHooks('s1', 'pre', 'lifecycle.start', hooks);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe(ErrorCode.WorkspaceUntrusted);
+      expect(executor.runCommand).not.toHaveBeenCalled();
+    });
+  });
 });

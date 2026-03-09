@@ -14,6 +14,7 @@ import type { SchemaValidator } from '@core/validation/SchemaValidator';
 import type { ConfigRepo } from '@infra/fs/ConfigRepo';
 import type { WorkspaceConfig } from '@core/policy/ConfigNormalizer';
 import { migrateV0toV1 } from '@core/policy/ConfigNormalizer';
+import { validateSecurityPolicy } from '@core/policy/SecurityPolicy';
 
 /**
  * Application-level config service (§5.5).
@@ -81,6 +82,10 @@ export class ConfigService {
       }));
     }
 
+    // Security policy validation (§12.9)
+    const securityResult = validateSecurityPolicy(config);
+    if (!securityResult.ok) return securityResult;
+
     // Schema validation
     const validResult = this.validator.validate(config, 'server-config');
     if (!validResult.ok) return validResult;
@@ -101,6 +106,9 @@ export class ConfigService {
         message: `Server '${config.id}' not found`,
       }));
     }
+
+    const securityResult = validateSecurityPolicy(config);
+    if (!securityResult.ok) return securityResult;
 
     const validResult = this.validator.validate(config, 'server-config');
     if (!validResult.ok) return validResult;

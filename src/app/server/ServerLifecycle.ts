@@ -6,6 +6,7 @@ import type {
   OperationKind,
   Logger,
   DebugAttacher,
+  TrustGate,
 } from '@core/types';
 import type { Result } from '@core/result';
 import { ok, err } from '@core/result';
@@ -30,6 +31,7 @@ export interface ServerLifecycleDeps {
   portScanner: PortScanner;
   debugAttacher: DebugAttacher;
   logger: Logger;
+  trustGate?: TrustGate;
 }
 
 interface ServerEntry {
@@ -112,6 +114,8 @@ export class ServerLifecycle {
 
   /** Enqueue a start operation. */
   start(serverId: ServerId, mode: StartMode): Result<void, JsmError> {
+    if (!this.checkTrust()) return this.untrustedErr();
+
     const entry = this.servers.get(serverId);
     if (!entry) return this.notFound(serverId);
 
@@ -131,6 +135,8 @@ export class ServerLifecycle {
 
   /** Enqueue a stop operation. */
   stop(serverId: ServerId): Result<void, JsmError> {
+    if (!this.checkTrust()) return this.untrustedErr();
+
     const entry = this.servers.get(serverId);
     if (!entry) return this.notFound(serverId);
 
@@ -147,6 +153,8 @@ export class ServerLifecycle {
 
   /** Enqueue a restart (stop + start). */
   restart(serverId: ServerId, mode: StartMode): Result<void, JsmError> {
+    if (!this.checkTrust()) return this.untrustedErr();
+
     const entry = this.servers.get(serverId);
     if (!entry) return this.notFound(serverId);
 
@@ -161,6 +169,15 @@ export class ServerLifecycle {
   cancel(serverId: ServerId): void {
     const entry = this.servers.get(serverId);
     if (entry) entry.queue.clear();
+  }
+
+  /** Enqueue a status refresh operation (§9). */
+  refreshStatus(serverId: ServerId): Result<void, JsmError> {
+    const entry = this.servers.get(serverId);
+    if (!entry) return this.notFound(serverId);
+
+    entry.queue.enqueue({ kind: 'StatusRefresh' });
+    return ok(undefined);
   }
 
   // ── Reconciliation (§9.9) ─────────────────────────────────────────
@@ -420,6 +437,17 @@ export class ServerLifecycle {
     return err(new JsmError({
       code: ErrorCode.InvalidConfig,
       message: `Server '${serverId}' not registered`,
+    }));
+  }
+
+  private checkTrust(): boolean {
+    return !this.deps.trustGate || this.deps.trustGate.isTrusted();
+  }
+
+  private untrustedErr(): Result<never, JsmError> {
+    return err(new JsmError({
+      code: ErrorCode.WorkspaceUntrusted,
+      message: 'Grant workspace trust to manage servers.',
     }));
   }
 }

@@ -1,0 +1,387 @@
+/**
+ * Exhaustive test suite: Extension Activation & Deactivation
+ *
+ * Categories: happy path (full activation), negative path (no workspace),
+ * edge cases (loading failure, reconciliation failure), recovery, lifecycle
+ */
+
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * VS Code mock — elaborate mock to support extension.ts activation
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+const mockShowOutputChannel = vi.fn();
+const mockCreateOutputChannel = vi.fn(() => ({
+  append: vi.fn(),
+  appendLine: vi.fn(),
+  clear: vi.fn(),
+  show: vi.fn(),
+  dispose: vi.fn(),
+}));
+const mockCreateTreeView = vi.fn(() => ({ dispose: vi.fn() }));
+const mockRegisterCommand = vi.fn((_id: string, _handler: unknown) => ({ dispose: vi.fn() }));
+const mockOnDidEndTaskProcess = vi.fn(() => ({ dispose: vi.fn() }));
+
+let workspaceFolders: { uri: { fsPath: string } }[] | undefined;
+
+vi.mock('vscode', () => ({
+  window: {
+    createOutputChannel: mockCreateOutputChannel,
+    createTreeView: mockCreateTreeView,
+    createWebviewPanel: vi.fn(() => ({
+      webview: {
+        html: '',
+        postMessage: vi.fn(),
+        asWebviewUri: vi.fn(() => ({ toString: () => 'mock-uri' })),
+        cspSource: 'https://mock.vscode-cdn.net',
+        onDidReceiveMessage: vi.fn(() => ({ dispose: vi.fn() })),
+      },
+      reveal: vi.fn(),
+      dispose: vi.fn(),
+      onDidDispose: vi.fn(() => ({ dispose: vi.fn() })),
+    })),
+    showErrorMessage: vi.fn(),
+    showInformationMessage: vi.fn(),
+    showWarningMessage: vi.fn(),
+  },
+  commands: { registerCommand: mockRegisterCommand },
+  workspace: {
+    get workspaceFolders() { return workspaceFolders; },
+    openTextDocument: vi.fn(async () => ({})),
+    isTrusted: true,
+  },
+  env: {
+    clipboard: { writeText: vi.fn() },
+  },
+  extensions: {
+    getExtension: vi.fn(() => ({ packageJSON: { version: '0.0.1-test' } })),
+  },
+  Uri: {
+    file: (p: string) => ({ fsPath: p, path: p }),
+    joinPath: (_base: unknown, ...segments: string[]) => ({ path: segments.join('/'), fsPath: '/' + segments.join('/') }),
+  },
+  ViewColumn: { One: 1 },
+  TreeItemCollapsibleState: { None: 0, Collapsed: 1, Expanded: 2 },
+  TreeItem: class {
+    constructor(public label: string, public collapsibleState: number) {}
+  },
+  ThemeIcon: class { constructor(public id: string) {} },
+  MarkdownString: class {
+    isTrusted = false;
+    appendMarkdown() { return this; }
+  },
+  tasks: {
+    executeTask: vi.fn(),
+    onDidEndTaskProcess: mockOnDidEndTaskProcess,
+  },
+  Task: class { constructor(..._args: unknown[]) {} },
+  TaskScope: { Workspace: 1 },
+  ShellExecution: class { constructor(..._args: unknown[]) {} },
+}));
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * Mock internal dependencies that extension.ts imports
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+// Logger + RingBuffer
+vi.mock('@infra/logging', () => ({
+  Logger: class {
+    info = vi.fn();
+    warn = vi.fn();
+    error = vi.fn();
+    debug = vi.fn();
+  },
+  RingBuffer: class {
+    push = vi.fn();
+    getAll = vi.fn(() => []);
+  },
+}));
+
+// ConfigRepo
+vi.mock('@infra/fs', () => ({
+  ConfigRepo: class {
+    filePath = '/workspace/.vscode/jsm.servers.json';
+    loadWorkspace = vi.fn();
+    save = vi.fn();
+  },
+}));
+
+// ProcessSpawner
+vi.mock('@infra/process', () => ({
+  ProcessSpawner: class {
+    spawn = vi.fn();
+  },
+}));
+
+// PortScanner
+vi.mock('@infra/ports', () => ({
+  PortScanner: class {},
+}));
+
+// PidManager
+vi.mock('@infra/pid', () => ({
+  PidManager: class {},
+}));
+
+// PluginRegistry
+vi.mock('@plugins/registry/PluginRegistry', () => ({
+  PluginRegistry: class {
+    register = vi.fn();
+  },
+}));
+
+// TomcatPlugin
+vi.mock('@plugins/tomcat/TomcatPlugin', () => ({
+  TomcatPlugin: class {},
+}));
+
+// ConfigService
+const mockConfigServiceLoadWorkspace = vi.fn(async () => ({ ok: true, value: [] }));
+const mockConfigServiceGetServer = vi.fn();
+const mockConfigServiceGetAllServers = vi.fn(() => []);
+const mockConfigServiceReload = vi.fn(async () => ({ ok: true, value: [] }));
+
+vi.mock('@app/config', () => ({
+  ConfigService: class {
+    loadWorkspace = mockConfigServiceLoadWorkspace;
+    getServer = mockConfigServiceGetServer;
+    getAllServers = mockConfigServiceGetAllServers;
+    reload = mockConfigServiceReload;
+  },
+}));
+
+// ServerLifecycle
+const mockLifecycleRegister = vi.fn();
+const mockLifecycleReconcile = vi.fn(async () => {});
+
+vi.mock('@app/server', () => ({
+  ServerLifecycle: class {
+    register = mockLifecycleRegister;
+    reconcileRunningServers = mockLifecycleReconcile;
+    getRuntime = vi.fn();
+  },
+}));
+
+// DeploymentService
+vi.mock('@app/deployment', () => ({
+  DeploymentService: class {
+    getDeploymentState = vi.fn(() => 'undeployed');
+  },
+}));
+
+// AutoSyncService
+vi.mock('@app/sync', () => ({
+  AutoSyncService: class {
+    enable = vi.fn();
+    suspend = vi.fn();
+    dispose = vi.fn();
+  },
+}));
+
+// TemplateService
+vi.mock('@app/templates', () => ({
+  TemplateService: class {},
+}));
+
+// DiagnosticsService
+vi.mock('@app/diagnostics', () => ({
+  DiagnosticsService: class {
+    generateBundleText = vi.fn(() => 'diag');
+  },
+}));
+
+// HookRunner
+vi.mock('@app/hooks', () => ({
+  HookRunner: class {},
+}));
+
+// UI Adapters
+vi.mock('@ui/adapters', () => ({
+  OutputSinkAdapter: class {
+    append = vi.fn(); appendLine = vi.fn(); clear = vi.fn();
+  },
+  MementoAdapter: class {
+    get = vi.fn(); set = vi.fn(); 'delete' = vi.fn();
+  },
+  DebugAdapter: class {},
+  FileWatcherAdapter: class {},
+}));
+
+// ServerLogChannel
+vi.mock('@ui/channels', () => ({
+  ServerLogChannel: class {
+    showLogs = vi.fn();
+    detach = vi.fn();
+    dispose = vi.fn();
+  },
+}));
+
+// Tree provider
+vi.mock('@ui/tree', () => ({
+  ServerTreeViewProvider: class {
+    requestRefresh = vi.fn();
+    forceRefresh = vi.fn();
+  },
+}));
+
+// Panels
+vi.mock('@ui/webviews/panels/ServerFormPanel', () => ({
+  ServerFormPanel: class {
+    open = vi.fn();
+    dispose = vi.fn();
+  },
+}));
+vi.mock('@ui/webviews/panels/DeploymentFormPanel', () => ({
+  DeploymentFormPanel: class {
+    open = vi.fn();
+    dispose = vi.fn();
+  },
+}));
+
+// Commands
+vi.mock('@ui/commands', () => ({
+  registerServerCommands: vi.fn(() => [{ dispose: vi.fn() }]),
+  registerDeploymentCommands: vi.fn(() => [{ dispose: vi.fn() }]),
+  registerTemplateCommands: vi.fn(() => [{ dispose: vi.fn() }]),
+}));
+
+// SchemaValidator
+vi.mock('@core/validation/SchemaValidator', () => ({
+  SchemaValidator: class {},
+}));
+
+// EventBus
+vi.mock('@core/events/EventBus', () => ({
+  EventBus: class {
+    on = vi.fn(() => ({ dispose: vi.fn() }));
+    emit = vi.fn();
+    dispose = vi.fn();
+  },
+}));
+
+// OperationQueue
+vi.mock('@core/ops/OperationQueue', () => ({
+  OperationQueue: class {},
+}));
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * Import (after all mocks)
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+const { activate, deactivate } = await import('../../extension');
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * Tests
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+describe('Extension Activation', () => {
+  let ctx: any;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockConfigServiceLoadWorkspace.mockResolvedValue({ ok: true, value: [] });
+    mockLifecycleReconcile.mockResolvedValue(undefined);
+
+    ctx = {
+      extensionUri: { path: '/mock-ext' },
+      extension: { packageJSON: { version: '0.0.1-test' } },
+      globalState: {
+        get: vi.fn(),
+        update: vi.fn(),
+        keys: vi.fn(() => []),
+      },
+      workspaceState: {
+        get: vi.fn(),
+        update: vi.fn(),
+        keys: vi.fn(() => []),
+      },
+      subscriptions: [],
+    };
+  });
+
+  /* ── No Workspace ────────────────────────────────────────────────────── */
+
+  it('should return early when no workspace folder is open', async () => {
+    workspaceFolders = undefined;
+
+    await activate(ctx);
+
+    // Should not register any commands when there's no workspace
+    expect(ctx.subscriptions.length).toBe(0);
+  });
+
+  /* ── Happy Path ──────────────────────────────────────────────────────── */
+
+  it('should activate successfully with a workspace folder', async () => {
+    workspaceFolders = [{ uri: { fsPath: '/test/workspace' } }];
+
+    await activate(ctx);
+
+    // Should have registered disposables
+    expect(ctx.subscriptions.length).toBeGreaterThan(0);
+    expect(mockCreateOutputChannel).toHaveBeenCalled();
+    expect(mockCreateTreeView).toHaveBeenCalled();
+  });
+
+  it('should load workspace config on activation', async () => {
+    workspaceFolders = [{ uri: { fsPath: '/test/workspace' } }];
+
+    await activate(ctx);
+
+    expect(mockConfigServiceLoadWorkspace).toHaveBeenCalled();
+  });
+
+  it('should register loaded servers with lifecycle', async () => {
+    workspaceFolders = [{ uri: { fsPath: '/test/workspace' } }];
+    const server = { id: 'srv-1', name: 'Test', type: 'tomcat' };
+    mockConfigServiceLoadWorkspace.mockResolvedValue({ ok: true, value: [server] });
+
+    await activate(ctx);
+
+    expect(mockLifecycleRegister).toHaveBeenCalledWith(server, expect.anything());
+  });
+
+  it('should trigger reconciliation after loading', async () => {
+    workspaceFolders = [{ uri: { fsPath: '/test/workspace' } }];
+
+    await activate(ctx);
+
+    expect(mockLifecycleReconcile).toHaveBeenCalled();
+  });
+
+  /* ── Negative Path: config load failure ──────────────────────────────── */
+
+  it('should not crash when workspace config loading fails', async () => {
+    workspaceFolders = [{ uri: { fsPath: '/test/workspace' } }];
+    mockConfigServiceLoadWorkspace.mockResolvedValue({
+      ok: false,
+      error: { code: 'ConfigLoadFailed', message: 'Corrupt file' },
+    });
+
+    await expect(activate(ctx)).resolves.not.toThrow();
+    // Should NOT register any servers
+    expect(mockLifecycleRegister).not.toHaveBeenCalled();
+  });
+
+  /* ── Recovery: reconciliation failure ────────────────────────────────── */
+
+  it('should not crash when reconciliation throws', async () => {
+    workspaceFolders = [{ uri: { fsPath: '/test/workspace' } }];
+    mockLifecycleReconcile.mockRejectedValue(new Error('Reconciliation crash'));
+
+    // The reconciliation is fire-and-forget (.catch()), so activation should still complete
+    await expect(activate(ctx)).resolves.not.toThrow();
+  });
+});
+
+describe('Extension Deactivation', () => {
+  it('should dispose all disposables without throwing', () => {
+    expect(() => deactivate()).not.toThrow();
+  });
+
+  it('should be safe to call multiple times', () => {
+    deactivate();
+    expect(() => deactivate()).not.toThrow();
+  });
+});

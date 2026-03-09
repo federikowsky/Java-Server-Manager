@@ -26,6 +26,7 @@ export abstract class BaseFormPanel implements vscode.Disposable {
   private readonly extensionUri: vscode.Uri;
   private readonly viewType: string;
   private readonly title: string;
+  private pendingInit: HostToWebview | undefined;
 
   constructor(extensionUri: vscode.Uri, viewType: string, title: string) {
     this.extensionUri = extensionUri;
@@ -45,23 +46,27 @@ export abstract class BaseFormPanel implements vscode.Disposable {
 
   /**
    * Show the form panel. Creates a new panel or reveals existing one.
+   * On first create, defers the init message until the webview signals 'ready'
+   * to avoid losing it before the script loads.
    */
   show(mode: 'create' | 'edit', data?: Record<string, unknown>): void {
-    if (this.panel) {
-      this.panel.reveal(vscode.ViewColumn.One);
-    } else {
-      this.createPanel();
-    }
-
     const schema = this.getFormSchema(mode);
-    this.postMessage({
+    const initMsg: HostToWebview = {
       v: WEBVIEW_PROTOCOL_VERSION,
       command: 'init',
       formId: this.viewType,
       mode,
       data,
       schema,
-    });
+    };
+
+    if (this.panel) {
+      this.panel.reveal(vscode.ViewColumn.One);
+      this.postMessage(initMsg);
+    } else {
+      this.pendingInit = initMsg;
+      this.createPanel();
+    }
   }
 
   /** Send a typed message to the webview. */
@@ -72,6 +77,7 @@ export abstract class BaseFormPanel implements vscode.Disposable {
   dispose(): void {
     this.panel?.dispose();
     this.panel = undefined;
+    this.pendingInit = undefined;
     for (const d of this.disposables) d.dispose();
     this.disposables.length = 0;
   }
@@ -97,6 +103,11 @@ export abstract class BaseFormPanel implements vscode.Disposable {
     this.panel.webview.onDidReceiveMessage(
       (raw: unknown) => {
         if (!isValidProtocolMessage(raw)) return;
+        // Flush deferred init when webview signals ready
+        if (raw.command === 'ready' && this.pendingInit) {
+          this.postMessage(this.pendingInit);
+          this.pendingInit = undefined;
+        }
         void this.handleMessage(raw);
       },
       undefined,
@@ -130,7 +141,7 @@ export abstract class BaseFormPanel implements vscode.Disposable {
 <head>
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy"
-    content="default-src 'none'; style-src ${cspSource}; script-src 'nonce-${nonce}'; font-src ${cspSource};">
+    content="default-src 'none'; style-src ${cspSource}; script-src 'nonce-${nonce}'; font-src ${cspSource}; img-src data:;">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="stylesheet" href="${styleUri}">
   <title>${escapeHtml(this.title)}</title>

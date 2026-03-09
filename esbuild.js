@@ -1,4 +1,5 @@
 const esbuild = require("esbuild");
+const sveltePlugin = require("esbuild-svelte");
 
 const production = process.argv.includes('--production');
 const watch = process.argv.includes('--watch');
@@ -40,7 +41,7 @@ const extensionConfig = {
 
 /** Webview client bundle (browser / IIFE) */
 const webviewConfig = {
-	entryPoints: ['src/ui/webviews/client/index.ts'],
+	entryPoints: ['src/ui/webviews/client/main.ts'],
 	bundle: true,
 	format: 'iife',
 	minify: production,
@@ -48,15 +49,26 @@ const webviewConfig = {
 	sourcesContent: false,
 	platform: 'browser',
 	outfile: 'dist/webview/webview.js',
+	mainFields: ['svelte', 'browser', 'module', 'main'],
+	conditions: ['svelte', 'browser'],
 	logLevel: 'silent',
-	plugins: [esbuildProblemMatcherPlugin],
+	plugins: [
+		sveltePlugin({
+			compilerOptions: {
+				css: 'external',
+				runes: true,
+				dev: !production,
+			},
+		}),
+		esbuildProblemMatcherPlugin,
+	],
 };
 
 async function main() {
 	// Build webview client only when entry exists (Phase 7+)
 	const fs = require('fs');
 	const path = require('path');
-	const buildWebview = fs.existsSync('src/ui/webviews/client/index.ts');
+	const buildWebview = fs.existsSync('src/ui/webviews/client/main.ts');
 
 	const configs = [extensionConfig];
 	if (buildWebview) configs.push(webviewConfig);
@@ -74,13 +86,20 @@ async function main() {
 		}
 	}
 
-	// Copy webview CSS to dist/webview/
+	// Copy webview global CSS to dist/webview/
 	if (buildWebview) {
-		const cssSrc = path.join('src', 'ui', 'webviews', 'client', 'styles', 'base.css');
+		const cssSrc = path.join('src', 'ui', 'webviews', 'client', 'styles', 'global.css');
 		const cssDest = path.join('dist', 'webview', 'webview.css');
 		if (fs.existsSync(cssSrc)) {
 			fs.mkdirSync(path.dirname(cssDest), { recursive: true });
-			fs.copyFileSync(cssSrc, cssDest);
+			// If the Svelte plugin already emitted a CSS file, prepend global.css
+			const globalCss = fs.readFileSync(cssSrc, 'utf8');
+			if (fs.existsSync(cssDest)) {
+				const svelteCss = fs.readFileSync(cssDest, 'utf8');
+				fs.writeFileSync(cssDest, globalCss + '\n' + svelteCss, 'utf8');
+			} else {
+				fs.writeFileSync(cssDest, globalCss, 'utf8');
+			}
 		}
 	}
 }

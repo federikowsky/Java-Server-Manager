@@ -1,28 +1,86 @@
-// src/types/runtime.ts
-// -----------------------------------------------------------------------------
-//  Stato effimero, non serializzato
+import type { ServerId, DeploymentId, OperationId } from './ids';
+import type { ServerState, DeploymentState, StartMode } from './enums';
+import type { Disposable } from './disposable';
+import type { JsmError } from '../errors/JsmError';
+import type { Result } from '../result';
 
-import { ChildProcess } from 'child_process';
-import { FSWatcher }    from 'chokidar';
-import { ServerState, DeploymentState } from './domain';
+// ── Runtime State ───────────────────────────────────────────────────────────
 
-export type ServerStartMode = 'run' | 'debug';
-
-export interface DeploymentRuntimeInfo {
-  state         : DeploymentState;
-  watcher?      : FSWatcher;
-  lastSync?     : string;          // ISO datetime
-  error?        : string;
+export interface ServerRuntimeState {
+  serverId: ServerId;
+  state: ServerState;
+  pid?: number;
+  lastTransitionAt: number;  // Epoch ms
+  lastError?: JsmError;
+  lastStartMode?: StartMode;
 }
 
-export interface ServerRuntimeInfo {
-  pid           : number;
-  pidFile       : string;          // uguale al domain, ma certo
-  process       : ChildProcess;
-  state         : ServerState;
-  mode          : ServerStartMode;
-  debugPort?    : number;
-  debugSession? : string;
-  deployments   : Record<string, DeploymentRuntimeInfo>;
-  logStream?    : NodeJS.ReadableStream;
+export interface DeploymentRuntimeState {
+  serverId: ServerId;
+  deploymentId: DeploymentId;
+  state: DeploymentState;
+  lastSyncAt?: number;  // Epoch ms
+  lastError?: JsmError;
+}
+
+// ── Operation Types ─────────────────────────────────────────────────────────
+
+export type OperationKind =
+  | 'LifecycleStart'
+  | 'LifecycleStop'
+  | 'LifecycleRestart'
+  | 'DeployFull'
+  | 'DeployIncremental'
+  | 'SyncAll'
+  | 'RedeployAll'
+  | 'Undeploy'
+  | 'StatusRefresh';
+
+// ── Infrastructure Interfaces ───────────────────────────────────────────────
+// Defined in core, implemented in infra/ or ui/adapters/.
+
+/** Token checked by operations at cancellation checkpoints. */
+export interface CancellationToken {
+  readonly isCancelled: boolean;
+  onCancelled(callback: () => void): Disposable;
+}
+
+/** Sink for structured log output. Implemented by OutputSinkAdapter (ui/adapters). */
+export interface OutputSink {
+  append(text: string): void;
+  appendLine(text: string): void;
+  clear(): void;
+}
+
+/** Sink for operation progress messages. */
+export interface ProgressSink {
+  report(message: string): void;
+}
+
+/** Debug session management. Injected into ServerLifecycle. */
+export interface DebugAttacher {
+  attach(config: { port: number; name: string; bind: string }): Promise<Result<void, JsmError>>;
+  detach(serverId: ServerId): Promise<void>;
+}
+
+/** Key-value store abstraction. Implemented by ui/adapters wrapping vscode.Memento. */
+export interface KeyValueStore {
+  get<T>(key: string): T | undefined;
+  set<T>(key: string, value: T): Promise<void>;
+  delete(key: string): Promise<void>;
+}
+
+// ── Operation Context ───────────────────────────────────────────────────────
+
+export interface OperationContext {
+  operationId: OperationId;
+  serverId: ServerId;
+  kind: OperationKind;
+  /** Set for per-deployment ops (DeployFull, DeployIncremental, Undeploy). */
+  targetDeploymentId?: DeploymentId;
+  startedAt: number;
+  timeoutMs: number;
+  cancel: CancellationToken;
+  progress: ProgressSink;
+  output: OutputSink;
 }

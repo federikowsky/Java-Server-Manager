@@ -4,18 +4,30 @@
 		"target": "ES2022",
 		"moduleResolution": "node",
 		"downlevelIteration": true,
-		"lib": [
-			"ES2022",
-			"DOM"
-		],
+		"lib": ["ES2022", "DOM"],
 		"sourceMap": true,
-		"rootDir": ".",
-		"strict": true, /* enable all strict type-checking options */
+		"rootDir": "src",
+		"outDir": "out",
+		"strict": true,
 		"resolveJsonModule": true,
 		"esModuleInterop": true,
-		/* Additional Checks */
-		// "noImplicitReturns": true, /* Report error when not all code paths in function return a value. */
-		// "noFallthroughCasesInSwitch": true, /* Report errors for fallthrough cases in switch statement. */
-		// "noUnusedParameters": true,  /* Report errors on unused parameters. */
-	}
+		"noImplicitReturns": true,
+		"noFallthroughCasesInSwitch": true,
+		"noUnusedLocals": true,
+		"noUnusedParameters": true,
+		"forceConsistentCasingInFileNames": true,
+		"skipLibCheck": true,
+		"declaration": true,
+		"declarationMap": true,
+		"baseUrl": "src",
+		"paths": {
+			"@core/*": ["core/*"],
+			"@app/*": ["app/*"],
+			"@infra/*": ["infra/*"],
+			"@plugins/*": ["plugins/*"],
+			"@ui/*": ["ui/*"]
+		}
+	},
+	"include": ["src/**/*.ts"],
+	"exclude": ["src/test/**/*.ts", "src-legacy/**"]
 }

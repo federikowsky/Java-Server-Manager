@@ -1,120 +1,164 @@
-// src/types/domain.ts
-// -----------------------------------------------------------------------------
-//  Dati che vanno serializzati su disco (.vscode/servers.json, templates)
+import type { ServerId, DeploymentId, TemplateId } from './ids';
+import type { ServerType, DeploymentType, SyncMode } from './enums';
 
-export type ServerState       = 'stopped' | 'starting' | 'running' | 'stopping' | 'error';
-export type ServerType        = 'tomcat' | 'jetty' | 'wildfly' | 'weblogic' | 'generic';
-export type DeploymentState   = 'undeployed' | 'deploying' | 'synced' | 'error';
-export type DeployType        = 'war' | 'exploded';
+// ── Plugin Config ───────────────────────────────────────────────────────────
 
-/* ───────────── Debug settings ───────────── */
-export interface DebugSettings {
-  port?       : number;            // porta fissa; se assente auto-assign
-  vmArgs?     : string;            // args extra JDWP
-  attachDelay?: number;            // ms prima di auto-attach
-}
-
-/* ───────────── Plugin-specific config ───── */
-
-/**
- * Tomcat-specific configuration. Stored under ServerConfig.pluginConfig when type === 'tomcat'.
- * Contains options with no generic equivalent across servlet containers.
- */
+/** Tomcat-specific options. Used when ServerConfig.type === 'tomcat'. */
 export interface TomcatPluginConfig {
-  type         : 'tomcat';
-  shutdownPort : number;           // Tomcat SHUTDOWN command port (default: 8005)
-  disableAjp   : boolean;          // Remove AJP connector from server.xml on instancePath init (default: true)
+  type: 'tomcat';
+  /** Default: 8005 — Tomcat SHUTDOWN command port. */
+  shutdownPort: number;
+  /** Default: true — remove AJP connector from server.xml on instancePath init. */
+  disableAjp: boolean;
 }
 
 /**
  * Discriminated union of all plugin-specific config blocks.
- * Add a new member here when a new plugin is introduced (e.g. JettyPluginConfig).
- * `ServerConfig` only ever references this union — never a concrete plugin type.
+ * To add a new plugin: define MyPluginConfig with type: '<pluginId>' and add it to this union.
  */
-export type PluginConfig = TomcatPluginConfig; // | JettyPluginConfig | WildflyPluginConfig
+export type PluginConfig = TomcatPluginConfig;
 
-/* ───────────── Server config ────────────── */
-export interface ServerConfig {
-  id          : string;
-  name        : string;
-  javaHome    : string;
-  /** Absolute path to server installation (generic; plugin maps to its env var, e.g. CATALINA_HOME) */
-  homePath    : string;
-  host        : string;
-  port        : number;
-  debug       : DebugSettings;
-  autoSync    : boolean;
-  envVars?    : Record<string,string>;
-  vmArgs?     : string;
-  logPath?    : string;
+// ── Hook Config ─────────────────────────────────────────────────────────────
 
-  /* graceful control / health-check */
-  startupTimeout?: number;         // ms max per passare a running
-  stopTimeout?   : number;         // ms per shutdown prima di kill
-  healthCheckUrl?: string;         // GET → 2xx = running
+export type HookPhase = 'pre' | 'post' | 'onError';
+export type HookEvent =
+  | 'lifecycle.start'
+  | 'lifecycle.stop'
+  | 'lifecycle.restart'
+  | 'deploy.full'
+  | 'deploy.incremental'
+  | 'deploy.undeploy';
+export type HookKind = 'command' | 'vscodeTask';
 
-  /* hook shell */
-  preStartCmd?   : string;
-  postStopCmd?   : string;
+export interface HookConfig {
+  id: string;
+  enabled: boolean;
+  phase: HookPhase;
+  event: HookEvent;
+  kind: HookKind;
+  /** Default: 60_000 */
+  timeoutMs: number;
+  /** Default: false */
+  continueOnError: boolean;
 
-  workingDir?    : string;         // cwd alternativo
+  command?: {
+    exe: string;
+    args: string[];
+    cwd?: string;
+    env?: Record<string, string>;
+  };
 
-  deployments    : DeploymentConfig[];
-  
-  /* Generic instance directory (plugin maps to its env var, e.g. CATALINA_BASE) */
-  instancePath?  : string;
-
-  /* Plugin-specific extensions — discriminated union, grows as plugins are added */
-  pluginConfig?  : PluginConfig;
-
-  /* Legacy environment variables as string */
-  env?           : string;
+  vscodeTask?: {
+    taskName: string;
+  };
 }
 
-/* ───────────── Deployment config ────────── */
-/**
- * Deployment configuration that matches JSM schema exactly
- * Only contains fields that are serialized to servers.json
- */
+// ── Deployment Config ───────────────────────────────────────────────────────
+
 export interface DeploymentConfig {
-  id?         : string;           // Unique identifier (optional, auto-generated if not provided)
-  sourcePath  : string;           // Source path (WAR file or exploded directory) - REQUIRED
-  deployName? : string;           // Name for deployment in webapps folder (optional, auto-derived from sourcePath)
-  type?       : DeployType;       // Deployment type (optional, auto-detected from sourcePath)
-  ignoreGlobs?: string[];         // File patterns to ignore during sync
+  id: DeploymentId;
+  type: DeploymentType;
+  /** Absolute or workspace-relative. */
+  sourcePath: string;
+  /** Target name in webapps/ AND display name. */
+  deployName: string;
+  /** Default: 'auto' for exploded, 'manual' for war. */
+  syncMode: SyncMode;
+  /** Per-deployment ignore patterns, merged with server-level autosync.ignoreGlobs. */
+  ignoreGlobs: string[];
+  hooks: HookConfig[];
 }
 
-/**
- * Runtime deployment state - NOT serialized to servers.json
- * Persisted separately in extension storage
- */
-export interface DeploymentRuntimeState {
-  deploymentId: string;                     // Reference to deployment ID
-  serverId    : string;                     // Reference to server ID
-  state       : DeploymentState;            // Current deployment state
-  error?      : string;                     // Last error message
-  lastUpdated : number;                     // Timestamp of last state update
+// ── Server Config ───────────────────────────────────────────────────────────
+
+export interface ServerConfig {
+  id: ServerId;
+  name: string;
+  /** Plugin type discriminator — literal union, not bare string. */
+  type: ServerType;
+
+  runtime: {
+    /** Stable runtime ID (stored in global registry). */
+    id: string;
+    /** Absolute path to server installation. Plugin maps to its own env var (e.g. CATALINA_HOME). */
+    homePath: string;
+    /** Cached detection result. */
+    version?: string;
+  };
+  /** Absolute path to per-server instance directory. Plugin maps to its own env var (e.g. CATALINA_BASE). Unique per server. */
+  instancePath: string;
+
+  /** Absolute path, mandatory. */
+  javaHome: string;
+  /** Default: '127.0.0.1' */
+  host: string;
+
+  ports: {
+    /** Default: 8080 */
+    http: number;
+    /** Default: 5005 */
+    debug: number;
+  };
+
+  run: {
+    /** Non-secret environment variables. */
+    env: Record<string, string>;
+    /** JVM arguments (split array, not string). */
+    vmArgs: string[];
+    /** Optional working directory override. */
+    cwd?: string;
+  };
+
+  debug: {
+    /** Default: true */
+    enabled: boolean;
+    /** Default: '127.0.0.1'. MUST be '127.0.0.1', 'localhost', or '::1'. */
+    bind: string;
+    /** Default: 1000 */
+    attachDelayMs: number;
+  };
+
+  deployments: DeploymentConfig[];
+
+  autosync: {
+    /** Default: true — master switch. If false, ALL deployments ignore their syncMode. */
+    enabled: boolean;
+    /** Default: 400 */
+    debounceMs: number;
+    /** Default: 200 */
+    maxBatchFiles: number;
+    /** Default: 20_000_000 */
+    maxBatchBytes: number;
+    /** Default: 2000 */
+    stormBackoffMs: number;
+    /** Default: see §10.4 */
+    ignoreGlobs: string[];
+  };
+
+  hooks: HookConfig[];
+
+  timeouts?: {
+    /** Default: 30_000 */
+    startRunMs?: number;
+    /** Default: 45_000 */
+    startDebugMs?: number;
+    /** Default: 20_000 */
+    stopMs?: number;
+    /** Default: 60_000 */
+    deployFullMs?: number;
+  };
+
+  pluginConfig?: PluginConfig;
 }
 
-/**
- * Complete deployment runtime information combining config and state
- */
-export interface DeploymentRuntime {
-  config: DeploymentConfig;
-  state : DeploymentRuntimeState;
-  // Computed fields for runtime use
-  displayName : string;                     // Display name derived from deployName or sourcePath
-  targetPath  : string;                     // Computed target path in webapps
-  contextPath : string;                     // Computed context path for URL
-}
+// ── Server Template ─────────────────────────────────────────────────────────
 
-/* ───────────── Template globale ─────────── */
 export interface ServerTemplate {
-  id   : string;
-  name : string;
-  defaultConfig: Partial<Omit<ServerConfig,'id'|'deployments'>>;
-  description? : string;
+  id: TemplateId;
+  name: string;
+  pluginType: ServerType;
+  serverDefaults: Partial<Omit<ServerConfig, 'id' | 'deployments' | 'hooks'>>;
+  deploymentDefaults: Partial<Omit<DeploymentConfig, 'id'>>[];
+  hookDefaults: HookConfig[];
+  description?: string;
 }
-
-export interface WorkspaceServersConfig      { servers  : ServerConfig[] }
-export interface GlobalServerTemplatesConfig { templates: ServerTemplate[] }

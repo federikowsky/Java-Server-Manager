@@ -23,7 +23,11 @@ import { PidManager } from '@infra/pid';
 import { PortScanner } from '@infra/ports';
 import type { HookRunner } from '@app/hooks';
 import { ServerRuntime } from './ServerRuntime';
-import { READINESS_PROBE_INTERVAL_MS, RECONCILIATION_BUDGET_MS } from '../../constants';
+import {
+  READINESS_PROBE_INTERVAL_MS,
+  RECONCILIATION_BUDGET_MS,
+  STARTUP_CALLBACK_DEBOUNCE_MS,
+} from '../../constants';
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -50,6 +54,20 @@ interface ServerEntry {
 
 function sleep(ms: number): Promise<void> {
   return new Promise(r => setTimeout(r, ms));
+}
+
+/**
+ * When startup monitor reported 'started' (AFTER_START_EVENT), do one port probe after a short
+ * debounce instead of polling. No loop.
+ */
+async function probeAfterStartupEvent(
+  portScanner: PortScanner,
+  config: ServerConfig,
+  debounceMs: number,
+): Promise<boolean> {
+  await sleep(debounceMs);
+  const portOpen = await portScanner.probe(config.ports.http, config.host);
+  return portOpen;
 }
 
 async function waitForHttpReadiness(
@@ -348,7 +366,11 @@ export class ServerLifecycle {
               message: outcome.message ?? `Server '${config.name}' reported a startup failure`,
             });
           }
-          ready = await waitForHttpReadiness(this.deps.portScanner, config, timeoutMs, startedAt);
+          ready = await probeAfterStartupEvent(
+            this.deps.portScanner,
+            config,
+            STARTUP_CALLBACK_DEBOUNCE_MS,
+          );
         } else {
           ready = await waitForHttpReadiness(this.deps.portScanner, config, timeoutMs, startedAt);
         }

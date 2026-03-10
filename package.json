@@ -315,7 +315,6 @@
     "vitest": "^3.2.1"
   },
   "dependencies": {
-    "fast-xml-parser": "^5.4.2",
     "lodash.debounce": "^4.0.8",
     "uuid": "^11.1.0"
   }

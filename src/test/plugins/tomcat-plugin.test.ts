@@ -245,7 +245,25 @@ describe('TomcatPlugin — planDeploy', () => {
   });
 });
 
-// ── Instance Path Init + server.xml Patching ────────────────────────────────
+// ── Instance Path Init + server.xml template ───────────────────────────────
+
+/** Minimal server.xml template with placeholders (ports passed via JVM args at start). */
+const MINIMAL_SERVER_XML_TEMPLATE = `<?xml version="1.0" encoding="UTF-8"?>
+<Server port="\${shutdown.port}" shutdown="\${shutdown.command}">
+  <Listener className="com.githubcopilot.jsm.tomcat.StartupLifecycleListener" />
+  <Service name="Catalina">
+    <Connector port="\${http.port}" protocol="HTTP/1.1" />
+    <Engine name="Catalina" defaultHost="localhost">
+      <Host name="localhost" appBase="webapps" />
+    </Engine>
+  </Service>
+</Server>`;
+
+async function createTemplateFile(dir: string): Promise<string> {
+  const p = path.join(dir, 'server.xml.template');
+  await fs.writeFile(p, MINIMAL_SERVER_XML_TEMPLATE, 'utf-8');
+  return p;
+}
 
 describe('TomcatPlugin — initializeInstancePath', () => {
   it('seeds conf/ and creates required directories', async () => {
@@ -263,15 +281,17 @@ describe('TomcatPlugin — initializeInstancePath', () => {
       expect(stat.isDirectory()).toBe(true);
     }
 
-    // Verify server.xml was copied
+    // Verify server.xml was copied from home
     const serverXml = await fs.readFile(path.join(instancePath, 'conf', 'server.xml'), 'utf-8');
     expect(serverXml.length).toBeGreaterThan(0);
   });
 
-  it('patches HTTP port in server.xml', async () => {
+  it('overwrites server.xml with template when serverXmlTemplatePath is set', async () => {
     const homePath = path.join(tmpDir, 'tomcat-home');
     await createFakeTomcatHome(homePath);
     const instancePath = path.join(tmpDir, 'instance');
+    const templatePath = await createTemplateFile(tmpDir);
+    plugin = new TomcatPlugin(noopLogger(), { serverXmlTemplatePath: templatePath });
     const config = fakeConfig(homePath, instancePath, {
       ports: { http: 9999, debug: 5005 },
     });
@@ -279,29 +299,13 @@ describe('TomcatPlugin — initializeInstancePath', () => {
     await plugin.initializeInstancePath(homePath, instancePath, config);
     const xml = await fs.readFile(path.join(instancePath, 'conf', 'server.xml'), 'utf-8');
 
-    // The HTTP port should be 9999
-    expect(xml).toContain('9999');
-    // The original 8080 should be gone
-    expect(xml).not.toContain('8080');
-  });
-
-  it('removes AJP connector when disableAjp is true', async () => {
-    const homePath = path.join(tmpDir, 'tomcat-home');
-    await createFakeTomcatHome(homePath);
-    const instancePath = path.join(tmpDir, 'instance');
-    const config = fakeConfig(homePath, instancePath, {
-      pluginConfig: { type: 'tomcat', shutdownPort: 8005, disableAjp: true },
-    });
-
-    await plugin.initializeInstancePath(homePath, instancePath, config);
-    const xml = await fs.readFile(path.join(instancePath, 'conf', 'server.xml'), 'utf-8');
-
-    // AJP should be removed
+    // Template uses placeholders; port is passed at start via -Dhttp.port=
+    expect(xml).toContain('${http.port}');
+    expect(xml).toContain('${shutdown.port}');
     expect(xml).not.toContain('AJP');
-    expect(xml).not.toContain('8009');
   });
 
-  it('keeps AJP connector when disableAjp is false', async () => {
+  it('keeps AJP when no template (server.xml from home)', async () => {
     const homePath = path.join(tmpDir, 'tomcat-home');
     await createFakeTomcatHome(homePath);
     const instancePath = path.join(tmpDir, 'instance');
@@ -312,18 +316,21 @@ describe('TomcatPlugin — initializeInstancePath', () => {
     await plugin.initializeInstancePath(homePath, instancePath, config);
     const xml = await fs.readFile(path.join(instancePath, 'conf', 'server.xml'), 'utf-8');
 
-    // AJP should still be present
     expect(xml).toContain('AJP');
   });
 
-  it('stages the startup listener jar and registers the listener idempotently', async () => {
+  it('stages the startup listener jar when template has listener', async () => {
     const homePath = path.join(tmpDir, 'tomcat-home');
     await createFakeTomcatHome(homePath);
     const instancePath = path.join(tmpDir, 'instance');
     const listenerAsset = path.join(tmpDir, 'listener.jar');
+    const templatePath = await createTemplateFile(tmpDir);
     await fs.writeFile(listenerAsset, 'listener-binary');
 
-    plugin = new TomcatPlugin(noopLogger(), { startupListenerJarPath: listenerAsset });
+    plugin = new TomcatPlugin(noopLogger(), {
+      startupListenerJarPath: listenerAsset,
+      serverXmlTemplatePath: templatePath,
+    });
     const config = fakeConfig(homePath, instancePath);
 
     await plugin.initializeInstancePath(homePath, instancePath, config);
@@ -338,7 +345,6 @@ describe('TomcatPlugin — initializeInstancePath', () => {
     const xml = await fs.readFile(path.join(instancePath, 'conf', 'server.xml'), 'utf-8');
 
     expect(stagedJar).toBe('listener-binary');
-    expect((xml.match(/<\?xml version="1\.0" encoding="UTF-8"\?>/g) ?? [])).toHaveLength(1);
     expect((xml.match(/com\.githubcopilot\.jsm\.tomcat\.StartupLifecycleListener/g) ?? [])).toHaveLength(1);
   });
 });

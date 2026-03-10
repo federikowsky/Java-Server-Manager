@@ -33,10 +33,11 @@ export interface ServerLifecycleDeps {
   debugAttacher: DebugAttacher;
   logger: Logger;
   trustGate?: TrustGate;
-  getOutputSink?: (serverId: ServerId, serverName: string) => OutputSink;
+  getOutputSink?: (serverKey: ServerId, serverName: string) => OutputSink;
 }
 
 interface ServerEntry {
+  serverKey: ServerId;
   config: ServerConfig;
   runtime: ServerRuntime;
   queue: OperationQueue;
@@ -91,12 +92,12 @@ export class ServerLifecycle {
   }
 
   /** Register a server for lifecycle management. */
-  register(config: ServerConfig, queue: OperationQueue): ServerRuntime {
-    const runtime = new ServerRuntime(config.id, this.deps.bus, this.deps.logger);
-    const entry: ServerEntry = { config, runtime, queue };
-    this.servers.set(config.id, entry);
+  register(serverKey: ServerId, config: ServerConfig, queue: OperationQueue): ServerRuntime {
+    const runtime = new ServerRuntime(serverKey, this.deps.bus, this.deps.logger);
+    const entry: ServerEntry = { serverKey, config, runtime, queue };
+    this.servers.set(serverKey, entry);
 
-    queue.setExecutor((queueEntry: QueueEntry) => this.executeOperation(config.id, queueEntry));
+    queue.setExecutor((queueEntry: QueueEntry) => this.executeOperation(serverKey, queueEntry));
     return runtime;
   }
 
@@ -193,11 +194,11 @@ export class ServerLifecycle {
    * Runs in parallel with a 2000ms budget.
    */
   async reconcileRunningServers(
-    configs: ServerConfig[],
+    configs: Array<{ serverKey: ServerId; config: ServerConfig }>,
   ): Promise<void> {
     this.deps.logger.info(`ServerLifecycle: reconciling ${configs.length} servers`);
 
-    const tasks = configs.map(config => this.reconcileOne(config));
+    const tasks = configs.map(({ serverKey, config }) => this.reconcileOne(serverKey, config));
 
     await Promise.race([
       Promise.all(tasks),
@@ -276,12 +277,12 @@ export class ServerLifecycle {
       : (config.timeouts?.startRunMs ?? 30_000);
 
     const ctx = makeCtx(
-      config.id,
+      server.serverKey,
       config.name,
       'LifecycleStart',
       timeoutMs,
       this.deps.logger,
-      this.deps.getOutputSink?.(config.id, config.name),
+      this.deps.getOutputSink?.(server.serverKey, config.name),
     );
 
     const startResult = await plugin.start(ctx, config, mode);
@@ -291,7 +292,7 @@ export class ServerLifecycle {
     }
 
     const { pid } = startResult.value;
-    await this.deps.pidManager.writePid(config.id, pid);
+    await this.deps.pidManager.writePid(server.serverKey, pid);
 
     // Readiness probe loop
     const startedAt = Date.now();
@@ -334,6 +335,7 @@ export class ServerLifecycle {
     if (mode === 'debug' && config.debug.enabled) {
       await sleep(config.debug.attachDelayMs);
       await this.deps.debugAttacher.attach({
+        serverId: server.serverKey,
         port: config.ports.debug,
         name: `Debug: ${config.name}`,
         bind: config.debug.bind,
@@ -353,12 +355,12 @@ export class ServerLifecycle {
 
     const timeoutMs = config.timeouts?.stopMs ?? 20_000;
     const ctx = makeCtx(
-      config.id,
+      server.serverKey,
       config.name,
       'LifecycleStop',
       timeoutMs,
       this.deps.logger,
-      this.deps.getOutputSink?.(config.id, config.name),
+      this.deps.getOutputSink?.(server.serverKey, config.name),
     );
 
     const stopResult = await plugin.stop(ctx, config);
@@ -384,8 +386,8 @@ export class ServerLifecycle {
       }
     }
 
-    await this.deps.pidManager.clearPid(config.id);
-    await this.deps.debugAttacher.detach(config.id);
+    await this.deps.pidManager.clearPid(server.serverKey);
+    await this.deps.debugAttacher.detach(server.serverKey);
     runtime.transition('stopped');
   }
 
@@ -396,12 +398,12 @@ export class ServerLifecycle {
     const plugin = this.getPlugin(config);
 
     const ctx = makeCtx(
-      config.id,
+      server.serverKey,
       config.name,
       'StatusRefresh',
       5000,
       this.deps.logger,
-      this.deps.getOutputSink?.(config.id, config.name),
+      this.deps.getOutputSink?.(server.serverKey, config.name),
     );
     const result = await plugin.getStatus(ctx, config);
     if (!result.ok) return;
@@ -414,14 +416,14 @@ export class ServerLifecycle {
 
   // ── Reconcile One Server (§9.9) ───────────────────────────────────
 
-  private async reconcileOne(config: ServerConfig): Promise<void> {
-    const entry = this.servers.get(config.id);
+  private async reconcileOne(serverKey: ServerId, config: ServerConfig): Promise<void> {
+    const entry = this.servers.get(serverKey);
     if (!entry) return;
 
     const { runtime } = entry;
 
     try {
-      const pid = await this.deps.pidManager.readPid(config.id);
+      const pid = await this.deps.pidManager.readPid(serverKey);
 
       if (!pid) {
         // No PID file → stopped
@@ -437,7 +439,7 @@ export class ServerLifecycle {
         runtime.forceState('running', { pid, startMode: runtime.lastStartMode });
       } else {
         // Stale PID
-        await this.deps.pidManager.clearPid(config.id);
+        await this.deps.pidManager.clearPid(serverKey);
         runtime.forceState('stopped');
         this.deps.logger.warn(`ServerLifecycle: stale PID file removed for '${config.name}'`);
       }

@@ -75,6 +75,16 @@
         "icon": "$(trash)"
       },
       {
+        "command": "jsm.server.repairInstance",
+        "title": "Repair Managed Instance",
+        "icon": "$(tools)"
+      },
+      {
+        "command": "jsm.server.rebuildInstance",
+        "title": "Rebuild Managed Instance",
+        "icon": "$(history)"
+      },
+      {
         "command": "jsm.diagnostics.copy",
         "title": "Copy Diagnostics",
         "icon": "$(copy)"
@@ -243,6 +253,16 @@
           "command": "jsm.server.remove",
           "when": "view == javaServerManagerView && viewItem =~ /jsm\\.server\\..*/",
           "group": "manage@2"
+        },
+        {
+          "command": "jsm.server.repairInstance",
+          "when": "view == javaServerManagerView && viewItem =~ /jsm\\.server\\..*/",
+          "group": "manage@2.5"
+        },
+        {
+          "command": "jsm.server.rebuildInstance",
+          "when": "view == javaServerManagerView && viewItem =~ /jsm\\.server\\..*/",
+          "group": "manage@2.6"
         },
         {
           "command": "jsm.server.openLogs",

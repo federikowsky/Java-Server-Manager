@@ -1,8 +1,10 @@
 import * as vscode from 'vscode';
-import type { ConfigService } from '@app/config/ConfigService';
+import type { WorkspaceServerLocator, WorkspaceServiceRegistry } from '@app/config';
+import type { CreateServerRequest } from '@app/server/ServerProvisioningService';
 import type { Logger } from '@core/types';
 import type {
   FormSchema,
+  FormFieldDef,
   WebviewToHost,
   FieldError,
 } from '../protocol';
@@ -14,7 +16,14 @@ import { BaseFormPanel } from './BaseFormPanel';
 
 export interface ServerFormPanelDeps {
   extensionUri: vscode.Uri;
-  configService: ConfigService;
+  workspaceRegistry?: WorkspaceServiceRegistry;
+  configService?: {
+    getServer(serverId: string): any;
+    updateServer(config: any): Promise<any>;
+  };
+  provisioningService?: {
+    createServer(request: CreateServerRequest): Promise<any>;
+  };
   logger: Logger;
 }
 
@@ -24,6 +33,42 @@ const DEFAULT_DEBUG_PORT = 5005;
 // ── Server Form Schema (§7.7) ──────────────────────────────────────────────
 
 function serverFormSchema(mode: 'create' | 'edit'): FormSchema {
+  const identityFields: FormFieldDef[] = [
+    {
+      name: 'name',
+      label: 'Server Name',
+      type: 'text',
+      required: true,
+      placeholder: 'My Tomcat',
+    },
+    {
+      name: 'ports.http',
+      label: 'HTTP Port',
+      type: 'port',
+      required: true,
+      defaultValue: DEFAULT_HTTP_PORT,
+      validation: { min: 1, max: 65535 },
+    },
+    {
+      name: 'ports.debug',
+      label: 'Debug Port',
+      type: 'port',
+      required: true,
+      defaultValue: DEFAULT_DEBUG_PORT,
+      validation: { min: 1, max: 65535 },
+    },
+  ];
+
+  if (mode === 'edit') {
+    identityFields.push({
+      name: 'instancePath',
+      label: 'Instance Path',
+      type: 'text',
+      readOnly: true,
+      helpText: 'Managed per-server instance directory owned by the extension.',
+    });
+  }
+
   return {
     title: mode === 'create' ? 'Add Server' : 'Edit Server',
     sections: [
@@ -44,38 +89,7 @@ function serverFormSchema(mode: 'create' | 'edit'): FormSchema {
       {
         id: 'identity',
         title: 'Server Identity',
-        fields: [
-          {
-            name: 'name',
-            label: 'Server Name',
-            type: 'text',
-            required: true,
-            placeholder: 'My Tomcat',
-          },
-          {
-            name: 'ports.http',
-            label: 'HTTP Port',
-            type: 'port',
-            required: true,
-            defaultValue: DEFAULT_HTTP_PORT,
-            validation: { min: 1, max: 65535 },
-          },
-          {
-            name: 'ports.debug',
-            label: 'Debug Port',
-            type: 'port',
-            required: true,
-            defaultValue: DEFAULT_DEBUG_PORT,
-            validation: { min: 1, max: 65535 },
-          },
-          {
-            name: 'instancePath',
-            label: 'Instance Path',
-            type: 'text',
-            readOnly: true,
-            helpText: 'Auto-generated per-server instance directory.',
-          },
-        ],
+        fields: identityFields,
       },
       {
         id: 'java',
@@ -137,13 +151,27 @@ function serverFormSchema(mode: 'create' | 'edit'): FormSchema {
 export class ServerFormPanel extends BaseFormPanel {
   static readonly viewType = 'jsm.serverForm';
 
-  private readonly configService: ConfigService;
+  private readonly workspaceRegistry: WorkspaceServiceRegistry;
   private readonly logger: Logger;
-  private editServerId: string | undefined;
+  private editServerLocator: WorkspaceServerLocator | undefined;
+  private createWorkspaceFolderUri: string | undefined;
 
   constructor(deps: ServerFormPanelDeps) {
     super(deps.extensionUri, ServerFormPanel.viewType, 'Server Configuration');
-    this.configService = deps.configService;
+    this.workspaceRegistry = deps.workspaceRegistry ?? {
+      getWorkspaceScopes: () => [{ uri: '', name: '', fsPath: '' }],
+      getEntry: () => deps.configService && deps.provisioningService
+        ? {
+          scope: { uri: '', name: '', fsPath: '' },
+          configService: deps.configService as any,
+          provisioningService: deps.provisioningService as any,
+          configFilePath: '',
+        }
+        : undefined,
+      getServer: (locator: WorkspaceServerLocator) => deps.configService?.getServer(locator.serverId),
+      updateServer: (_locator: WorkspaceServerLocator, config: any) => deps.configService?.updateServer(config),
+      getAllServers: () => [],
+    } as unknown as WorkspaceServiceRegistry;
     this.logger = deps.logger;
   }
 
@@ -151,17 +179,53 @@ export class ServerFormPanel extends BaseFormPanel {
     return serverFormSchema(mode);
   }
 
-  /** Open for create or edit. */
-  open(mode: 'create' | 'edit', serverId?: string): void {
-    this.editServerId = serverId;
+  openCreate(workspaceFolderUri: string): void {
+    this.editServerLocator = undefined;
+    this.createWorkspaceFolderUri = workspaceFolderUri;
+    this.show('create');
+  }
+
+  openEdit(locator: WorkspaceServerLocator): void {
+    this.editServerLocator = locator;
+    this.createWorkspaceFolderUri = undefined;
     let data: Record<string, unknown> | undefined;
 
-    if (mode === 'edit' && serverId) {
-      const config = this.configService.getServer(serverId);
-      if (config) data = serverConfigToFormData(config);
+    const config = this.workspaceRegistry.getServer(locator);
+    if (config) {
+      data = serverConfigToFormData(config);
     }
 
-    this.show(mode, data);
+    this.show('edit', data);
+  }
+
+  open(mode: 'create' | 'edit', serverId?: string): void {
+    if (mode === 'create') {
+      const scope = this.workspaceRegistry.getWorkspaceScopes()[0];
+      if (scope) {
+        this.openCreate(scope.uri);
+      }
+      return;
+    }
+
+    if (!serverId) {
+      this.show('edit');
+      return;
+    }
+
+    const record = this.workspaceRegistry.getAllServers().find(item => item.serverId === serverId);
+    const locator = record
+      ? {
+        workspaceFolderUri: record.workspaceFolderUri,
+        serverId: record.serverId,
+      }
+      : {
+        workspaceFolderUri: '',
+        serverId,
+      };
+
+    if (this.workspaceRegistry.getServer(locator)) {
+      this.openEdit(locator);
+    }
   }
 
   async handleMessage(msg: WebviewToHost): Promise<void> {
@@ -190,8 +254,8 @@ export class ServerFormPanel extends BaseFormPanel {
         break;
 
       case 'loadData':
-        if (this.editServerId) {
-          const config = this.configService.getServer(this.editServerId);
+        if (this.editServerLocator) {
+          const config = this.workspaceRegistry.getServer(this.editServerLocator);
           if (config) {
             this.postMessage({
               v: WEBVIEW_PROTOCOL_VERSION,
@@ -231,8 +295,8 @@ export class ServerFormPanel extends BaseFormPanel {
     }
 
     try {
-      if (this.editServerId) {
-        const existing = this.configService.getServer(this.editServerId);
+      if (this.editServerLocator) {
+        const existing = this.workspaceRegistry.getServer(this.editServerLocator);
         if (!existing) {
           this.postMessage({
             v: WEBVIEW_PROTOCOL_VERSION,
@@ -242,7 +306,7 @@ export class ServerFormPanel extends BaseFormPanel {
           return;
         }
         const updated = formDataToServerConfig(data, existing);
-        const result = await this.configService.updateServer(updated);
+        const result = await this.workspaceRegistry.updateServer(this.editServerLocator, updated);
         if (!result.ok) {
           this.postMessage({
             v: WEBVIEW_PROTOCOL_VERSION,
@@ -252,8 +316,27 @@ export class ServerFormPanel extends BaseFormPanel {
           return;
         }
       } else {
-        const config = formDataToNewServerConfig(data);
-        const result = await this.configService.addServer(config);
+        if (this.createWorkspaceFolderUri === undefined) {
+          this.postMessage({
+            v: WEBVIEW_PROTOCOL_VERSION,
+            command: 'error',
+            message: 'Workspace not selected for server creation.',
+          });
+          return;
+        }
+
+        const request = formDataToCreateServerRequest(data);
+        const entry = this.workspaceRegistry.getEntry(this.createWorkspaceFolderUri);
+        if (!entry) {
+          this.postMessage({
+            v: WEBVIEW_PROTOCOL_VERSION,
+            command: 'error',
+            message: 'Workspace not found.',
+          });
+          return;
+        }
+
+        const result = await entry.provisioningService.createServer(request);
         if (!result.ok) {
           this.postMessage({
             v: WEBVIEW_PROTOCOL_VERSION,
@@ -343,7 +426,6 @@ export class ServerFormPanel extends BaseFormPanel {
 
 // ── Form Data Helpers ───────────────────────────────────────────────────────
 
-import { v4 as uuid } from 'uuid';
 import type { ServerConfig } from '@core/types';
 
 function serverConfigToFormData(config: ServerConfig): Record<string, unknown> {
@@ -395,43 +477,19 @@ function formDataToServerConfig(
   };
 }
 
-function formDataToNewServerConfig(data: Record<string, unknown>): ServerConfig {
-  const id = uuid();
+function formDataToCreateServerRequest(data: Record<string, unknown>): CreateServerRequest {
   return {
-    id,
     name: String(data['name'] ?? ''),
     type: 'tomcat',
-    runtime: {
-      id: uuid(),
-      homePath: String(data['runtime.homePath'] ?? ''),
-    },
-    instancePath: String(data['instancePath'] ?? ''),
+    runtimeHomePath: String(data['runtime.homePath'] ?? ''),
     javaHome: String(data['javaHome'] ?? ''),
     host: String(data['host'] ?? '127.0.0.1'),
-    ports: {
-      http: Number(data['ports.http'] ?? DEFAULT_HTTP_PORT),
-      debug: Number(data['ports.debug'] ?? DEFAULT_DEBUG_PORT),
-    },
-    run: {
-      env: {},
-      vmArgs: Array.isArray(data['run.vmArgs'])
-        ? (data['run.vmArgs'] as string[])
-        : [],
-    },
-    debug: {
-      enabled: true,
-      bind: String(data['debug.bind'] ?? '127.0.0.1'),
-      attachDelayMs: 1000,
-    },
-    deployments: [],
-    autosync: {
-      enabled: true,
-      debounceMs: 400,
-      maxBatchFiles: 200,
-      maxBatchBytes: 20_000_000,
-      stormBackoffMs: 2000,
-      ignoreGlobs: ['**/.git/**', '**/node_modules/**'],
-    },
+    httpPort: Number(data['ports.http'] ?? DEFAULT_HTTP_PORT),
+    debugPort: Number(data['ports.debug'] ?? DEFAULT_DEBUG_PORT),
+    debugBind: String(data['debug.bind'] ?? '127.0.0.1'),
+    vmArgs: Array.isArray(data['run.vmArgs'])
+      ? (data['run.vmArgs'] as string[])
+      : [],
     hooks: normalizeHookList(data['hooks']),
   };
 }

@@ -66,7 +66,7 @@ export interface ProgressSink {
 
 /** Debug session management. Injected into ServerLifecycle. */
 export interface DebugAttacher {
-  attach(config: { port: number; name: string; bind: string }): Promise<Result<void, JsmError>>;
+  attach(config: { serverId: ServerId; port: number; name: string; bind: string }): Promise<Result<void, JsmError>>;
   detach(serverId: ServerId): Promise<void>;
 }
 

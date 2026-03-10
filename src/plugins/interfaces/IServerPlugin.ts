@@ -88,6 +88,7 @@ export interface IServerPlugin {
   // Detection and validation
   detectInstallation(homePath: string): Promise<Result<DetectReport, JsmError>>;
   validateConfig(config: ServerConfig): Promise<Result<void, JsmError>>;
+  initializeInstancePath?(homePath: string, instancePath: string, config: ServerConfig): Promise<Result<void, JsmError>>;
 
   // Lifecycle
   start(ctx: OperationContext, config: ServerConfig, mode: StartMode): Promise<Result<StartResult, JsmError>>;

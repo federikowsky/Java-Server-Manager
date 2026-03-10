@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
-import type { ConfigService } from '@app/config/ConfigService';
-import type { ServerId, Logger } from '@core/types';
+import type { WorkspaceServerLocator, WorkspaceServiceRegistry } from '@app/config';
+import type { Logger } from '@core/types';
 import type {
   FormSchema,
   WebviewToHost,
@@ -14,7 +14,12 @@ import { BaseFormPanel } from './BaseFormPanel';
 
 export interface DeploymentFormPanelDeps {
   extensionUri: vscode.Uri;
-  configService: ConfigService;
+  workspaceRegistry?: WorkspaceServiceRegistry;
+  configService?: {
+    getServer(serverId: string): any;
+    updateServer(config: any): Promise<any>;
+    addDeployment(serverId: string, deployment: any): Promise<any>;
+  };
   logger: Logger;
 }
 
@@ -102,14 +107,19 @@ function deploymentFormSchema(mode: 'create' | 'edit'): FormSchema {
 export class DeploymentFormPanel extends BaseFormPanel {
   static readonly viewType = 'jsm.deploymentForm';
 
-  private readonly configService: ConfigService;
+  private readonly workspaceRegistry: WorkspaceServiceRegistry;
   private readonly logger: Logger;
-  private targetServerId: ServerId | undefined;
+  private targetServer: WorkspaceServerLocator | undefined;
   private editDeploymentId: string | undefined;
 
   constructor(deps: DeploymentFormPanelDeps) {
     super(deps.extensionUri, DeploymentFormPanel.viewType, 'Deployment Configuration');
-    this.configService = deps.configService;
+    this.workspaceRegistry = deps.workspaceRegistry ?? {
+      getServer: (locator: WorkspaceServerLocator) => deps.configService?.getServer(locator.serverId),
+      updateServer: (_locator: WorkspaceServerLocator, config: any) => deps.configService?.updateServer(config),
+      addDeployment: (locator: WorkspaceServerLocator, deployment: any) => deps.configService?.addDeployment(locator.serverId, deployment),
+      getAllServers: () => [],
+    } as unknown as WorkspaceServiceRegistry;
     this.logger = deps.logger;
   }
 
@@ -117,33 +127,54 @@ export class DeploymentFormPanel extends BaseFormPanel {
     return deploymentFormSchema(mode);
   }
 
-  /** Open for create (on a server) or edit (a specific deployment). */
-  open(
-    mode: 'create' | 'edit',
-    serverId: ServerId,
-    deploymentId?: string,
-  ): void {
-    this.targetServerId = serverId;
+  openCreate(targetServer: WorkspaceServerLocator): void {
+    this.targetServer = targetServer;
+    this.editDeploymentId = undefined;
+    this.show('create');
+  }
+
+  openEdit(targetServer: WorkspaceServerLocator, deploymentId: string): void {
+    this.targetServer = targetServer;
     this.editDeploymentId = deploymentId;
     let data: Record<string, unknown> | undefined;
 
-    if (mode === 'edit' && deploymentId) {
-      const server = this.configService.getServer(serverId);
-      const dep = server?.deployments.find(d => d.id === deploymentId);
-      if (dep) {
-        data = {
-          id: dep.id,
-          type: dep.type,
-          sourcePath: dep.sourcePath,
-          deployName: dep.deployName,
-          syncMode: dep.syncMode,
-          ignoreGlobs: dep.ignoreGlobs,
-          hooks: dep.hooks,
-        };
-      }
+    const server = this.workspaceRegistry.getServer(targetServer);
+    const dep = server?.deployments.find(d => d.id === deploymentId);
+    if (dep) {
+      data = {
+        id: dep.id,
+        type: dep.type,
+        sourcePath: dep.sourcePath,
+        deployName: dep.deployName,
+        syncMode: dep.syncMode,
+        ignoreGlobs: dep.ignoreGlobs,
+        hooks: dep.hooks,
+      };
     }
 
-    this.show(mode, data);
+    this.show('edit', data);
+  }
+
+  open(mode: 'create' | 'edit', serverId: string, deploymentId?: string): void {
+    const record = this.workspaceRegistry.getAllServers().find(item => item.serverId === serverId);
+    const locator = record
+      ? {
+        workspaceFolderUri: record.workspaceFolderUri,
+        serverId: record.serverId,
+      }
+      : {
+        workspaceFolderUri: '',
+        serverId,
+      };
+
+    if (mode === 'create') {
+      this.openCreate(locator);
+      return;
+    }
+
+    if (deploymentId) {
+      this.openEdit(locator, deploymentId);
+    }
   }
 
   async handleMessage(msg: WebviewToHost): Promise<void> {
@@ -172,8 +203,8 @@ export class DeploymentFormPanel extends BaseFormPanel {
         break;
 
       case 'loadData':
-        if (this.targetServerId && this.editDeploymentId) {
-          const server = this.configService.getServer(this.targetServerId);
+        if (this.targetServer && this.editDeploymentId) {
+          const server = this.workspaceRegistry.getServer(this.targetServer);
           const dep = server?.deployments.find(d => d.id === this.editDeploymentId);
           if (dep) {
             this.postMessage({
@@ -220,7 +251,7 @@ export class DeploymentFormPanel extends BaseFormPanel {
       return;
     }
 
-    if (!this.targetServerId) {
+    if (!this.targetServer) {
       this.postMessage({
         v: WEBVIEW_PROTOCOL_VERSION,
         command: 'error',
@@ -232,7 +263,7 @@ export class DeploymentFormPanel extends BaseFormPanel {
     try {
       if (this.editDeploymentId) {
         // Edit: update the deployment by replacing in the server config
-        const server = this.configService.getServer(this.targetServerId);
+        const server = this.workspaceRegistry.getServer(this.targetServer);
         if (!server) {
           this.postMessage({
             v: WEBVIEW_PROTOCOL_VERSION,
@@ -250,7 +281,7 @@ export class DeploymentFormPanel extends BaseFormPanel {
           ),
         };
 
-        const result = await this.configService.updateServer(updatedServer);
+        const result = await this.workspaceRegistry.updateServer(this.targetServer, updatedServer);
         if (!result.ok) {
           this.postMessage({
             v: WEBVIEW_PROTOCOL_VERSION,
@@ -263,7 +294,7 @@ export class DeploymentFormPanel extends BaseFormPanel {
         // Create: add new deployment
         const { v4: uuid } = await import('uuid');
         const dep = formDataToDeploymentConfig(data, uuid());
-        const result = await this.configService.addDeployment(this.targetServerId, dep);
+        const result = await this.workspaceRegistry.addDeployment(this.targetServer, dep);
         if (!result.ok) {
           this.postMessage({
             v: WEBVIEW_PROTOCOL_VERSION,

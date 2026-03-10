@@ -13,6 +13,7 @@ export class DebugAdapter implements DebugAttacher {
   private readonly sessions = new Map<ServerId, vscode.DebugSession>();
 
   async attach(config: {
+    serverId: ServerId;
     port: number;
     name: string;
     bind: string;
@@ -37,9 +38,7 @@ export class DebugAdapter implements DebugAttacher {
       // Track the session once it starts
       const disposable = vscode.debug.onDidStartDebugSession(session => {
         if (session.name === config.name) {
-          // Find serverId from debug session name pattern "Debug: <serverName>"
-          // Store by name for lookup during detach
-          this.sessions.set(config.name, session);
+          this.sessions.set(config.serverId, session);
           disposable.dispose();
         }
       });

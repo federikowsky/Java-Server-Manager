@@ -10,7 +10,7 @@
  * - Alternate flows: edit existing server, cancel, loadData, requestDefaults
  * - Stateful / lifecycle: show→ready→init, re-show existing panel, dispose→re-create
  * - Concurrency paths: double submit, ready before panel exists
- * - Recovery / resilience: configService.addServer fails, updateServer fails, exception thrown
+ * - Recovery / resilience: provisioningService.createServer fails, updateServer fails, exception thrown
  * - Security paths: XSS in title, injection in form data, HTML in field values
  * - Observability paths: logger.error called on failures
  */
@@ -211,6 +211,12 @@ function mockConfigService() {
   };
 }
 
+function mockProvisioningService() {
+  return {
+    createServer: vi.fn(async () => ok(makeServer('test-uuid-1234', 'Test Server'))),
+  };
+}
+
 function extensionUri() {
   return { path: '/mock/extension' } as any;
 }
@@ -239,16 +245,19 @@ function lastPosted(command: string): HostToWebview | undefined {
 describe('ServerFormPanel', () => {
   let panel: InstanceType<typeof ServerFormPanel>;
   let configService: ReturnType<typeof mockConfigService>;
+  let provisioningService: ReturnType<typeof mockProvisioningService>;
   let logger: Logger;
 
   beforeEach(() => {
     vi.clearAllMocks();
     mockPanelInstance = undefined;
     configService = mockConfigService();
+    provisioningService = mockProvisioningService();
     logger = mockLogger();
     panel = new ServerFormPanel({
       extensionUri: extensionUri(),
       configService: configService as any,
+      provisioningService: provisioningService as any,
       logger,
     });
   });
@@ -271,6 +280,7 @@ describe('ServerFormPanel', () => {
       expect(init.formId).toBe('jsm.serverForm');
       expect(init.schema.sections[1].fields[1].required).toBe(true);
       expect(init.schema.sections[1].fields[2].required).toBe(true);
+      expect(init.schema.sections[1].fields.some((field: any) => field.name === 'instancePath')).toBe(false);
       expect(init.schema.sections[3].id).toBe('advanced');
       expect(init.schema.sections[3].fields.some((field: any) => field.name === 'hooks')).toBe(true);
     });
@@ -288,6 +298,7 @@ describe('ServerFormPanel', () => {
       expect(init.data).toBeDefined();
       expect(init.data.name).toBe('My Tomcat');
       expect(init.data['ports.http']).toBe(8080);
+      expect(init.schema.sections[1].fields.some((field: any) => field.name === 'instancePath')).toBe(true);
       expect(init.data.hooks).toEqual(server.hooks);
     });
 
@@ -311,7 +322,7 @@ describe('ServerFormPanel', () => {
 
       // Allow async handleSubmit to complete
       await vi.waitFor(() => {
-        expect(configService.addServer).toHaveBeenCalledTimes(1);
+        expect(provisioningService.createServer).toHaveBeenCalledTimes(1);
       });
     });
 
@@ -330,10 +341,10 @@ describe('ServerFormPanel', () => {
       });
 
       await vi.waitFor(() => {
-        expect(configService.addServer).toHaveBeenCalledTimes(1);
-        const config = configService.addServer.mock.calls[0][0] as ServerConfig;
-        expect(config.ports.http).toBe(8080);
-        expect(config.ports.debug).toBe(5005);
+        expect(provisioningService.createServer).toHaveBeenCalledTimes(1);
+        const request = provisioningService.createServer.mock.calls[0][0] as any;
+        expect(request.httpPort).toBe(8080);
+        expect(request.debugPort).toBe(5005);
       });
     });
 
@@ -352,9 +363,9 @@ describe('ServerFormPanel', () => {
       });
 
       await vi.waitFor(() => {
-        const config = configService.addServer.mock.calls[0][0] as ServerConfig;
-        expect(config.hooks).toHaveLength(1);
-        expect(config.hooks[0]).toMatchObject({
+        const request = provisioningService.createServer.mock.calls[0][0] as any;
+        expect(request.hooks).toHaveLength(1);
+        expect(request.hooks[0]).toMatchObject({
           id: 'hook-1',
           kind: 'command',
           command: { mode: 'shell', line: 'echo hello' },
@@ -377,8 +388,8 @@ describe('ServerFormPanel', () => {
       });
 
       await vi.waitFor(() => {
-        const config = configService.addServer.mock.calls[0][0] as ServerConfig;
-        expect(config.hooks[0]).toMatchObject({
+        const request = provisioningService.createServer.mock.calls[0][0] as any;
+        expect(request.hooks[0]).toMatchObject({
           id: 'hook-shell-1',
           kind: 'command',
           command: { mode: 'shell', line: 'npm run build && npm test' },
@@ -510,7 +521,7 @@ describe('ServerFormPanel', () => {
       });
 
       await vi.waitFor(() => {
-        expect(configService.addServer).toHaveBeenCalled();
+        expect(provisioningService.createServer).toHaveBeenCalled();
       });
     });
 
@@ -638,10 +649,10 @@ describe('ServerFormPanel', () => {
       expect(fields).toContain('javaHome');
     });
 
-    it('should report error when configService.addServer fails', async () => {
+    it('should report error when provisioningService.createServer fails', async () => {
       openAndReady(panel, 'create');
 
-      configService.addServer.mockResolvedValue(
+      provisioningService.createServer.mockResolvedValue(
         err(new JsmError({ code: ErrorCode.ConfigWriteFailed, message: 'Disk full' })),
       );
 
@@ -721,7 +732,7 @@ describe('ServerFormPanel', () => {
     it('should catch and report unexpected exceptions in submit', async () => {
       openAndReady(panel, 'create');
 
-      configService.addServer.mockRejectedValue(new Error('Unexpected crash'));
+      provisioningService.createServer.mockRejectedValue(new Error('Unexpected crash'));
 
       mockPanelInstance!.simulateMessage({
         v: WEBVIEW_PROTOCOL_VERSION,
@@ -960,7 +971,7 @@ describe('ServerFormPanel', () => {
       });
 
       await vi.waitFor(() => {
-        expect(configService.addServer).toHaveBeenCalled();
+        expect(provisioningService.createServer).toHaveBeenCalled();
       });
     });
 
@@ -981,9 +992,9 @@ describe('ServerFormPanel', () => {
       });
 
       await vi.waitFor(() => {
-        expect(configService.addServer).toHaveBeenCalled();
-        const config = configService.addServer.mock.calls[0][0] as ServerConfig;
-        expect(config.name).toBe(longName);
+        expect(provisioningService.createServer).toHaveBeenCalled();
+        const request = provisioningService.createServer.mock.calls[0][0] as any;
+        expect(request.name).toBe(longName);
       });
     });
   });
@@ -1143,7 +1154,7 @@ describe('ServerFormPanel', () => {
       await vi.waitFor(() => {
         // Both submits may go through — the panel disposes on first success
         // This documents current behavior (no double-submit guard)
-        expect(configService.addServer).toHaveBeenCalled();
+        expect(provisioningService.createServer).toHaveBeenCalled();
       });
     });
 

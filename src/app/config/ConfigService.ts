@@ -23,17 +23,20 @@ export class ConfigService {
   private readonly validator: SchemaValidator;
   private readonly bus: EventBus;
   private readonly logger: Logger;
+  private readonly workspaceFolderUri: string;
 
   constructor(deps: {
     repo: ConfigRepo;
     validator: SchemaValidator;
     bus: EventBus;
     logger: Logger;
+    workspaceFolderUri: string;
   }) {
     this.repo = deps.repo;
     this.validator = deps.validator;
     this.bus = deps.bus;
     this.logger = deps.logger;
+    this.workspaceFolderUri = deps.workspaceFolderUri;
   }
 
   /**
@@ -80,7 +83,7 @@ export class ConfigService {
     const saveResult = await this.repo.save(config);
     if (!saveResult.ok) return saveResult;
 
-    this.bus.emit('ServerAdded', { serverId: config.id });
+    this.bus.emit('ServerAdded', { serverId: config.id, workspaceFolderUri: this.workspaceFolderUri });
     this.logger.info(`ConfigService: added server '${config.name}'`);
     return ok(undefined);
   }
@@ -103,7 +106,7 @@ export class ConfigService {
     const saveResult = await this.repo.save(config);
     if (!saveResult.ok) return saveResult;
 
-    this.bus.emit('ServerUpdated', { serverId: config.id });
+    this.bus.emit('ServerUpdated', { serverId: config.id, workspaceFolderUri: this.workspaceFolderUri });
     this.logger.info(`ConfigService: updated server '${config.name}'`);
     return ok(undefined);
   }
@@ -120,7 +123,7 @@ export class ConfigService {
     const deleteResult = await this.repo.delete(serverId);
     if (!deleteResult.ok) return deleteResult;
 
-    this.bus.emit('ServerDeleted', { serverId });
+    this.bus.emit('ServerDeleted', { serverId, workspaceFolderUri: this.workspaceFolderUri });
     this.logger.info(`ConfigService: removed server '${serverId}'`);
     return ok(undefined);
   }
@@ -150,7 +153,7 @@ export class ConfigService {
     const saveResult = await this.repo.save(updated);
     if (!saveResult.ok) return saveResult;
 
-    this.bus.emit('DeploymentAdded', { serverId, deploymentId: dep.id });
+    this.bus.emit('DeploymentAdded', { serverId, deploymentId: dep.id, workspaceFolderUri: this.workspaceFolderUri });
     return ok(undefined);
   }
 
@@ -172,7 +175,7 @@ export class ConfigService {
     const saveResult = await this.repo.save(updated);
     if (!saveResult.ok) return saveResult;
 
-    this.bus.emit('DeploymentRemoved', { serverId, deploymentId });
+    this.bus.emit('DeploymentRemoved', { serverId, deploymentId, workspaceFolderUri: this.workspaceFolderUri });
     return ok(undefined);
   }
 
@@ -185,7 +188,7 @@ export class ConfigService {
   async reload(): Promise<Result<ServerConfig[], JsmError>> {
     const result = await this.repo.load();
     if (result.ok) {
-      this.bus.emit('ConfigChanged', { source: 'external' });
+      this.bus.emit('ConfigChanged', { source: 'external', workspaceFolderUri: this.workspaceFolderUri });
     }
     return result;
   }

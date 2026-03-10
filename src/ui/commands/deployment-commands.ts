@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import type { SyncMode, OperationContext } from '@core/types';
-import type { ConfigService } from '@app/config/ConfigService';
+import type { WorkspaceServiceRegistry } from '@app/config';
 import type { DeploymentService } from '@app/deployment/DeploymentService';
 import type { ServerTreeViewProvider } from '@ui/tree/ServerTreeViewProvider';
 import type { DeploymentFormPanel } from '@ui/webviews/panels/DeploymentFormPanel';
@@ -16,10 +16,19 @@ import {
 // ── Dependency contract ─────────────────────────────────────────────────────
 
 export interface DeploymentCommandsDeps {
-  configService: ConfigService;
+  workspaceRegistry?: WorkspaceServiceRegistry;
+  configService?: {
+    getServer(serverId: string): any;
+    updateServer(config: any): Promise<any>;
+    removeDeployment(serverId: string, deploymentId: string): Promise<any>;
+  };
   deployService: DeploymentService;
   treeProvider: ServerTreeViewProvider;
-  deploymentFormPanel: DeploymentFormPanel;
+  deploymentFormPanel: DeploymentFormPanel | {
+    open?(mode: 'create' | 'edit', serverId: string, deploymentId?: string): void;
+    openCreate?(locator: { workspaceFolderUri: string; serverId: string }): void;
+    openEdit?(locator: { workspaceFolderUri: string; serverId: string }, deploymentId: string): void;
+  };
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -48,23 +57,33 @@ function makeOpCtx(serverId: string, kind: OperationContext['kind'], deploymentI
 export function registerDeploymentCommands(
   deps: DeploymentCommandsDeps,
 ): vscode.Disposable[] {
-  const { configService, deployService, treeProvider, deploymentFormPanel } = deps;
+  const { workspaceRegistry, configService, deployService, treeProvider, deploymentFormPanel } = deps;
+  const resolveServer = (workspaceFolderUri: string, serverId: string) => workspaceRegistry
+    ? workspaceRegistry.getServer({ workspaceFolderUri, serverId })
+    : configService?.getServer(serverId);
 
   return registerMany([
 
     // §8.2 — jsm.deployment.add
     ['jsm.deployment.add', (arg: unknown) => {
       if (!isServerNode(arg)) return;
-      deploymentFormPanel.open('create', arg.serverId);
+      if (deploymentFormPanel.openCreate) {
+        deploymentFormPanel.openCreate({
+          workspaceFolderUri: arg.workspaceFolderUri,
+          serverId: arg.serverId,
+        });
+        return;
+      }
+      deploymentFormPanel.open?.('create', arg.serverId);
     }],
 
     // §8.2 — jsm.deployment.sync
     ['jsm.deployment.sync', async (arg: unknown) => {
       if (!isDeploymentNode(arg)) return;
-      const config = configService.getServer(arg.serverId);
+      const config = resolveServer(arg.workspaceFolderUri, arg.serverId);
       const dep = config?.deployments.find(d => d.id === arg.deploymentId);
       if (!config || !dep) return;
-      const ctx = makeOpCtx(arg.serverId, 'DeployFull', arg.deploymentId);
+      const ctx = makeOpCtx(arg.serverKey, 'DeployFull', arg.deploymentId);
       const result = await deployService.fullRedeploy(ctx, config, dep);
       if (!result.ok) { showErr(result.error); return; }
       showSuccess(`Sync completed for "${dep.deployName}".`);
@@ -73,10 +92,10 @@ export function registerDeploymentCommands(
     // §8.2 — jsm.deployment.fullRedeploy
     ['jsm.deployment.fullRedeploy', async (arg: unknown) => {
       if (!isDeploymentNode(arg)) return;
-      const config = configService.getServer(arg.serverId);
+      const config = resolveServer(arg.workspaceFolderUri, arg.serverId);
       const dep = config?.deployments.find(d => d.id === arg.deploymentId);
       if (!config || !dep) return;
-      const ctx = makeOpCtx(arg.serverId, 'DeployFull', arg.deploymentId);
+      const ctx = makeOpCtx(arg.serverKey, 'DeployFull', arg.deploymentId);
       const result = await deployService.fullRedeploy(ctx, config, dep);
       if (!result.ok) { showErr(result.error); return; }
       showSuccess(`Full Redeploy completed for "${dep.deployName}".`);
@@ -85,10 +104,10 @@ export function registerDeploymentCommands(
     // §8.2 — jsm.deployment.undeploy
     ['jsm.deployment.undeploy', async (arg: unknown) => {
       if (!isDeploymentNode(arg)) return;
-      const config = configService.getServer(arg.serverId);
+      const config = resolveServer(arg.workspaceFolderUri, arg.serverId);
       const dep = config?.deployments.find(d => d.id === arg.deploymentId);
       if (!config || !dep) return;
-      const ctx = makeOpCtx(arg.serverId, 'Undeploy', arg.deploymentId);
+      const ctx = makeOpCtx(arg.serverKey, 'Undeploy', arg.deploymentId);
       const result = await deployService.undeploy(ctx, config, dep);
       if (!result.ok) { showErr(result.error); return; }
       showSuccess(`Undeployed "${dep.deployName}".`);
@@ -97,7 +116,11 @@ export function registerDeploymentCommands(
     // §8.2 — jsm.deployment.toggleAutosync
     ['jsm.deployment.toggleAutosync', async (arg: unknown) => {
       if (!isDeploymentNode(arg)) return;
-      const server = configService.getServer(arg.serverId);
+      const locator = {
+        workspaceFolderUri: arg.workspaceFolderUri,
+        serverId: arg.serverId,
+      };
+      const server = resolveServer(locator.workspaceFolderUri, locator.serverId);
       if (!server) return;
 
       const dep = server.deployments.find(d => d.id === arg.deploymentId);
@@ -112,7 +135,10 @@ export function registerDeploymentCommands(
         ),
       };
 
-      const result = await configService.updateServer(updatedServer);
+      const result = workspaceRegistry
+        ? await workspaceRegistry.updateServer(locator, updatedServer)
+        : await configService?.updateServer(updatedServer);
+      if (!result) return;
       if (!result.ok) { showErr(result.error); return; }
 
       showSuccess(`AutoSync for "${dep.deployName}" set to "${newMode}".`);
@@ -125,7 +151,14 @@ export function registerDeploymentCommands(
     // §8.2 — jsm.deployment.edit
     ['jsm.deployment.edit', (arg: unknown) => {
       if (!isDeploymentNode(arg)) return;
-      deploymentFormPanel.open('edit', arg.serverId, arg.deploymentId);
+      if (deploymentFormPanel.openEdit) {
+        deploymentFormPanel.openEdit({
+          workspaceFolderUri: arg.workspaceFolderUri,
+          serverId: arg.serverId,
+        }, arg.deploymentId);
+        return;
+      }
+      deploymentFormPanel.open?.('edit', arg.serverId, arg.deploymentId);
     }],
 
     // §8.2 — jsm.deployment.remove
@@ -138,10 +171,13 @@ export function registerDeploymentCommands(
       );
       if (answer !== 'Remove') return;
 
-      const result = await configService.removeDeployment(
-        arg.serverId,
-        arg.deploymentId,
-      );
+      const result = workspaceRegistry
+        ? await workspaceRegistry.removeDeployment({
+          workspaceFolderUri: arg.workspaceFolderUri,
+          serverId: arg.serverId,
+        }, arg.deploymentId)
+        : await configService?.removeDeployment(arg.serverId, arg.deploymentId);
+      if (!result) return;
       if (!result.ok) { showErr(result.error); return; }
       showSuccess(`Deployment "${arg.deploymentConfig.deployName}" removed.`);
       treeProvider.requestRefresh();

@@ -128,6 +128,9 @@ function mockDeps() {
       reload: vi.fn(async () => ok([])),
       getAllServers: vi.fn(() => []),
     },
+    provisioningService: {
+      removeServer: vi.fn(async () => ok(undefined)),
+    },
     deployService: {
       redeployAll: vi.fn(async () => ok(undefined)),
     },
@@ -184,7 +187,7 @@ describe('Server Commands', () => {
   });
 
   it('should return disposables for all commands', () => {
-    expect(disposables.length).toBe(18);
+    expect(disposables.length).toBe(20);
     for (const d of disposables) {
       expect(d.dispose).toBeDefined();
     }
@@ -257,13 +260,13 @@ describe('Server Commands', () => {
         { modal: true },
         'Remove',
       );
-      expect(deps.configService.removeServer).toHaveBeenCalledWith('srv-1');
+      expect(deps.provisioningService.removeServer).toHaveBeenCalledWith('srv-1');
       expect(deps.treeProvider.requestRefresh).toHaveBeenCalled();
     });
 
     it('jsm.server.openConfig should open the config file', async () => {
       mockOpenTextDocument.mockResolvedValue({ uri: 'doc' });
-      await invoke('jsm.server.openConfig');
+      await invoke('jsm.server.openConfig', createServerNode());
       expect(mockOpenTextDocument).toHaveBeenCalled();
       expect(mockShowTextDocument).toHaveBeenCalled();
     });
@@ -391,7 +394,7 @@ describe('Server Commands', () => {
 
     it('remove should show error when removeServer fails', async () => {
       mockShowWarningMessage.mockResolvedValue('Remove');
-      deps.configService.removeServer.mockResolvedValue(
+      deps.provisioningService.removeServer.mockResolvedValue(
         err(new JsmError({ code: ErrorCode.ConfigWriteFailed, message: 'Lock' })),
       );
 
@@ -409,7 +412,7 @@ describe('Server Commands', () => {
       const node = createServerNode();
       await invoke('jsm.server.remove', node);
 
-      expect(deps.configService.removeServer).not.toHaveBeenCalled();
+      expect(deps.provisioningService.removeServer).not.toHaveBeenCalled();
     });
 
     it('syncAllDeployments should do nothing when server has 0 deployments', async () => {

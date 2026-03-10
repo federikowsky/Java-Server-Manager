@@ -97,7 +97,7 @@ export class AutoSyncService {
    * Enable autosync for a server's deployments that have syncMode !== 'off'.
    * Respects watcher global cap (§10.4).
    */
-  enable(config: ServerConfig): void {
+  enable(config: ServerConfig, serverId: ServerId = config.id): void {
     if (!config.autosync.enabled) return;
     if (this.trustGate && !this.trustGate.isTrusted()) {
       this.logger.warn('AutoSyncService: watchers blocked — workspace is untrusted');
@@ -106,7 +106,7 @@ export class AutoSyncService {
 
     for (const dep of config.deployments) {
       if (dep.syncMode === 'off') continue;
-      this.startWatching(config, dep);
+      this.startWatching(config, dep, serverId);
     }
   }
 
@@ -192,8 +192,8 @@ export class AutoSyncService {
     return `${serverId}::${deploymentId}`;
   }
 
-  private startWatching(config: ServerConfig, dep: DeploymentConfig): void {
-    const key = this.watchKey(config.id, dep.id);
+  private startWatching(config: ServerConfig, dep: DeploymentConfig, serverId: ServerId): void {
+    const key = this.watchKey(serverId, dep.id);
 
     // Already watching
     if (this.watchers.has(key)) return;
@@ -212,7 +212,7 @@ export class AutoSyncService {
     const disposable = this.watcherFactory.watch(
       dep.sourcePath,
       ignoreGlobs,
-      (change: FileChange) => this.onFileChange(config.id, dep.id, change),
+      (change: FileChange) => this.onFileChange(serverId, dep.id, change),
     );
 
     this.watchers.set(key, disposable);

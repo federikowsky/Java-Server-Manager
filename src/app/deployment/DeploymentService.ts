@@ -109,29 +109,29 @@ export class DeploymentService {
 
     const plugin = this.getPlugin(config);
 
-    this.transitionDeploy(config.id, dep.id, 'deploying');
+    this.transitionDeploy(ctx.serverId, dep.id, 'deploying');
 
     try {
       // Plan
       const planResult = await plugin.planDeploy(ctx, config, dep);
       if (!planResult.ok) {
-        this.transitionDeploy(config.id, dep.id, 'error', { error: planResult.error });
+        this.transitionDeploy(ctx.serverId, dep.id, 'error', { error: planResult.error });
         return planResult;
       }
 
       // Execute
       const deployResult = await plugin.deployFull(ctx, config, dep, planResult.value);
       if (!deployResult.ok) {
-        this.transitionDeploy(config.id, dep.id, 'error', { error: deployResult.error });
+        this.transitionDeploy(ctx.serverId, dep.id, 'error', { error: deployResult.error });
         return deployResult;
       }
 
-      this.transitionDeploy(config.id, dep.id, 'synced');
+      this.transitionDeploy(ctx.serverId, dep.id, 'synced');
       this.logger.info(`DeploymentService: deployed ${dep.deployName} via ${deployResult.value.strategy}`);
       return ok(undefined);
     } catch (cause) {
       const error = cause instanceof JsmError ? cause : JsmError.fromUnknown(cause);
-      this.transitionDeploy(config.id, dep.id, 'error', { error });
+      this.transitionDeploy(ctx.serverId, dep.id, 'error', { error });
       return err(error);
     }
   }
@@ -153,13 +153,13 @@ export class DeploymentService {
       return this.fullRedeploy(ctx, config, dep);
     }
 
-    this.transitionDeploy(config.id, dep.id, 'deploying');
+    this.transitionDeploy(ctx.serverId, dep.id, 'deploying');
 
     try {
       // Plan
       const planResult = await plugin.planDeploy(ctx, config, dep);
       if (!planResult.ok) {
-        this.transitionDeploy(config.id, dep.id, 'error', { error: planResult.error });
+        this.transitionDeploy(ctx.serverId, dep.id, 'error', { error: planResult.error });
         return planResult;
       }
 
@@ -168,16 +168,16 @@ export class DeploymentService {
 
       const result = await plugin.deployIncremental(ctx, config, dep, changes, incrementalPlan);
       if (!result.ok) {
-        this.transitionDeploy(config.id, dep.id, 'error', { error: result.error });
+        this.transitionDeploy(ctx.serverId, dep.id, 'error', { error: result.error });
         return result;
       }
 
-      this.transitionDeploy(config.id, dep.id, 'synced');
+      this.transitionDeploy(ctx.serverId, dep.id, 'synced');
       this.logger.debug(`DeploymentService: incremental sync for ${dep.deployName} (${changes.changes.length} files)`);
       return ok(undefined);
     } catch (cause) {
       const error = cause instanceof JsmError ? cause : JsmError.fromUnknown(cause);
-      this.transitionDeploy(config.id, dep.id, 'error', { error });
+      this.transitionDeploy(ctx.serverId, dep.id, 'error', { error });
       return err(error);
     }
   }
@@ -193,7 +193,7 @@ export class DeploymentService {
     if (!trustCheck.ok) return trustCheck;
 
     const plugin = this.getPlugin(config);
-    const currentState = this.getDeploymentState(config.id, dep.id);
+    const currentState = this.getDeploymentState(ctx.serverId, dep.id);
 
     // undeploy from error or synced → undeployed
     if (currentState !== 'undeployed') {
@@ -204,7 +204,7 @@ export class DeploymentService {
         return err(cause instanceof JsmError ? cause : JsmError.fromUnknown(cause));
       }
 
-      this.transitionDeploy(config.id, dep.id, 'undeployed');
+      this.transitionDeploy(ctx.serverId, dep.id, 'undeployed');
     }
 
     return ok(undefined);

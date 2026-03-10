@@ -24,15 +24,15 @@ export interface FileChangeBatch {
 
 export interface EventMap {
   // Config lifecycle
-  ServerAdded:            { serverId: ServerId };
-  ServerUpdated:          { serverId: ServerId };
-  ServerDeleted:          { serverId: ServerId };
+  ServerAdded:            { serverId: ServerId; workspaceFolderUri: string };
+  ServerUpdated:          { serverId: ServerId; workspaceFolderUri: string };
+  ServerDeleted:          { serverId: ServerId; workspaceFolderUri: string };
   // Server runtime
   ServerStateChanged:     { serverId: ServerId; state: ServerState; prevState: ServerState };
   // Deployment config
-  DeploymentAdded:        { serverId: ServerId; deploymentId: DeploymentId };
-  DeploymentUpdated:      { serverId: ServerId; deploymentId: DeploymentId };
-  DeploymentRemoved:      { serverId: ServerId; deploymentId: DeploymentId };
+  DeploymentAdded:        { serverId: ServerId; deploymentId: DeploymentId; workspaceFolderUri: string };
+  DeploymentUpdated:      { serverId: ServerId; deploymentId: DeploymentId; workspaceFolderUri: string };
+  DeploymentRemoved:      { serverId: ServerId; deploymentId: DeploymentId; workspaceFolderUri: string };
   // Deployment runtime
   DeploymentStateChanged: { serverId: ServerId; deploymentId: DeploymentId; state: DeploymentState };
   // Operations
@@ -41,7 +41,7 @@ export interface EventMap {
   OperationFailed:        { serverId: ServerId; operationId: OperationId; kind: OperationKind; error: JsmError };
   // Workspace
   WorkspaceLoaded:        { serverCount: number };
-  ConfigChanged:          { source: 'user' | 'migration' | 'wizard' | 'external' };
+  ConfigChanged:          { source: 'user' | 'migration' | 'wizard' | 'external'; workspaceFolderUri: string };
   // File watching
   FileChanged:            { serverId: ServerId; deploymentId: DeploymentId; batch: FileChangeBatch };
 }

@@ -1,0 +1,306 @@
+import * as fs from 'fs/promises';
+import { v4 as uuid } from 'uuid';
+import type { Result } from '@core/result';
+import { ok, err } from '@core/result';
+import { JsmError } from '@core/errors/JsmError';
+import { ErrorCode } from '@core/errors/codes';
+import type { HookConfig, Logger, PluginConfig, ServerConfig } from '@core/types';
+import type { ConfigService } from '@app/config/ConfigService';
+import type { PluginRegistry } from '@plugins/registry/PluginRegistry';
+import { ManagedInstancePathResolver } from './ManagedInstancePathResolver';
+
+const DEFAULT_HTTP_PORT = 8080;
+const DEFAULT_DEBUG_PORT = 5005;
+const DEFAULT_HOST = '127.0.0.1';
+const DEFAULT_DEBUG_BIND = '127.0.0.1';
+
+export interface CreateServerRequest {
+  name: string;
+  type?: 'tomcat';
+  runtimeHomePath: string;
+  javaHome: string;
+  host?: string;
+  httpPort?: number;
+  debugPort?: number;
+  debugBind?: string;
+  vmArgs?: string[];
+  hooks?: HookConfig[];
+  pluginConfig?: PluginConfig;
+}
+
+/**
+ * Orchestrates managed server provisioning.
+ * The extension owns managed instance creation, bootstrap, and cleanup on
+ * persistence failure.
+ */
+export class ServerProvisioningService {
+  private readonly configService: ConfigService;
+  private readonly pluginRegistry: PluginRegistry;
+  private readonly pathResolver: ManagedInstancePathResolver;
+  private readonly logger: Logger;
+
+  constructor(deps: {
+    configService: ConfigService;
+    pluginRegistry: PluginRegistry;
+    pathResolver: ManagedInstancePathResolver;
+    logger: Logger;
+  }) {
+    this.configService = deps.configService;
+    this.pluginRegistry = deps.pluginRegistry;
+    this.pathResolver = deps.pathResolver;
+    this.logger = deps.logger;
+  }
+
+  async createServer(request: CreateServerRequest): Promise<Result<ServerConfig, JsmError>> {
+    const type = request.type ?? 'tomcat';
+    const plugin = this.pluginRegistry.get(type);
+    if (!plugin) {
+      return err(new JsmError({
+        code: ErrorCode.Unsupported,
+        message: `No plugin registered for server type '${type}'`,
+      }));
+    }
+
+    const detectResult = await plugin.detectInstallation(request.runtimeHomePath);
+    if (!detectResult.ok) {
+      return detectResult;
+    }
+    if (!detectResult.value.ok) {
+      return err(new JsmError({
+        code: ErrorCode.ValidationFailed,
+        message: 'Tomcat installation validation failed',
+        details: detectResult.value.checks
+          .filter(check => !check.ok)
+          .map(check => check.message)
+          .join('; '),
+        suggestedFix: detectResult.value.checks
+          .filter(check => !check.ok)
+          .map(check => check.message),
+      }));
+    }
+
+    const serverId = uuid();
+    const instancePath = this.pathResolver.resolve(serverId);
+    const defaults = plugin.getDefaultConfig();
+
+    const serverConfig = this.buildServerConfig({
+      serverId,
+      instancePath,
+      request,
+      detectedVersion: detectResult.value.version,
+      defaults,
+    });
+
+    const validateResult = await plugin.validateConfig(serverConfig);
+    if (!validateResult.ok) {
+      return validateResult;
+    }
+
+    if (!plugin.initializeInstancePath) {
+      return err(new JsmError({
+        code: ErrorCode.Unsupported,
+        message: `Plugin '${type}' does not support managed instance provisioning`,
+      }));
+    }
+
+    const initResult = await plugin.initializeInstancePath(
+      serverConfig.runtime.homePath,
+      serverConfig.instancePath,
+      serverConfig,
+    );
+    if (!initResult.ok) {
+      return initResult;
+    }
+
+    const saveResult = await this.configService.addServer(serverConfig);
+    if (!saveResult.ok) {
+      await this.cleanupManagedInstance(serverConfig.instancePath);
+      return err(saveResult.error);
+    }
+
+    this.logger.info(`ServerProvisioningService: provisioned managed server '${serverConfig.name}'`);
+    return ok(serverConfig);
+  }
+
+  async removeServer(serverId: string): Promise<Result<void, JsmError>> {
+    const existing = this.configService.getServer(serverId);
+    if (!existing) {
+      return err(new JsmError({
+        code: ErrorCode.InvalidConfig,
+        message: `Server '${serverId}' not found`,
+      }));
+    }
+
+    const removeResult = await this.configService.removeServer(serverId);
+    if (!removeResult.ok) {
+      return removeResult;
+    }
+
+    const cleanupResult = await this.cleanupManagedInstance(existing.instancePath);
+    if (!cleanupResult.ok) {
+      return cleanupResult;
+    }
+
+    this.logger.info(`ServerProvisioningService: removed managed server '${serverId}'`);
+    return ok(undefined);
+  }
+
+  async repairServer(serverId: string): Promise<Result<ServerConfig, JsmError>> {
+    return this.restoreManagedInstance(serverId, false);
+  }
+
+  async rebuildServer(serverId: string): Promise<Result<ServerConfig, JsmError>> {
+    return this.restoreManagedInstance(serverId, true);
+  }
+
+  private buildServerConfig(args: {
+    serverId: string;
+    instancePath: string;
+    request: CreateServerRequest;
+    detectedVersion?: string;
+    defaults: Partial<ServerConfig>;
+  }): ServerConfig {
+    const { serverId, instancePath, request, detectedVersion, defaults } = args;
+
+    return {
+      id: serverId,
+      name: request.name.trim(),
+      type: request.type ?? 'tomcat',
+      runtime: {
+        id: uuid(),
+        homePath: request.runtimeHomePath,
+        version: detectedVersion,
+      },
+      instancePath,
+      javaHome: request.javaHome,
+      host: request.host ?? defaults.host ?? DEFAULT_HOST,
+      ports: {
+        http: request.httpPort ?? defaults.ports?.http ?? DEFAULT_HTTP_PORT,
+        debug: request.debugPort ?? defaults.ports?.debug ?? DEFAULT_DEBUG_PORT,
+      },
+      run: {
+        env: defaults.run?.env ?? {},
+        vmArgs: request.vmArgs ?? defaults.run?.vmArgs ?? [],
+        cwd: defaults.run?.cwd,
+      },
+      debug: {
+        enabled: defaults.debug?.enabled ?? true,
+        bind: request.debugBind ?? defaults.debug?.bind ?? DEFAULT_DEBUG_BIND,
+        attachDelayMs: defaults.debug?.attachDelayMs ?? 1000,
+      },
+      deployments: [],
+      autosync: {
+        enabled: defaults.autosync?.enabled ?? true,
+        debounceMs: defaults.autosync?.debounceMs ?? 400,
+        maxBatchFiles: defaults.autosync?.maxBatchFiles ?? 200,
+        maxBatchBytes: defaults.autosync?.maxBatchBytes ?? 20_000_000,
+        stormBackoffMs: defaults.autosync?.stormBackoffMs ?? 2000,
+        ignoreGlobs: defaults.autosync?.ignoreGlobs ?? ['**/.git/**', '**/node_modules/**'],
+      },
+      hooks: request.hooks ?? [],
+      pluginConfig: request.pluginConfig ?? defaults.pluginConfig,
+    };
+  }
+
+  private async cleanupManagedInstance(instancePath: string): Promise<Result<void, JsmError>> {
+    try {
+      await fs.rm(instancePath, { recursive: true, force: true });
+      return ok(undefined);
+    } catch (cause) {
+      const error = new JsmError({
+        code: ErrorCode.Unknown,
+        message: 'Server config was removed, but managed instance cleanup failed.',
+        details: cause instanceof Error ? cause.message : String(cause),
+        suggestedFix: ['Use diagnostics to inspect the instance path', 'Remove the leftover managed directory manually if needed'],
+        cause,
+      });
+      this.logger.warn(`ServerProvisioningService: failed to clean up managed instance '${instancePath}': ${String(cause)}`);
+      return err(error);
+    }
+  }
+
+  private async restoreManagedInstance(
+    serverId: string,
+    resetFirst: boolean,
+  ): Promise<Result<ServerConfig, JsmError>> {
+    const existing = this.configService.getServer(serverId);
+    if (!existing) {
+      return err(new JsmError({
+        code: ErrorCode.InvalidConfig,
+        message: `Server '${serverId}' not found`,
+      }));
+    }
+
+    const plugin = this.pluginRegistry.get(existing.type);
+    if (!plugin) {
+      return err(new JsmError({
+        code: ErrorCode.Unsupported,
+        message: `No plugin registered for server type '${existing.type}'`,
+      }));
+    }
+
+    if (!plugin.initializeInstancePath) {
+      return err(new JsmError({
+        code: ErrorCode.Unsupported,
+        message: `Plugin '${existing.type}' does not support managed instance provisioning`,
+      }));
+    }
+
+    const detectResult = await plugin.detectInstallation(existing.runtime.homePath);
+    if (!detectResult.ok) {
+      return detectResult;
+    }
+    if (!detectResult.value.ok) {
+      return err(new JsmError({
+        code: ErrorCode.ValidationFailed,
+        message: 'Tomcat installation validation failed',
+        details: detectResult.value.checks
+          .filter(check => !check.ok)
+          .map(check => check.message)
+          .join('; '),
+        suggestedFix: detectResult.value.checks
+          .filter(check => !check.ok)
+          .map(check => check.message),
+      }));
+    }
+
+    const validateResult = await plugin.validateConfig(existing);
+    if (!validateResult.ok) {
+      return validateResult;
+    }
+
+    if (resetFirst) {
+      const cleanupResult = await this.cleanupManagedInstance(existing.instancePath);
+      if (!cleanupResult.ok) {
+        return cleanupResult;
+      }
+    }
+
+    const initResult = await plugin.initializeInstancePath(
+      existing.runtime.homePath,
+      existing.instancePath,
+      existing,
+    );
+    if (!initResult.ok) {
+      return initResult;
+    }
+
+    const updatedConfig: ServerConfig = {
+      ...existing,
+      runtime: {
+        ...existing.runtime,
+        version: detectResult.value.version ?? existing.runtime.version,
+      },
+    };
+
+    const saveResult = await this.configService.updateServer(updatedConfig);
+    if (!saveResult.ok) {
+      return err(saveResult.error);
+    }
+
+    this.logger.info(
+      `ServerProvisioningService: ${resetFirst ? 'rebuilt' : 'repaired'} managed server '${serverId}'`,
+    );
+    return ok(updatedConfig);
+  }
+}

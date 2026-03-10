@@ -8,6 +8,7 @@ import type {
   DeploymentState,
 } from '@core/types';
 import type { ServerRuntimeState } from '@core/types/runtime';
+import type { WorkspaceServerRecord } from '@app/config';
 import {
   SERVER_CONTEXT,
   DEPLOYMENT_CONTEXT,
@@ -22,18 +23,50 @@ import { TREE_REFRESH_DEBOUNCE_MS, VIEW_ID } from '../../constants';
  * Injected data source so the tree provider does not depend on app-layer classes.
  */
 export interface TreeDataSource {
-  getAllServers(): ServerConfig[];
-  getRuntimeState(serverId: ServerId): ServerRuntimeState | undefined;
-  getDeploymentState(serverId: ServerId, deploymentId: DeploymentId): DeploymentState;
+  getWorkspaceFolders(): Array<{ workspaceFolderUri: string; workspaceFolderName: string }>;
+  getServers(workspaceFolderUri: string): WorkspaceServerRecord[];
+  getRuntimeState(serverKey: ServerId): ServerRuntimeState | undefined;
+  getDeploymentState(serverKey: ServerId, deploymentId: DeploymentId): DeploymentState;
 }
 
 // ── Tree Nodes ──────────────────────────────────────────────────────────────
 
-export class ServerNode extends vscode.TreeItem {
-  readonly serverId: ServerId;
-  readonly serverConfig: ServerConfig;
+export class WorkspaceNode extends vscode.TreeItem {
+  readonly workspaceFolderUri: string;
+  readonly workspaceFolderName: string;
 
-  constructor(config: ServerConfig, state: ServerState) {
+  constructor(workspaceFolderUri: string, workspaceFolderName: string) {
+    super(workspaceFolderName, vscode.TreeItemCollapsibleState.Expanded);
+    this.workspaceFolderUri = workspaceFolderUri;
+    this.workspaceFolderName = workspaceFolderName;
+    this.contextValue = 'jsm.workspace';
+    this.iconPath = new vscode.ThemeIcon('root-folder');
+  }
+}
+
+export class ServerNode extends vscode.TreeItem {
+  readonly workspaceFolderUri: string;
+  readonly workspaceFolderName: string;
+  readonly serverKey: ServerId;
+  readonly serverId: ServerId;
+  readonly serverConfig: WorkspaceServerRecord['config'];
+
+  constructor(
+    record: WorkspaceServerRecord | ServerConfig,
+    state: ServerState,
+    showWorkspaceLabel = false,
+  ) {
+    const normalizedRecord = 'config' in record
+      ? record
+      : {
+        workspaceFolderUri: '',
+        workspaceFolderName: '',
+        workspaceFolderFsPath: '',
+        serverId: record.id,
+        serverKey: record.id,
+        config: record,
+      };
+    const { config } = normalizedRecord;
     const label = `${config.type.charAt(0).toUpperCase() + config.type.slice(1)} • ${config.name}`;
     const hasDeployments = config.deployments.length > 0;
 
@@ -44,18 +77,25 @@ export class ServerNode extends vscode.TreeItem {
         : vscode.TreeItemCollapsibleState.None,
     );
 
+    this.workspaceFolderUri = normalizedRecord.workspaceFolderUri;
+    this.workspaceFolderName = normalizedRecord.workspaceFolderName;
+    this.serverKey = normalizedRecord.serverKey;
     this.serverId = config.id;
     this.serverConfig = config;
     this.contextValue = SERVER_CONTEXT[state];
-    this.description = state;
+    this.description = showWorkspaceLabel && normalizedRecord.workspaceFolderName
+      ? `${state} • ${normalizedRecord.workspaceFolderName}`
+      : state;
     this.iconPath = new vscode.ThemeIcon(SERVER_ICON[state]);
-    this.tooltip = ServerNode.buildTooltip(config, state);
+    this.tooltip = ServerNode.buildTooltip(normalizedRecord, state);
   }
 
-  private static buildTooltip(config: ServerConfig, state: ServerState): vscode.MarkdownString {
+  private static buildTooltip(record: WorkspaceServerRecord, state: ServerState): vscode.MarkdownString {
+    const { config } = record;
     const md = new vscode.MarkdownString();
     md.isTrusted = true;
     md.appendMarkdown(`**${config.name}** (${config.type})\n\n`);
+    md.appendMarkdown(`- **Workspace:** ${record.workspaceFolderName}\n`);
     md.appendMarkdown(`- **State:** ${state}\n`);
     md.appendMarkdown(`- **HTTP:** http://${config.host}:${config.ports.http}\n`);
     if (config.runtime.version) {
@@ -68,18 +108,33 @@ export class ServerNode extends vscode.TreeItem {
 }
 
 export class DeploymentNode extends vscode.TreeItem {
+  readonly workspaceFolderUri: string;
+  readonly workspaceFolderName: string;
+  readonly serverKey: ServerId;
   readonly serverId: ServerId;
   readonly deploymentId: DeploymentId;
   readonly deploymentConfig: DeploymentConfig;
 
   constructor(
-    serverId: ServerId,
+    serverNode: ServerNode | ServerId,
     dep: DeploymentConfig,
     state: DeploymentState,
   ) {
     super(dep.deployName, vscode.TreeItemCollapsibleState.None);
 
-    this.serverId = serverId;
+    const normalizedServerNode = typeof serverNode === 'string'
+      ? {
+        workspaceFolderUri: '',
+        workspaceFolderName: '',
+        serverKey: serverNode,
+        serverId: serverNode,
+      }
+      : serverNode;
+
+    this.workspaceFolderUri = normalizedServerNode.workspaceFolderUri;
+    this.workspaceFolderName = normalizedServerNode.workspaceFolderName;
+    this.serverKey = normalizedServerNode.serverKey;
+    this.serverId = normalizedServerNode.serverId;
     this.deploymentId = dep.id;
     this.deploymentConfig = dep;
     this.contextValue = DEPLOYMENT_CONTEXT[state];
@@ -108,10 +163,10 @@ export class DeploymentNode extends vscode.TreeItem {
  * Coalesces refresh calls via a debounce timer (§7.1).
  */
 export class ServerTreeViewProvider
-  implements vscode.TreeDataProvider<ServerNode | DeploymentNode>
+  implements vscode.TreeDataProvider<WorkspaceNode | ServerNode | DeploymentNode>
 {
   private readonly _onDidChangeTreeData = new vscode.EventEmitter<
-    ServerNode | DeploymentNode | undefined | void
+    WorkspaceNode | ServerNode | DeploymentNode | undefined | void
   >();
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
@@ -150,16 +205,28 @@ export class ServerTreeViewProvider
     this._onDidChangeTreeData.fire();
   }
 
-  getTreeItem(element: ServerNode | DeploymentNode): vscode.TreeItem {
+  getTreeItem(element: WorkspaceNode | ServerNode | DeploymentNode): vscode.TreeItem {
     return element;
   }
 
   getChildren(
-    element?: ServerNode | DeploymentNode,
-  ): (ServerNode | DeploymentNode)[] {
-    // Root level: server nodes
+    element?: WorkspaceNode | ServerNode | DeploymentNode,
+  ): (WorkspaceNode | ServerNode | DeploymentNode)[] {
+    const workspaces = this.dataSource.getWorkspaceFolders();
+
     if (!element) {
-      return this.getServerNodes();
+      if (workspaces.length <= 1) {
+        const workspaceFolderUri = workspaces[0]?.workspaceFolderUri;
+        return workspaceFolderUri ? this.getServerNodes(workspaceFolderUri, false) : [];
+      }
+
+      return workspaces.map(workspace =>
+        new WorkspaceNode(workspace.workspaceFolderUri, workspace.workspaceFolderName),
+      );
+    }
+
+    if (element instanceof WorkspaceNode) {
+      return this.getServerNodes(element.workspaceFolderUri, true);
     }
 
     // Server children: deployment nodes
@@ -171,22 +238,22 @@ export class ServerTreeViewProvider
     return [];
   }
 
-  private getServerNodes(): ServerNode[] {
-    const configs = this.dataSource.getAllServers();
-    return configs.map(config => {
-      const runtimeState = this.dataSource.getRuntimeState(config.id);
+  private getServerNodes(workspaceFolderUri: string, showWorkspaceLabel: boolean): ServerNode[] {
+    const records = this.dataSource.getServers(workspaceFolderUri);
+    return records.map(record => {
+      const runtimeState = this.dataSource.getRuntimeState(record.serverKey);
       const state: ServerState = runtimeState?.state ?? 'stopped';
-      return new ServerNode(config, state);
+      return new ServerNode(record, state, showWorkspaceLabel);
     });
   }
 
   private getDeploymentNodes(serverNode: ServerNode): DeploymentNode[] {
     return serverNode.serverConfig.deployments.map(dep => {
       const state = this.dataSource.getDeploymentState(
-        serverNode.serverId,
+        serverNode.serverKey,
         dep.id,
       );
-      return new DeploymentNode(serverNode.serverId, dep, state);
+      return new DeploymentNode(serverNode, dep, state);
     });
   }
 

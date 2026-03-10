@@ -91,7 +91,7 @@ describe('ConfigRepo', () => {
 
     // Simulate external edit
     const configPath = path.join(tmpDir, '.vscode', 'jsm.servers.json');
-    await fs.writeFile(configPath, '{"schemaVersion":1,"servers":[]}', 'utf-8');
+    await fs.writeFile(configPath, '{"servers":[]}', 'utf-8');
 
     expect(await repo.isDirty()).toBe(true);
   });

@@ -298,7 +298,7 @@ describe('ServerFormPanel', () => {
       expect(init.data).toBeDefined();
       expect(init.data.name).toBe('My Tomcat');
       expect(init.data['ports.http']).toBe(8080);
-      expect(init.schema.sections[1].fields.some((field: any) => field.name === 'instancePath')).toBe(true);
+      expect(init.schema.sections[1].fields.some((field: any) => field.name === 'instancePath')).toBe(false);
       expect(init.data.hooks).toEqual(server.hooks);
     });
 

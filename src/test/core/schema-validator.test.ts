@@ -82,7 +82,6 @@ describe('SchemaValidator', () => {
 
   it('accepts a valid minimal config', () => {
     const data = {
-      schemaVersion: 1,
       servers: [{
         id: '550e8400-e29b-41d4-a716-446655440000',
         name: 'Test',
@@ -112,7 +111,6 @@ describe('SchemaValidator', () => {
 
   it('rejects config with invalid port number', () => {
     const data = {
-      schemaVersion: 1,
       servers: [{
         id: '550e8400-e29b-41d4-a716-446655440000',
         name: 'Test',
@@ -142,7 +140,6 @@ describe('SchemaValidator', () => {
 
   it('rejects invalid debug.bind value', () => {
     const data = {
-      schemaVersion: 1,
       servers: [{
         id: '550e8400-e29b-41d4-a716-446655440000',
         name: 'Test',
@@ -174,7 +171,6 @@ describe('SchemaValidator', () => {
 
   it('rejects invalid deployName pattern', () => {
     const data = {
-      schemaVersion: 1,
       servers: [{
         id: '550e8400-e29b-41d4-a716-446655440000',
         name: 'Test',

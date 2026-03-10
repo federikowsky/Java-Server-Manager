@@ -5,9 +5,12 @@ import type { Result } from '@core/result';
 import { ok, err } from '@core/result';
 import { JsmError } from '@core/errors/JsmError';
 import { ErrorCode } from '@core/errors/codes';
-import type { WorkspaceConfig } from '@core/policy/ConfigNormalizer';
 import { WORKSPACE_CONFIG_FILENAME, WORKSPACE_CONFIG_DIR } from '../../constants';
 import { atomicWrite, readFileSafe, exists } from './FileUtils';
+
+interface WorkspaceConfig {
+  servers: ServerConfig[];
+}
 
 /**
  * Config file repository for `.vscode/jsm.servers.json`.
@@ -99,7 +102,6 @@ export class ConfigRepo {
     return new Promise<Result<void, JsmError>>((resolve) => {
       this.writeQueue = this.writeQueue.then(async () => {
         const data: WorkspaceConfig = {
-          schemaVersion: 1,
           servers: [...this.cache.values()],
         };
         const content = JSON.stringify(data, null, 2);

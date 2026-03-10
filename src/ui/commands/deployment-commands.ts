@@ -1,5 +1,7 @@
 import * as vscode from 'vscode';
-import type { SyncMode, OperationContext } from '@core/types';
+import type { SyncMode, OperationContext, ServerConfig, DeploymentConfig } from '@core/types';
+import type { Result } from '@core/result';
+import type { JsmError } from '@core/errors/JsmError';
 import type { WorkspaceServiceRegistry } from '@app/config';
 import type { DeploymentService } from '@app/deployment/DeploymentService';
 import type { ServerTreeViewProvider } from '@ui/tree/ServerTreeViewProvider';
@@ -18,9 +20,9 @@ import {
 export interface DeploymentCommandsDeps {
   workspaceRegistry?: WorkspaceServiceRegistry;
   configService?: {
-    getServer(serverId: string): any;
-    updateServer(config: any): Promise<any>;
-    removeDeployment(serverId: string, deploymentId: string): Promise<any>;
+    getServer(serverId: string): ServerConfig | undefined;
+    updateServer(config: ServerConfig): Promise<Result<void, JsmError>>;
+    removeDeployment(serverId: string, deploymentId: string): Promise<Result<void, JsmError>>;
   };
   deployService: DeploymentService;
   treeProvider: ServerTreeViewProvider;
@@ -81,7 +83,7 @@ export function registerDeploymentCommands(
     ['jsm.deployment.sync', async (arg: unknown) => {
       if (!isDeploymentNode(arg)) return;
       const config = resolveServer(arg.workspaceFolderUri, arg.serverId);
-      const dep = config?.deployments.find(d => d.id === arg.deploymentId);
+      const dep = config?.deployments.find((d: DeploymentConfig) => d.id === arg.deploymentId);
       if (!config || !dep) return;
       const ctx = makeOpCtx(arg.serverKey, 'DeployFull', arg.deploymentId);
       const result = await deployService.fullRedeploy(ctx, config, dep);
@@ -93,7 +95,7 @@ export function registerDeploymentCommands(
     ['jsm.deployment.fullRedeploy', async (arg: unknown) => {
       if (!isDeploymentNode(arg)) return;
       const config = resolveServer(arg.workspaceFolderUri, arg.serverId);
-      const dep = config?.deployments.find(d => d.id === arg.deploymentId);
+      const dep = config?.deployments.find((d: DeploymentConfig) => d.id === arg.deploymentId);
       if (!config || !dep) return;
       const ctx = makeOpCtx(arg.serverKey, 'DeployFull', arg.deploymentId);
       const result = await deployService.fullRedeploy(ctx, config, dep);
@@ -105,7 +107,7 @@ export function registerDeploymentCommands(
     ['jsm.deployment.undeploy', async (arg: unknown) => {
       if (!isDeploymentNode(arg)) return;
       const config = resolveServer(arg.workspaceFolderUri, arg.serverId);
-      const dep = config?.deployments.find(d => d.id === arg.deploymentId);
+      const dep = config?.deployments.find((d: DeploymentConfig) => d.id === arg.deploymentId);
       if (!config || !dep) return;
       const ctx = makeOpCtx(arg.serverKey, 'Undeploy', arg.deploymentId);
       const result = await deployService.undeploy(ctx, config, dep);
@@ -123,14 +125,14 @@ export function registerDeploymentCommands(
       const server = resolveServer(locator.workspaceFolderUri, locator.serverId);
       if (!server) return;
 
-      const dep = server.deployments.find(d => d.id === arg.deploymentId);
+      const dep = server.deployments.find((d: DeploymentConfig) => d.id === arg.deploymentId);
       if (!dep) return;
 
       const newMode = nextSyncMode(dep.syncMode);
       const updatedDep = { ...dep, syncMode: newMode };
       const updatedServer = {
         ...server,
-        deployments: server.deployments.map(d =>
+        deployments: server.deployments.map((d: DeploymentConfig) =>
           d.id === arg.deploymentId ? updatedDep : d,
         ),
       };

@@ -75,14 +75,9 @@
         "icon": "$(trash)"
       },
       {
-        "command": "jsm.server.repairInstance",
-        "title": "Repair Managed Instance",
-        "icon": "$(tools)"
-      },
-      {
-        "command": "jsm.server.rebuildInstance",
-        "title": "Rebuild Managed Instance",
-        "icon": "$(history)"
+        "command": "jsm.server.openFolder",
+        "title": "Open Folder",
+        "icon": "$(folder-opened)"
       },
       {
         "command": "jsm.diagnostics.copy",
@@ -135,24 +130,9 @@
         "icon": "$(close)"
       },
       {
-        "command": "jsm.server.refreshStatus",
-        "title": "Refresh Status",
-        "icon": "$(refresh)"
-      },
-      {
         "command": "jsm.server.duplicate",
         "title": "Duplicate Server",
         "icon": "$(copy)"
-      },
-      {
-        "command": "jsm.server.openConfig",
-        "title": "Open Config File",
-        "icon": "$(json)"
-      },
-      {
-        "command": "jsm.server.openHome",
-        "title": "Open Server Home",
-        "icon": "$(folder-opened)"
       },
       {
         "command": "jsm.deployment.configureIgnoreGlobs",
@@ -255,29 +235,14 @@
           "group": "manage@2"
         },
         {
-          "command": "jsm.server.repairInstance",
+          "command": "jsm.server.openFolder",
           "when": "view == javaServerManagerView && viewItem =~ /jsm\\.server\\..*/",
           "group": "manage@2.5"
-        },
-        {
-          "command": "jsm.server.rebuildInstance",
-          "when": "view == javaServerManagerView && viewItem =~ /jsm\\.server\\..*/",
-          "group": "manage@2.6"
         },
         {
           "command": "jsm.server.openLogs",
           "when": "view == javaServerManagerView && viewItem =~ /jsm\\.server\\..*/",
           "group": "troubleshooting@1"
-        },
-        {
-          "command": "jsm.server.refreshStatus",
-          "when": "view == javaServerManagerView && viewItem =~ /jsm\\.server\\..*/",
-          "group": "troubleshooting@2"
-        },
-        {
-          "command": "jsm.server.openConfig",
-          "when": "view == javaServerManagerView && viewItem =~ /jsm\\.server\\..*/",
-          "group": "troubleshooting@2.5"
         },
         {
           "command": "jsm.diagnostics.copy",

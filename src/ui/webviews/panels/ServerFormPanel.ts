@@ -59,16 +59,6 @@ function serverFormSchema(mode: 'create' | 'edit'): FormSchema {
     },
   ];
 
-  if (mode === 'edit') {
-    identityFields.push({
-      name: 'instancePath',
-      label: 'Instance Path',
-      type: 'text',
-      readOnly: true,
-      helpText: 'Managed per-server instance directory owned by the extension.',
-    });
-  }
-
   return {
     title: mode === 'create' ? 'Add Server' : 'Edit Server',
     sections: [
@@ -435,7 +425,6 @@ function serverConfigToFormData(config: ServerConfig): Record<string, unknown> {
     type: config.type,
     'runtime.homePath': config.runtime.homePath,
     'runtime.version': config.runtime.version,
-    instancePath: config.instancePath,
     javaHome: config.javaHome,
     host: config.host,
     'ports.http': config.ports.http,

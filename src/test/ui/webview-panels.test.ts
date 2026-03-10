@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import type { ServerConfig, DeploymentConfig } from '@core/types/domain';
+import type { ServerConfig, DeploymentConfig, ServerTemplate } from '@core/types/domain';
 import type { Logger } from '@core/types/logger';
 import { ErrorCode } from '@core/errors/codes';
 import { JsmError } from '@core/errors/JsmError';
@@ -228,6 +228,11 @@ function openAndReady(panel: InstanceType<typeof ServerFormPanel>, mode: 'create
   mockPanelInstance!.simulateMessage({ v: WEBVIEW_PROTOCOL_VERSION, command: 'ready' });
 }
 
+function openCreateWithTemplateAndReady(panel: InstanceType<typeof ServerFormPanel>, template: ServerTemplate) {
+  panel.openCreateWithTemplate('', template);
+  mockPanelInstance!.simulateMessage({ v: WEBVIEW_PROTOCOL_VERSION, command: 'ready' });
+}
+
 /** Get all postMessage calls as typed messages */
 function postedMessages(): HostToWebview[] {
   return mockPostMessage.mock.calls.map(c => c[0] as HostToWebview);
@@ -346,6 +351,32 @@ describe('ServerFormPanel', () => {
         expect(request.httpPort).toBe(8080);
         expect(request.debugPort).toBe(5005);
       });
+    });
+
+    it('should prefill create mode from a template', () => {
+      const template: ServerTemplate = {
+        id: 'tpl-1',
+        name: 'Tomcat Template',
+        pluginType: 'tomcat',
+        serverDefaults: {
+          runtime: { homePath: '/opt/template-tomcat' },
+          javaHome: '/opt/template-java',
+          host: 'localhost',
+          ports: { http: 8181, debug: 5100 },
+          run: { vmArgs: ['-Xmx2g'] },
+          debug: { bind: 'localhost' },
+        },
+      };
+
+      openCreateWithTemplateAndReady(panel, template);
+
+      const init = lastPosted('init') as any;
+      expect(init.data.name).toBeUndefined();
+      expect(init.data['runtime.homePath']).toBe('/opt/template-tomcat');
+      expect(init.data.javaHome).toBe('/opt/template-java');
+      expect(init.data['ports.http']).toBe(8181);
+      expect(init.data['debug.bind']).toBe('localhost');
+      expect(init.data.hooks).toBeUndefined();
     });
 
     it('should serialize hooks when creating a server', async () => {

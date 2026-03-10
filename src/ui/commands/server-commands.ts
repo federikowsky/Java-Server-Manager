@@ -36,7 +36,7 @@ export interface ServerCommandsDeps {
   treeProvider: ServerTreeViewProvider;
   serverFormPanel: ServerFormPanel | {
     open?(mode: 'create' | 'edit', serverId?: string): void;
-    openCreate?(workspaceFolderUri: string): void;
+    openCreate?(workspaceFolderUri: string, template?: import('@core/types').ServerTemplate): void;
     openEdit?(locator: { workspaceFolderUri: string; serverId: string }): void;
   };
 }

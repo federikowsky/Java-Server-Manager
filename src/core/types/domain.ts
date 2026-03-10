@@ -159,8 +159,22 @@ export interface ServerTemplate {
   id: TemplateId;
   name: string;
   pluginType: ServerType;
-  serverDefaults: Partial<Omit<ServerConfig, 'id' | 'deployments' | 'hooks'>>;
-  deploymentDefaults: Partial<Omit<DeploymentConfig, 'id'>>[];
-  hookDefaults: HookConfig[];
+  serverDefaults: {
+    runtime?: {
+      homePath?: string;
+    };
+    javaHome?: string;
+    host?: string;
+    ports?: {
+      http?: number;
+      debug?: number;
+    };
+    run?: {
+      vmArgs?: string[];
+    };
+    debug?: {
+      bind?: string;
+    };
+  };
   description?: string;
 }

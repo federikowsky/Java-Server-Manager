@@ -12,6 +12,12 @@ import type { KeyValueStore } from '@core/types/runtime';
 const GLOBAL_TEMPLATES_KEY = 'jsm.templates.global';
 const WORKSPACE_TEMPLATES_KEY = 'jsm.templates.workspace';
 
+export interface ScopedTemplateEntry {
+  key: string;
+  template: ServerTemplate;
+  scope: 'global' | 'workspace';
+}
+
 /**
  * Template service (§5.5).
  * Manages global and workspace-scoped server templates.
@@ -36,8 +42,8 @@ export class TemplateService {
 
   /** Get all templates (global + workspace, workspace wins on id collision). */
   getAll(): ServerTemplate[] {
-    const global = this.globalStore.get<ServerTemplate[]>(GLOBAL_TEMPLATES_KEY) ?? [];
-    const workspace = this.workspaceStore.get<ServerTemplate[]>(WORKSPACE_TEMPLATES_KEY) ?? [];
+    const global = this.getScoped('global');
+    const workspace = this.getScoped('workspace');
 
     // Workspace overrides global on same id
     const map = new Map<TemplateId, ServerTemplate>();
@@ -48,12 +54,41 @@ export class TemplateService {
 
   /** Get a template by ID. Checks workspace first, then global. */
   get(id: TemplateId): ServerTemplate | undefined {
-    const workspace = this.workspaceStore.get<ServerTemplate[]>(WORKSPACE_TEMPLATES_KEY) ?? [];
+    const workspace = this.getScoped('workspace');
     const found = workspace.find(t => t.id === id);
     if (found) return found;
 
-    const global = this.globalStore.get<ServerTemplate[]>(GLOBAL_TEMPLATES_KEY) ?? [];
+    const global = this.getScoped('global');
     return global.find(t => t.id === id);
+  }
+
+  /** Get all templates including their storage scope. */
+  listScoped(): ScopedTemplateEntry[] {
+    return [
+      ...this.getScoped('workspace').map(template => ({
+        key: `workspace:${template.id}`,
+        template,
+        scope: 'workspace' as const,
+      })),
+      ...this.getScoped('global').map(template => ({
+        key: `global:${template.id}`,
+        template,
+        scope: 'global' as const,
+      })),
+    ];
+  }
+
+  cloneTemplate(args: {
+    template: ServerTemplate;
+    id: TemplateId;
+    name: string;
+  }): ServerTemplate {
+    const { template, id, name } = args;
+    return {
+      ...structuredClone(template),
+      id,
+      name,
+    };
   }
 
   // ── Write ─────────────────────────────────────────────────────────
@@ -105,5 +140,11 @@ export class TemplateService {
     } catch (cause) {
       return err(cause instanceof JsmError ? cause : JsmError.fromUnknown(cause));
     }
+  }
+
+  private getScoped(scope: 'global' | 'workspace'): ServerTemplate[] {
+    const store = scope === 'global' ? this.globalStore : this.workspaceStore;
+    const key = scope === 'global' ? GLOBAL_TEMPLATES_KEY : WORKSPACE_TEMPLATES_KEY;
+    return store.get<ServerTemplate[]>(key) ?? [];
   }
 }

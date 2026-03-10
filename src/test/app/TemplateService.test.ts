@@ -23,8 +23,6 @@ function makeTemplate(id = 'tpl-1', name = 'Default Tomcat'): ServerTemplate {
     name,
     pluginType: 'tomcat',
     serverDefaults: {},
-    deploymentDefaults: [],
-    hookDefaults: [],
   };
 }
 
@@ -98,5 +96,26 @@ describe('TemplateService', () => {
     await service.save(makeTemplate('t1', 'Updated'), 'global');
     expect(service.get('t1')?.name).toBe('Updated');
     expect(service.getAll()).toHaveLength(1);
+  });
+
+  it('lists templates with their scope', async () => {
+    await service.save(makeTemplate('g1', 'Global'), 'global');
+    await service.save(makeTemplate('w1', 'Workspace'), 'workspace');
+
+    expect(service.listScoped()).toEqual([
+      expect.objectContaining({ key: 'workspace:w1', scope: 'workspace', template: expect.objectContaining({ id: 'w1' }) }),
+      expect.objectContaining({ key: 'global:g1', scope: 'global', template: expect.objectContaining({ id: 'g1' }) }),
+    ]);
+  });
+
+  it('clones a template with a new id and name', () => {
+    const clone = service.cloneTemplate({
+      template: makeTemplate('t1', 'Original'),
+      id: 't2',
+      name: 'Copy',
+    });
+
+    expect(clone.id).toBe('t2');
+    expect(clone.name).toBe('Copy');
   });
 });

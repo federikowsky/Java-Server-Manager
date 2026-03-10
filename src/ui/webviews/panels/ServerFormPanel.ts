@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
 import type { WorkspaceServerLocator, WorkspaceServiceRegistry } from '@app/config';
-import type { CreateServerRequest } from '@app/server/ServerProvisioningService';
+import type { CreateServerRequest } from '@app/server';
 import type { Logger } from '@core/types';
+import type { ServerTemplate } from '@core/types';
 import type {
   FormSchema,
   FormFieldDef,
@@ -170,9 +171,13 @@ export class ServerFormPanel extends BaseFormPanel {
   }
 
   openCreate(workspaceFolderUri: string): void {
+    this.openCreateWithTemplate(workspaceFolderUri);
+  }
+
+  openCreateWithTemplate(workspaceFolderUri: string, template?: ServerTemplate): void {
     this.editServerLocator = undefined;
     this.createWorkspaceFolderUri = workspaceFolderUri;
-    this.show('create');
+    this.show('create', template ? templateToServerFormData(template) : undefined);
   }
 
   openEdit(locator: WorkspaceServerLocator): void {
@@ -192,7 +197,7 @@ export class ServerFormPanel extends BaseFormPanel {
     if (mode === 'create') {
       const scope = this.workspaceRegistry.getWorkspaceScopes()[0];
       if (scope) {
-        this.openCreate(scope.uri);
+        this.openCreateWithTemplate(scope.uri);
       }
       return;
     }
@@ -417,6 +422,18 @@ export class ServerFormPanel extends BaseFormPanel {
 // ── Form Data Helpers ───────────────────────────────────────────────────────
 
 import type { ServerConfig } from '@core/types';
+
+function templateToServerFormData(template: ServerTemplate): Record<string, unknown> {
+  return {
+    'runtime.homePath': template.serverDefaults.runtime?.homePath,
+    javaHome: template.serverDefaults.javaHome,
+    host: template.serverDefaults.host,
+    'ports.http': template.serverDefaults.ports?.http,
+    'ports.debug': template.serverDefaults.ports?.debug,
+    'run.vmArgs': template.serverDefaults.run?.vmArgs,
+    'debug.bind': template.serverDefaults.debug?.bind,
+  };
+}
 
 function serverConfigToFormData(config: ServerConfig): Record<string, unknown> {
   return {

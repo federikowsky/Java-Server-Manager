@@ -52,6 +52,37 @@ function sleep(ms: number): Promise<void> {
   return new Promise(r => setTimeout(r, ms));
 }
 
+async function waitForHttpReadiness(
+  portScanner: PortScanner,
+  config: ServerConfig,
+  timeoutMs: number,
+  startedAt: number,
+): Promise<boolean> {
+  let ready = false;
+
+  while (!ready && (Date.now() - startedAt) < timeoutMs) {
+    const portOpen = await portScanner.probe(config.ports.http, config.host);
+    const decision = decideReadiness({
+      portOpen,
+      elapsed: Date.now() - startedAt,
+      timeoutMs,
+    });
+
+    if (decision === 'ready') {
+      ready = true;
+      break;
+    }
+
+    if (decision === 'timeout') {
+      break;
+    }
+
+    await sleep(READINESS_PROBE_INTERVAL_MS);
+  }
+
+  return ready;
+}
+
 function makeCtx(
   serverId: ServerId,
   _serverName: string,
@@ -275,6 +306,7 @@ export class ServerLifecycle {
   private async doStartInternal(server: ServerEntry, mode: StartMode, hookEvent?: HookEvent): Promise<void> {
     const { config, runtime } = server;
     const plugin = this.getPlugin(config);
+    const startedAt = Date.now();
 
     if (hookEvent) {
       await this.runServerHooks(server, 'pre', hookEvent);
@@ -302,28 +334,26 @@ export class ServerLifecycle {
         throw startResult.error;
       }
 
-      const { pid } = startResult.value;
+      const { pid, startupMonitor } = startResult.value;
       await this.deps.pidManager.writePid(server.serverKey, pid);
 
-      // Readiness probe loop
-      const startedAt = Date.now();
       let ready = false;
 
-      while (!ready && (Date.now() - startedAt) < timeoutMs) {
-        await sleep(READINESS_PROBE_INTERVAL_MS);
-
-        const portOpen = await this.deps.portScanner.probe(config.ports.http, config.host);
-        const decision = decideReadiness({
-          portOpen,
-          elapsed: Date.now() - startedAt,
-          timeoutMs,
-        });
-
-        if (decision === 'ready') {
-          ready = true;
-        } else if (decision === 'timeout') {
-          break;
+      try {
+        if (startupMonitor) {
+          const outcome = await startupMonitor.waitForOutcome(timeoutMs);
+          if (outcome.state === 'failed') {
+            throw outcome.error ?? new JsmError({
+              code: ErrorCode.ProcessSpawnFailed,
+              message: outcome.message ?? `Server '${config.name}' reported a startup failure`,
+            });
+          }
+          ready = await waitForHttpReadiness(this.deps.portScanner, config, timeoutMs, startedAt);
+        } else {
+          ready = await waitForHttpReadiness(this.deps.portScanner, config, timeoutMs, startedAt);
         }
+      } finally {
+        await startupMonitor?.dispose();
       }
 
       if (!ready) {
@@ -533,7 +563,7 @@ export class ServerLifecycle {
     if (!result.ok) {
       this.deps.logger.warn(`ServerLifecycle: onError hook failed for '${server.config.name}'`, result.error);
     }
-    if (cause instanceof JsmError) {
+    if (cause instanceof JsmError && server.runtime.state !== 'error') {
       server.runtime.transition('error', { error: cause });
     }
   }

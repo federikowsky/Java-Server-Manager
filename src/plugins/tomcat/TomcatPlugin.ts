@@ -33,6 +33,7 @@ import type {
   DeployResult,
   LogSources,
 } from '../interfaces/IServerPlugin';
+import { TomcatStartupMonitor } from './TomcatStartupMonitor';
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
@@ -50,6 +51,32 @@ const TOMCAT_CAPABILITIES: PluginCapabilities = {
 const INSTANCE_SEED_DIRS = ['conf'] as const;
 /** Directories created empty on instancePath initialization. */
 const INSTANCE_EMPTY_DIRS = ['logs', 'temp', 'work', 'webapps'] as const;
+const TOMCAT_STARTUP_LISTENER_CLASS = 'com.githubcopilot.jsm.tomcat.StartupLifecycleListener';
+const TOMCAT_STARTUP_LISTENER_FILENAME = 'jsm-tomcat-startup-listener.jar';
+const XML_DECLARATION = '<?xml version="1.0" encoding="UTF-8"?>';
+const XML_DECLARATION_PATTERN = /^\s*<\?xml\b/i;
+const TOMCAT_STARTUP_LISTENER_PATTERN = new RegExp(`<Listener\\b[^>]*\\bclassName=["']${TOMCAT_STARTUP_LISTENER_CLASS.replace(/\./g, '\\.')}["']`, 'i');
+const TOMCAT_XML_PARSER_OPTIONS = {
+  ignoreAttributes: false,
+  attributeNamePrefix: '@_',
+  preserveOrder: true,
+  commentPropName: '#comment',
+  processEntities: false,
+  parseTagValue: false,
+  parseAttributeValue: false,
+};
+const TOMCAT_XML_BUILDER_OPTIONS = {
+  ignoreAttributes: false,
+  attributeNamePrefix: '@_',
+  preserveOrder: true,
+  commentPropName: '#comment',
+  format: true,
+  suppressEmptyNode: false,
+};
+
+export interface TomcatPluginOptions {
+  startupListenerJarPath?: string;
+}
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -78,6 +105,19 @@ async function existingConfigSources(candidates: ConfigSource[]): Promise<Config
   return available.filter(entry => entry.exists).map(entry => entry.candidate);
 }
 
+function parseTomcatXml(xml: string): unknown[] {
+  return new XMLParser(TOMCAT_XML_PARSER_OPTIONS).parse(xml.replace(/<!DOCTYPE[^>]*>/gi, ''));
+}
+
+function buildTomcatXml(nodes: unknown[]): string {
+  const xml = new XMLBuilder(TOMCAT_XML_BUILDER_OPTIONS).build(nodes);
+  return XML_DECLARATION_PATTERN.test(xml) ? xml : `${XML_DECLARATION}\n${xml}`;
+}
+
+function hasStartupListenerRegistration(xml: string): boolean {
+  return TOMCAT_STARTUP_LISTENER_PATTERN.test(xml);
+}
+
 // ── TomcatPlugin ────────────────────────────────────────────────────────────
 
 export class TomcatPlugin implements IServerPlugin {
@@ -87,13 +127,15 @@ export class TomcatPlugin implements IServerPlugin {
   private readonly logger: Logger;
   private readonly spawner: ProcessSpawner;
   private readonly portScanner: PortScanner;
+  private readonly startupListenerJarPath?: string;
   /** Track running child processes by serverId for stop(). */
   private readonly childProcesses = new Map<string, ChildProcess>();
 
-  constructor(logger: Logger) {
+  constructor(logger: Logger, options: TomcatPluginOptions = {}) {
     this.logger = logger;
     this.spawner = new ProcessSpawner(logger);
     this.portScanner = new PortScanner();
+    this.startupListenerJarPath = options.startupListenerJarPath;
   }
 
   getCapabilities(): PluginCapabilities {
@@ -252,38 +294,12 @@ export class TomcatPlugin implements IServerPlugin {
     config: ServerConfig,
   ): Promise<Result<void, JsmError>> {
     try {
-      const xml = await fs.readFile(serverXmlPath, 'utf-8');
-
-      // XXE protection: strip DOCTYPE declarations before parsing
-      const sanitized = xml.replace(/<!DOCTYPE[^>]*>/gi, '');
-
-      const parser = new XMLParser({
-        ignoreAttributes: false,
-        attributeNamePrefix: '@_',
-        preserveOrder: true,
-        commentPropName: '#comment',
-        processEntities: false,
-        // Do not parse tag values as number/boolean
-        parseTagValue: false,
-        parseAttributeValue: false,
-      });
-
-      const parsed = parser.parse(sanitized);
+      const parsed = parseTomcatXml(await fs.readFile(serverXmlPath, 'utf-8'));
 
       // Patch ports and remove AJP connectors
       this.patchServerElement(parsed, config);
 
-      const builder = new XMLBuilder({
-        ignoreAttributes: false,
-        attributeNamePrefix: '@_',
-        preserveOrder: true,
-        commentPropName: '#comment',
-        format: true,
-        suppressEmptyNode: false,
-      });
-
-      const output = '<?xml version="1.0" encoding="UTF-8"?>\n' + builder.build(parsed);
-      await fs.writeFile(serverXmlPath, output, 'utf-8');
+      await fs.writeFile(serverXmlPath, buildTomcatXml(parsed), 'utf-8');
 
       return ok(undefined);
     } catch (cause) {
@@ -397,6 +413,29 @@ export class TomcatPlugin implements IServerPlugin {
       JAVA_HOME: config.javaHome,
       ...config.run.env,
     };
+    let startupMonitor: TomcatStartupMonitor | undefined;
+
+    if (this.startupListenerJarPath) {
+      const prepareResult = await this.prepareStartupListener(config);
+      if (!prepareResult.ok) {
+        return prepareResult;
+      }
+
+      try {
+        startupMonitor = await TomcatStartupMonitor.create({
+          serverKey: config.id,
+          serverName: config.name,
+          logger: this.logger,
+        });
+      } catch (cause) {
+        return err(new JsmError({
+          code: ErrorCode.Unknown,
+          message: `Failed to initialize Tomcat startup callback for ${config.name}`,
+          details: cause instanceof Error ? cause.message : String(cause),
+          cause,
+        }));
+      }
+    }
 
     const args: string[] = [];
 
@@ -416,6 +455,17 @@ export class TomcatPlugin implements IServerPlugin {
       env['JAVA_OPTS'] = (existing + ' ' + config.run.vmArgs.join(' ')).trim();
     }
 
+    if (startupMonitor) {
+      const callbackVmArgs = [
+        `-Djsm.startup.callback.url=${startupMonitor.callbackUrl}`,
+        `-Djsm.startup.callback.token=${startupMonitor.token}`,
+        `-Djsm.startup.callback.startupId=${startupMonitor.startupId}`,
+        `-Djsm.startup.callback.serverKey=${config.id}`,
+      ];
+      const existing = env['JAVA_OPTS'] ?? '';
+      env['JAVA_OPTS'] = (existing + ' ' + callbackVmArgs.join(' ')).trim();
+    }
+
     ctx.progress.report('Starting Tomcat...');
 
     const child = this.spawner.spawn({
@@ -427,12 +477,15 @@ export class TomcatPlugin implements IServerPlugin {
     });
 
     if (!child.pid) {
+      await startupMonitor?.dispose();
       return err(new JsmError({
         code: ErrorCode.ProcessSpawnFailed,
         message: 'Failed to spawn Tomcat process',
         suggestedFix: ['Check JAVA_HOME is valid', 'Check Tomcat scripts have execute permission'],
       }));
     }
+
+    startupMonitor?.bindProcess(child);
 
     this.childProcesses.set(config.id, child);
 
@@ -447,6 +500,7 @@ export class TomcatPlugin implements IServerPlugin {
       pid: child.pid,
       httpUrl: `http://${config.host}:${config.ports.http}`,
       hints,
+      startupMonitor,
     };
 
     if (mode === 'debug') {
@@ -893,6 +947,97 @@ export class TomcatPlugin implements IServerPlugin {
       }
     } catch {
       // dir listing failed — skip pruning
+    }
+  }
+
+  private async prepareStartupListener(config: ServerConfig): Promise<Result<void, JsmError>> {
+    if (!this.startupListenerJarPath) {
+      return ok(undefined);
+    }
+
+    if (!(await exists(this.startupListenerJarPath))) {
+      return err(new JsmError({
+        code: ErrorCode.SourceNotFound,
+        message: `Tomcat startup listener asset not found: ${this.startupListenerJarPath}`,
+      }));
+    }
+
+    const libDir = path.join(config.instancePath, 'lib');
+    const serverXmlPath = path.join(config.instancePath, 'conf', 'server.xml');
+
+    if (!(await exists(serverXmlPath))) {
+      return err(new JsmError({
+        code: ErrorCode.InvalidConfig,
+        message: `Tomcat instance server.xml not found at ${serverXmlPath}`,
+        suggestedFix: ['Initialize the Tomcat instance path before starting the server'],
+      }));
+    }
+
+    try {
+      await ensureDir(libDir);
+      await fs.copyFile(
+        this.startupListenerJarPath,
+        path.join(libDir, TOMCAT_STARTUP_LISTENER_FILENAME),
+      );
+    } catch (cause) {
+      return err(new JsmError({
+        code: ErrorCode.ConfigWriteFailed,
+        message: `Failed to stage Tomcat startup listener for ${config.name}`,
+        details: cause instanceof Error ? cause.message : String(cause),
+        cause,
+      }));
+    }
+
+    return this.ensureStartupListenerRegistration(serverXmlPath);
+  }
+
+  private async ensureStartupListenerRegistration(serverXmlPath: string): Promise<Result<void, JsmError>> {
+    try {
+      const xml = await fs.readFile(serverXmlPath, 'utf-8');
+      if (hasStartupListenerRegistration(xml)) {
+        return ok(undefined);
+      }
+
+      const parsed = parseTomcatXml(xml);
+      this.ensureServerListenerRegistration(parsed);
+
+      await fs.writeFile(serverXmlPath, buildTomcatXml(parsed), 'utf-8');
+      return ok(undefined);
+    } catch (cause) {
+      return err(new JsmError({
+        code: ErrorCode.ConfigWriteFailed,
+        message: `Failed to register Tomcat startup listener in ${serverXmlPath}`,
+        details: cause instanceof Error ? cause.message : String(cause),
+        cause,
+      }));
+    }
+  }
+
+  private ensureServerListenerRegistration(nodes: unknown[]): void {
+    for (const node of nodes) {
+      if (!node || typeof node !== 'object') continue;
+      const obj = node as Record<string, unknown>;
+
+      if ('Server' in obj && Array.isArray(obj['Server'])) {
+        const children = obj['Server'] as Array<Record<string, unknown>>;
+        const alreadyRegistered = children.some((child) => {
+          if (!child || typeof child !== 'object' || !('Listener' in child)) {
+            return false;
+          }
+
+          const attrs = (child[':@'] ?? {}) as Record<string, string>;
+          return attrs['@_className'] === TOMCAT_STARTUP_LISTENER_CLASS;
+        });
+
+        if (!alreadyRegistered) {
+          children.unshift({
+            Listener: [],
+            ':@': { '@_className': TOMCAT_STARTUP_LISTENER_CLASS },
+          });
+        }
+
+        return;
+      }
     }
   }
 }

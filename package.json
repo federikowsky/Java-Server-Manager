@@ -278,11 +278,12 @@
     }
   },
   "scripts": {
-    "compile": "npm run check-types && npm run lint && node esbuild.js",
+    "build:tomcat-listener": "node tools/tomcat-startup-listener/build.mjs",
+    "compile": "npm run build:tomcat-listener && npm run check-types && npm run lint && node esbuild.js",
     "watch": "npm-run-all -p watch:*",
     "watch:esbuild": "node esbuild.js --watch",
     "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
-    "package": "npm run check-types && npm run lint && node esbuild.js --production",
+    "package": "npm run build:tomcat-listener && npm run check-types && npm run lint && node esbuild.js --production",
     "check-types": "tsc --noEmit --skipLibCheck",
     "lint": "eslint src --ignore-pattern 'src-legacy'",
     "test": "vitest run",

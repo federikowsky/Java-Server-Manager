@@ -3,8 +3,10 @@ import { ServerLifecycle } from '@app/server/ServerLifecycle';
 import type { ServerConfig } from '@core/types/domain';
 import type { Logger } from '@core/types/logger';
 import { ok } from '@core/result';
+import { JsmError } from '@core/errors/JsmError';
 import { ErrorCode } from '@core/errors/codes';
 import type { HookConfig } from '@core/types/domain';
+import type { StartupMonitor } from '@plugins/interfaces/IServerPlugin';
 
 /* ── helpers ─────────────────────────────────────────────────────────────── */
 
@@ -228,6 +230,109 @@ describe('ServerLifecycle', () => {
 
       expect(hookRunner.runHooks).toHaveBeenNthCalledWith(1, 'srv-1', 'pre', 'lifecycle.start', config.hooks);
       expect(hookRunner.runHooks).toHaveBeenNthCalledWith(2, 'srv-1', 'post', 'lifecycle.start', config.hooks);
+    });
+
+    it('uses startupMonitor when provided and skips readiness probing', async () => {
+      const queue = mockQueue();
+      const runtime = lifecycle.register('srv-1', makeServer(), queue as never);
+      const startupMonitor: StartupMonitor = {
+        waitForOutcome: vi.fn(async () => ({ state: 'started' })),
+        dispose: vi.fn(async () => {}),
+      };
+      const pluginStart = vi.fn(async () => ok({
+        pid: 123,
+        httpUrl: 'http://127.0.0.1:8080',
+        hints: [],
+        startupMonitor,
+      }));
+
+      pluginRegistry.get.mockReturnValue({
+        start: pluginStart,
+        stop: vi.fn(),
+        getStatus: vi.fn(),
+        detect: vi.fn(),
+      });
+      portScanner.probe.mockResolvedValue(true);
+
+      const executor = queue.setExecutor.mock.calls[0][0] as (entry: { kind: string; meta?: Record<string, unknown> }) => Promise<void>;
+      await executor({ kind: 'LifecycleStart', meta: { mode: 'run' } });
+
+      expect(startupMonitor.waitForOutcome).toHaveBeenCalledOnce();
+      expect(startupMonitor.dispose).toHaveBeenCalledOnce();
+      expect(portScanner.probe).toHaveBeenCalled();
+      expect(runtime.state).toBe('running');
+    });
+
+    it('transitions to error when startupMonitor reports started but HTTP never becomes ready', async () => {
+      const queue = mockQueue();
+      const runtime = lifecycle.register('srv-1', {
+        ...makeServer(),
+        timeouts: { startRunMs: 1, stopMs: 20_000 },
+      } as ServerConfig, queue as never);
+      const startupMonitor: StartupMonitor = {
+        waitForOutcome: vi.fn(async () => ({ state: 'started' })),
+        dispose: vi.fn(async () => {}),
+      };
+
+      pluginRegistry.get.mockReturnValue({
+        start: vi.fn(async () => ok({
+          pid: 123,
+          httpUrl: 'http://127.0.0.1:8080',
+          hints: [],
+          startupMonitor,
+        })),
+        stop: vi.fn(),
+        getStatus: vi.fn(),
+        detect: vi.fn(),
+      });
+      portScanner.probe.mockResolvedValue(false);
+
+      const executor = queue.setExecutor.mock.calls[0][0] as (entry: { kind: string; meta?: Record<string, unknown> }) => Promise<void>;
+      await executor({ kind: 'LifecycleStart', meta: { mode: 'run' } });
+
+      expect(runtime.state).toBe('error');
+      expect(bus.emit).toHaveBeenCalledWith('OperationFailed', expect.objectContaining({
+        serverId: 'srv-1',
+        kind: 'LifecycleStart',
+        error: expect.objectContaining({ code: ErrorCode.Timeout }),
+      }));
+      expect(startupMonitor.dispose).toHaveBeenCalledOnce();
+    });
+
+    it('transitions to error when startupMonitor reports failure', async () => {
+      const queue = mockQueue();
+      const runtime = lifecycle.register('srv-1', makeServer(), queue as never);
+      const startupError = new JsmError({
+        code: ErrorCode.ProcessSpawnFailed,
+        message: 'Tomcat startup failed',
+      });
+      const startupMonitor: StartupMonitor = {
+        waitForOutcome: vi.fn(async () => ({ state: 'failed', error: startupError })),
+        dispose: vi.fn(async () => {}),
+      };
+
+      pluginRegistry.get.mockReturnValue({
+        start: vi.fn(async () => ok({
+          pid: 123,
+          httpUrl: 'http://127.0.0.1:8080',
+          hints: [],
+          startupMonitor,
+        })),
+        stop: vi.fn(),
+        getStatus: vi.fn(),
+        detect: vi.fn(),
+      });
+
+      const executor = queue.setExecutor.mock.calls[0][0] as (entry: { kind: string; meta?: Record<string, unknown> }) => Promise<void>;
+      await executor({ kind: 'LifecycleStart', meta: { mode: 'run' } });
+
+      expect(runtime.state).toBe('error');
+      expect(bus.emit).toHaveBeenCalledWith('OperationFailed', expect.objectContaining({
+        serverId: 'srv-1',
+        kind: 'LifecycleStart',
+        error: startupError,
+      }));
+      expect(startupMonitor.dispose).toHaveBeenCalledOnce();
     });
 
     it('runs only lifecycle.restart hooks for restart operations', async () => {

@@ -3,6 +3,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
 import { TomcatPlugin } from '@plugins/tomcat/TomcatPlugin';
+import { TomcatStartupMonitor } from '@plugins/tomcat/TomcatStartupMonitor';
 import type { ServerConfig, DeploymentConfig, OperationContext } from '@core/types';
 import type { Logger } from '@core/types/logger';
 
@@ -119,7 +120,7 @@ describe('TomcatPlugin — detection', () => {
     if (result.ok) {
       expect(result.value.ok).toBe(true);
       expect(result.value.version).toBe('10.1.28');
-      expect(result.value.checks.every(c => c.ok)).toBe(true);
+      expect(result.value.checks.every((c: { ok: boolean }) => c.ok)).toBe(true);
     }
   });
 
@@ -131,7 +132,7 @@ describe('TomcatPlugin — detection', () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.value.ok).toBe(false);
-      expect(result.value.checks.some(c => !c.ok)).toBe(true);
+      expect(result.value.checks.some((c: { ok: boolean }) => !c.ok)).toBe(true);
     }
   });
 
@@ -189,9 +190,8 @@ describe('TomcatPlugin — getConfigSources', () => {
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.value.map(source => source.path)).toEqual([
+      expect(result.value.map((source: { path: string }) => source.path)).toEqual([
         path.join(instancePath, 'conf', 'web.xml'),
-        path.join(homePath, 'conf', 'server.xml'),
       ]);
     }
   });
@@ -314,6 +314,85 @@ describe('TomcatPlugin — initializeInstancePath', () => {
 
     // AJP should still be present
     expect(xml).toContain('AJP');
+  });
+
+  it('stages the startup listener jar and registers the listener idempotently', async () => {
+    const homePath = path.join(tmpDir, 'tomcat-home');
+    await createFakeTomcatHome(homePath);
+    const instancePath = path.join(tmpDir, 'instance');
+    const listenerAsset = path.join(tmpDir, 'listener.jar');
+    await fs.writeFile(listenerAsset, 'listener-binary');
+
+    plugin = new TomcatPlugin(noopLogger(), { startupListenerJarPath: listenerAsset });
+    const config = fakeConfig(homePath, instancePath);
+
+    await plugin.initializeInstancePath(homePath, instancePath, config);
+
+    const firstResult = await plugin['prepareStartupListener'](config);
+    expect(firstResult.ok).toBe(true);
+
+    const secondResult = await plugin['prepareStartupListener'](config);
+    expect(secondResult.ok).toBe(true);
+
+    const stagedJar = await fs.readFile(path.join(instancePath, 'lib', 'jsm-tomcat-startup-listener.jar'), 'utf-8');
+    const xml = await fs.readFile(path.join(instancePath, 'conf', 'server.xml'), 'utf-8');
+
+    expect(stagedJar).toBe('listener-binary');
+    expect((xml.match(/<\?xml version="1\.0" encoding="UTF-8"\?>/g) ?? [])).toHaveLength(1);
+    expect((xml.match(/com\.githubcopilot\.jsm\.tomcat\.StartupLifecycleListener/g) ?? [])).toHaveLength(1);
+  });
+});
+
+describe('TomcatStartupMonitor', () => {
+  it('resolves started outcome from authenticated callback', async () => {
+    const monitor = await TomcatStartupMonitor.create({
+      serverKey: 'srv-1',
+      serverName: 'Test Tomcat',
+      logger: noopLogger(),
+    });
+
+    try {
+      const response = await fetch(monitor.callbackUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token: monitor.token,
+          startupId: monitor.startupId,
+          status: 'started',
+        }),
+      });
+
+      expect(response.status).toBe(204);
+      await expect(monitor.waitForOutcome(500)).resolves.toEqual({ state: 'started', message: undefined });
+    } finally {
+      await monitor.dispose();
+    }
+  });
+
+  it('fails fast when the bound process exits before callback', async () => {
+    const monitor = await TomcatStartupMonitor.create({
+      serverKey: 'srv-1',
+      serverName: 'Test Tomcat',
+      logger: noopLogger(),
+    });
+
+    try {
+      const child = {
+        on: (_event: string, handler: (code: number | null, signal: string | null) => void) => {
+          handler(1, null);
+        },
+        off: () => undefined,
+      } as unknown as NodeJS.Process;
+
+      monitor.bindProcess(child as never);
+
+      await expect(monitor.waitForOutcome(500)).resolves.toMatchObject({
+        state: 'failed',
+        error: expect.objectContaining({ code: 'ProcessSpawnFailed' }),
+      });
+    } finally {
+      await monitor.dispose();
+    }
   });
 });
 

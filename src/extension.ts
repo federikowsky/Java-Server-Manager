@@ -90,7 +90,9 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
   // ── 3. Plugins layer ──────────────────────────────────────────────────
 
   const pluginRegistry = new PluginRegistry(logger);
-  pluginRegistry.register('tomcat', (l: ILogger) => new TomcatPlugin(l));
+  pluginRegistry.register('tomcat', (l: ILogger) => new TomcatPlugin(l, {
+    startupListenerJarPath: path.join(ctx.extensionUri.fsPath, 'assets', 'tomcat', 'jsm-tomcat-startup-listener.jar'),
+  }));
 
   // ── 4. UI adapters (needed by app layer) ──────────────────────────────
 

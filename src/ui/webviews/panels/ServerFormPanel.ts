@@ -7,6 +7,7 @@ import type {
   FieldError,
 } from '../protocol';
 import { WEBVIEW_PROTOCOL_VERSION } from '../protocol';
+import { normalizeHookList, validateHookList } from '../hookForm';
 import { BaseFormPanel } from './BaseFormPanel';
 
 // ── Dependency contract ─────────────────────────────────────────────────────
@@ -16,6 +17,9 @@ export interface ServerFormPanelDeps {
   configService: ConfigService;
   logger: Logger;
 }
+
+const DEFAULT_HTTP_PORT = 8080;
+const DEFAULT_DEBUG_PORT = 5005;
 
 // ── Server Form Schema (§7.7) ──────────────────────────────────────────────
 
@@ -53,7 +57,7 @@ function serverFormSchema(mode: 'create' | 'edit'): FormSchema {
             label: 'HTTP Port',
             type: 'port',
             required: true,
-            defaultValue: 8080,
+            defaultValue: DEFAULT_HTTP_PORT,
             validation: { min: 1, max: 65535 },
           },
           {
@@ -61,7 +65,7 @@ function serverFormSchema(mode: 'create' | 'edit'): FormSchema {
             label: 'Debug Port',
             type: 'port',
             required: true,
-            defaultValue: 5005,
+            defaultValue: DEFAULT_DEBUG_PORT,
             validation: { min: 1, max: 65535 },
           },
           {
@@ -114,6 +118,13 @@ function serverFormSchema(mode: 'create' | 'edit'): FormSchema {
               { value: 'localhost', label: 'localhost' },
               { value: '::1', label: '::1' },
             ],
+          },
+          {
+            name: 'hooks',
+            label: 'Hooks',
+            type: 'hooks',
+            defaultValue: [],
+            helpText: 'Configure server hooks as terminal commands or VS Code tasks. New hooks start with a default Hook-N identifier used in logs and diagnostics.',
           },
         ],
       },
@@ -197,8 +208,8 @@ export class ServerFormPanel extends BaseFormPanel {
           command: 'defaults',
           data: {
             host: '127.0.0.1',
-            'ports.http': 8080,
-            'ports.debug': 5005,
+            'ports.http': DEFAULT_HTTP_PORT,
+            'ports.debug': DEFAULT_DEBUG_PORT,
             'debug.bind': '127.0.0.1',
           },
         });
@@ -349,6 +360,7 @@ function serverConfigToFormData(config: ServerConfig): Record<string, unknown> {
     'ports.debug': config.ports.debug,
     'run.vmArgs': config.run.vmArgs,
     'debug.bind': config.debug.bind,
+    hooks: config.hooks,
   };
 }
 
@@ -379,6 +391,7 @@ function formDataToServerConfig(
       ...existing.debug,
       bind: String(data['debug.bind'] ?? existing.debug.bind),
     },
+    hooks: normalizeHookList(data['hooks'] ?? existing.hooks),
   };
 }
 
@@ -396,8 +409,8 @@ function formDataToNewServerConfig(data: Record<string, unknown>): ServerConfig 
     javaHome: String(data['javaHome'] ?? ''),
     host: String(data['host'] ?? '127.0.0.1'),
     ports: {
-      http: Number(data['ports.http'] ?? 8080),
-      debug: Number(data['ports.debug'] ?? 5005),
+      http: Number(data['ports.http'] ?? DEFAULT_HTTP_PORT),
+      debug: Number(data['ports.debug'] ?? DEFAULT_DEBUG_PORT),
     },
     run: {
       env: {},
@@ -419,7 +432,7 @@ function formDataToNewServerConfig(data: Record<string, unknown>): ServerConfig 
       stormBackoffMs: 2000,
       ignoreGlobs: ['**/.git/**', '**/node_modules/**'],
     },
-    hooks: [],
+    hooks: normalizeHookList(data['hooks']),
   };
 }
 
@@ -450,21 +463,21 @@ function validateServerForm(data: Record<string, unknown>): FieldError[] {
     });
   }
 
-  const httpPort = Number(data['ports.http']);
+  const httpPort = Number(data['ports.http'] ?? DEFAULT_HTTP_PORT);
   if (!Number.isFinite(httpPort) || httpPort < 1 || httpPort > 65535) {
     errors.push({
       field: 'ports.http',
       message: 'HTTP port must be between 1 and 65535.',
-      suggestedFix: 'Use port 8080 (default) or another free port.',
+      suggestedFix: `Use port ${DEFAULT_HTTP_PORT} (default) or another free port.`,
     });
   }
 
-  const debugPort = Number(data['ports.debug']);
+  const debugPort = Number(data['ports.debug'] ?? DEFAULT_DEBUG_PORT);
   if (!Number.isFinite(debugPort) || debugPort < 1 || debugPort > 65535) {
     errors.push({
       field: 'ports.debug',
       message: 'Debug port must be between 1 and 65535.',
-      suggestedFix: 'Use port 5005 (default) or another free port.',
+      suggestedFix: `Use port ${DEFAULT_DEBUG_PORT} (default) or another free port.`,
     });
   }
 
@@ -478,6 +491,8 @@ function validateServerForm(data: Record<string, unknown>): FieldError[] {
       suggestedFix: `Change debug port to ${httpPort + 1}.`,
     });
   }
+
+  errors.push(...validateHookList(data['hooks']));
 
   return errors;
 }

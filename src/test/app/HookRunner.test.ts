@@ -19,7 +19,7 @@ function makeHook(overrides: Partial<HookConfig> = {}): HookConfig {
     kind: 'command',
     timeoutMs: 60_000,
     continueOnError: false,
-    command: { exe: '/bin/echo', args: ['hello'] },
+    command: { mode: 'shell', line: 'echo hello' },
     ...overrides,
   };
 }

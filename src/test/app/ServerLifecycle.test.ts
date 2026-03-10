@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ServerLifecycle } from '@app/server/ServerLifecycle';
 import type { ServerConfig } from '@core/types/domain';
 import type { Logger } from '@core/types/logger';
+import { ok } from '@core/result';
 import { ErrorCode } from '@core/errors/codes';
 
 /* ── helpers ─────────────────────────────────────────────────────────────── */
@@ -125,6 +126,52 @@ describe('ServerLifecycle', () => {
       const queue = mockQueue();
       lifecycle.register(makeServer(), queue as never);
       expect(queue.setExecutor).toHaveBeenCalledOnce();
+    });
+
+    it('routes operation output to the injected per-server sink', async () => {
+      const append = vi.fn();
+      const appendLine = vi.fn();
+      const clear = vi.fn();
+      const queue = mockQueue();
+      const logger = mockLogger();
+      const pluginStart = vi.fn(async (ctx: any) => {
+        ctx.progress.report('Starting Tomcat...');
+        ctx.output.appendLine('catalina output');
+        return ok({
+          pid: 123,
+          httpUrl: 'http://127.0.0.1:8080',
+          hints: [],
+        });
+      });
+
+      pluginRegistry.get.mockReturnValue({
+        start: pluginStart,
+        stop: vi.fn(),
+        getStatus: vi.fn(),
+      });
+      portScanner.probe.mockResolvedValue(true);
+
+      lifecycle = new ServerLifecycle({
+        pluginRegistry: pluginRegistry as never,
+        bus: bus as never,
+        pidManager: pidManager as never,
+        portScanner: portScanner as never,
+        debugAttacher: debugAttacher as never,
+        logger,
+        getOutputSink: () => ({ append, appendLine, clear }),
+      });
+
+      lifecycle.register(makeServer(), queue as never);
+      const executor = queue.setExecutor.mock.calls[0][0] as (entry: { kind: string; meta?: Record<string, unknown> }) => Promise<void>;
+
+      await executor({ kind: 'LifecycleStart', meta: { mode: 'run' } });
+
+      expect(pluginStart).toHaveBeenCalledOnce();
+      expect(appendLine).toHaveBeenCalledWith('Starting Tomcat...');
+      expect(appendLine).toHaveBeenCalledWith('catalina output');
+      expect(clear).not.toHaveBeenCalled();
+      expect(logger.info).not.toHaveBeenCalledWith('[srv-1] Starting Tomcat...');
+      expect(logger.debug).not.toHaveBeenCalledWith('catalina output');
     });
   });
 

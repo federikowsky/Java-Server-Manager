@@ -11,6 +11,7 @@ export type {
 export type {
   TomcatPluginConfig,
   PluginConfig,
+  HookCommandConfig,
   HookPhase,
   HookEvent,
   HookKind,

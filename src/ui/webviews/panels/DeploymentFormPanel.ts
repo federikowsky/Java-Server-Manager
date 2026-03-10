@@ -7,6 +7,7 @@ import type {
   FieldError,
 } from '../protocol';
 import { WEBVIEW_PROTOCOL_VERSION } from '../protocol';
+import { normalizeHookList, validateHookList } from '../hookForm';
 import { BaseFormPanel } from './BaseFormPanel';
 
 // ── Dependency contract ─────────────────────────────────────────────────────
@@ -83,6 +84,13 @@ function deploymentFormSchema(mode: 'create' | 'edit'): FormSchema {
             type: 'tags',
             helpText: 'File patterns to exclude from sync.',
           },
+          {
+            name: 'hooks',
+            label: 'Hooks',
+            type: 'hooks',
+            defaultValue: [],
+            helpText: 'Configure deployment hooks as terminal commands or VS Code tasks. New hooks start with a default Hook-N identifier used in logs and diagnostics.',
+          },
         ],
       },
     ],
@@ -130,6 +138,7 @@ export class DeploymentFormPanel extends BaseFormPanel {
           deployName: dep.deployName,
           syncMode: dep.syncMode,
           ignoreGlobs: dep.ignoreGlobs,
+          hooks: dep.hooks,
         };
       }
     }
@@ -177,6 +186,7 @@ export class DeploymentFormPanel extends BaseFormPanel {
                 deployName: dep.deployName,
                 syncMode: dep.syncMode,
                 ignoreGlobs: dep.ignoreGlobs,
+                hooks: dep.hooks,
               },
             });
           }
@@ -354,7 +364,7 @@ function formDataToDeploymentConfig(
     ignoreGlobs: Array.isArray(data['ignoreGlobs'])
       ? (data['ignoreGlobs'] as string[])
       : [],
-    hooks: [],
+    hooks: normalizeHookList(data['hooks']),
   };
 }
 
@@ -392,6 +402,8 @@ function validateDeploymentForm(data: Record<string, unknown>): FieldError[] {
       suggestedFix: 'Select WAR or Exploded Directory.',
     });
   }
+
+  errors.push(...validateHookList(data['hooks']));
 
   return errors;
 }

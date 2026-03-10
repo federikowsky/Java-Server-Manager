@@ -7,7 +7,77 @@ describe('SchemaValidator', () => {
 
   beforeEach(() => {
     validator = new SchemaValidator();
-    validator.addSchema('workspace', schema);
+    validator.registerBuiltInSchemas(schema as Record<string, unknown> & {
+      definitions?: Record<string, unknown>;
+    });
+  });
+
+  it('accepts a valid single server config', () => {
+    const server = {
+      id: '550e8400-e29b-41d4-a716-446655440000',
+      name: 'Test',
+      type: 'tomcat',
+      runtime: { id: 'r1', homePath: '/opt/tomcat' },
+      instancePath: '/tmp/base',
+      javaHome: '/usr/lib/jvm/java-17',
+      host: '127.0.0.1',
+      ports: { http: 8080, debug: 5005 },
+      run: { env: {}, vmArgs: [] },
+      debug: { enabled: true, bind: '127.0.0.1', attachDelayMs: 1000 },
+      deployments: [],
+      autosync: {
+        enabled: true,
+        debounceMs: 400,
+        maxBatchFiles: 200,
+        maxBatchBytes: 20000000,
+        stormBackoffMs: 2000,
+        ignoreGlobs: [],
+      },
+      hooks: [],
+    };
+
+    const result = validator.validate(server, 'server-config');
+    expect(result.ok).toBe(true);
+  });
+
+  it('accepts a shell-based hook config', () => {
+    const server = {
+      id: '550e8400-e29b-41d4-a716-446655440000',
+      name: 'Hook Test',
+      type: 'tomcat',
+      runtime: { id: 'r1', homePath: '/opt/tomcat' },
+      instancePath: '/tmp/base',
+      javaHome: '/usr/lib/jvm/java-17',
+      host: '127.0.0.1',
+      ports: { http: 8080, debug: 5005 },
+      run: { env: {}, vmArgs: [] },
+      debug: { enabled: true, bind: '127.0.0.1', attachDelayMs: 1000 },
+      deployments: [],
+      autosync: {
+        enabled: true,
+        debounceMs: 400,
+        maxBatchFiles: 200,
+        maxBatchBytes: 20000000,
+        stormBackoffMs: 2000,
+        ignoreGlobs: [],
+      },
+      hooks: [{
+        id: 'hook-shell-1',
+        enabled: true,
+        phase: 'pre',
+        event: 'lifecycle.start',
+        kind: 'command',
+        timeoutMs: 60000,
+        continueOnError: false,
+        command: {
+          mode: 'shell',
+          line: 'npm run build && npm test',
+        },
+      }],
+    };
+
+    const result = validator.validate(server, 'server-config');
+    expect(result.ok).toBe(true);
   });
 
   it('accepts a valid minimal config', () => {

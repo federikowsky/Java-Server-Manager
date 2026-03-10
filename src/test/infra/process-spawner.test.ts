@@ -72,6 +72,20 @@ describe('ProcessSpawner', () => {
       const { code } = await exitPromise;
       expect(code).toBe(42);
     });
+
+    it('runs a shell command line', async () => {
+      const chunks: string[] = [];
+      const exitPromise = new Promise<void>((resolve) => {
+        spawner.spawnShell({
+          line: 'printf "alpha" && printf "-beta"',
+          onData: (chunk) => chunks.push(chunk),
+          onExit: () => resolve(),
+        });
+      });
+
+      await exitPromise;
+      expect(chunks.join('')).toContain('alpha-beta');
+    });
   });
 
   /* ── isRunning ───────────────────────────────────────────────────── */

@@ -4,6 +4,10 @@ import { ok, err, type Result } from '../result';
 import { JsmError } from '../errors/JsmError';
 import { ErrorCode } from '../errors/codes';
 
+type SchemaDocument = Record<string, unknown> & {
+  definitions?: Record<string, unknown>;
+};
+
 /**
  * JSON schema validator using AJV.
  * Compiles each schema once during initialization and caches validators (§5.5).
@@ -21,6 +25,20 @@ export class SchemaValidator {
   addSchema(schemaId: string, schema: object): void {
     const validate = this.ajv.compile({ ...schema, $id: undefined });
     this.validators.set(schemaId, validate);
+  }
+
+  /** Register the workspace document and its extracted server schema. */
+  registerBuiltInSchemas(workspaceSchema: SchemaDocument): void {
+    const serverConfigSchema = workspaceSchema.definitions?.['ServerConfig'];
+    if (!serverConfigSchema || typeof serverConfigSchema !== 'object') {
+      throw new Error('Built-in workspace schema is missing definitions.ServerConfig');
+    }
+
+    this.addSchema('workspace', workspaceSchema);
+    this.addSchema('server-config', {
+      ...(serverConfigSchema as Record<string, unknown>),
+      definitions: workspaceSchema.definitions,
+    });
   }
 
   /** Validate data against a previously registered schema. */

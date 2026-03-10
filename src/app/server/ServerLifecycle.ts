@@ -7,6 +7,7 @@ import type {
   Logger,
   DebugAttacher,
   TrustGate,
+  OutputSink,
 } from '@core/types';
 import type { Result } from '@core/result';
 import { ok, err } from '@core/result';
@@ -32,6 +33,7 @@ export interface ServerLifecycleDeps {
   debugAttacher: DebugAttacher;
   logger: Logger;
   trustGate?: TrustGate;
+  getOutputSink?: (serverId: ServerId, serverName: string) => OutputSink;
 }
 
 interface ServerEntry {
@@ -48,9 +50,11 @@ function sleep(ms: number): Promise<void> {
 
 function makeCtx(
   serverId: ServerId,
+  _serverName: string,
   kind: OperationKind,
   timeoutMs: number,
-  logger: Logger,
+  _logger: Logger,
+  outputSink?: OutputSink,
 ): OperationContext {
   return {
     operationId: `op-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` as OperationContext['operationId'],
@@ -62,11 +66,13 @@ function makeCtx(
       isCancelled: false,
       onCancelled: () => ({ dispose: () => {} }),
     },
-    progress: { report: (msg: string) => logger.info(`[${serverId}] ${msg}`) },
+    progress: {
+      report: (msg: string) => outputSink?.appendLine(msg),
+    },
     output: {
-      append: (text: string) => logger.debug(text),
-      appendLine: (text: string) => logger.debug(text),
-      clear: () => {},
+      append: (text: string) => outputSink?.append(text),
+      appendLine: (text: string) => outputSink?.appendLine(text),
+      clear: () => outputSink?.clear(),
     },
   };
 }
@@ -269,7 +275,14 @@ export class ServerLifecycle {
       ? (config.timeouts?.startDebugMs ?? 45_000)
       : (config.timeouts?.startRunMs ?? 30_000);
 
-    const ctx = makeCtx(config.id, 'LifecycleStart', timeoutMs, this.deps.logger);
+    const ctx = makeCtx(
+      config.id,
+      config.name,
+      'LifecycleStart',
+      timeoutMs,
+      this.deps.logger,
+      this.deps.getOutputSink?.(config.id, config.name),
+    );
 
     const startResult = await plugin.start(ctx, config, mode);
     if (!startResult.ok) {
@@ -339,7 +352,14 @@ export class ServerLifecycle {
     runtime.transition('stopping');
 
     const timeoutMs = config.timeouts?.stopMs ?? 20_000;
-    const ctx = makeCtx(config.id, 'LifecycleStop', timeoutMs, this.deps.logger);
+    const ctx = makeCtx(
+      config.id,
+      config.name,
+      'LifecycleStop',
+      timeoutMs,
+      this.deps.logger,
+      this.deps.getOutputSink?.(config.id, config.name),
+    );
 
     const stopResult = await plugin.stop(ctx, config);
     if (!stopResult.ok) {
@@ -375,7 +395,14 @@ export class ServerLifecycle {
     const { config, runtime } = server;
     const plugin = this.getPlugin(config);
 
-    const ctx = makeCtx(config.id, 'StatusRefresh', 5000, this.deps.logger);
+    const ctx = makeCtx(
+      config.id,
+      config.name,
+      'StatusRefresh',
+      5000,
+      this.deps.logger,
+      this.deps.getOutputSink?.(config.id, config.name),
+    );
     const result = await plugin.getStatus(ctx, config);
     if (!result.ok) return;
 

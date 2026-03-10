@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import workspaceSchemaDocument from '../data/jsm.servers.schema.json';
 import type { HookConfig, ServerId, DeploymentId, FileChangeBatch, OperationContext, Logger as ILogger } from '@core/types';
 import type { Result } from '@core/result';
 import { ok, err } from '@core/result';
@@ -76,6 +77,9 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
     new OperationQueue(serverId, logger);
 
   const validator = new SchemaValidator();
+  validator.registerBuiltInSchemas(workspaceSchemaDocument as Record<string, unknown> & {
+    definitions?: Record<string, unknown>;
+  });
 
   // ── 3. Plugins layer ──────────────────────────────────────────────────
 
@@ -86,6 +90,8 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
 
   const debugAdapter = new DebugAdapter();
   const fileWatcherAdapter = new FileWatcherAdapter();
+  const logChannel = new ServerLogChannel();
+  disposables.push(logChannel);
 
   // ── 5. App layer ──────────────────────────────────────────────────────
 
@@ -96,9 +102,8 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
         if (!cmd) {
           return err(new JsmError({ code: ErrorCode.HookFailed, message: 'Hook has no command config' }));
         }
-        const child = processSpawner.spawn({
-          exe: cmd.exe,
-          args: cmd.args,
+        const child = processSpawner.spawnShell({
+          line: cmd.line,
           cwd: cmd.cwd ?? workspaceFolder,
           env: cmd.env,
         });
@@ -166,6 +171,17 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
     debugAttacher: debugAdapter,
     logger,
     trustGate,
+    getOutputSink: (serverId, serverName) => ({
+      append: (text: string) => {
+        logChannel.getChannel(serverId, serverName).append(text);
+      },
+      appendLine: (text: string) => {
+        logChannel.appendLine(serverId, serverName, text);
+      },
+      clear: () => {
+        logChannel.getChannel(serverId, serverName).clear();
+      },
+    }),
   });
 
   const deployService = new DeploymentService({
@@ -228,9 +244,6 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
 
   // ── 6. UI presentation ────────────────────────────────────────────────
 
-  const logChannel = new ServerLogChannel();
-  disposables.push(logChannel);
-
   const treeProvider = new ServerTreeViewProvider({
     getAllServers: () => configService.getAllServers(),
     getRuntimeState: (sid: ServerId) => lifecycle.getRuntime(sid)?.getState(),
@@ -287,16 +300,60 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
   // ── 8. Event wiring ──────────────────────────────────────────────────
 
   disposables.push(
+    eventBus.on('ServerAdded', ({ serverId }) => {
+      const config = configService.getServer(serverId);
+      if (config) {
+        const queue = opQueueFactory(serverId);
+        lifecycle.register(config, queue);
+      }
+      treeProvider.requestRefresh();
+    }),
+    eventBus.on('ServerUpdated', ({ serverId }) => {
+      const config = configService.getServer(serverId);
+      if (config) {
+        lifecycle.updateConfig(serverId, config);
+      }
+      treeProvider.requestRefresh();
+    }),
+    eventBus.on('ServerDeleted', ({ serverId }) => {
+      lifecycle.unregister(serverId);
+      logChannel.detach(serverId);
+      autoSyncService.suspend(serverId);
+      treeProvider.requestRefresh();
+    }),
+    eventBus.on('DeploymentAdded', ({ serverId }) => {
+      const config = configService.getServer(serverId);
+      if (config) {
+        lifecycle.updateConfig(serverId, config);
+      }
+      treeProvider.requestRefresh();
+    }),
+    eventBus.on('DeploymentUpdated', ({ serverId }) => {
+      const config = configService.getServer(serverId);
+      if (config) {
+        lifecycle.updateConfig(serverId, config);
+      }
+      treeProvider.requestRefresh();
+    }),
+    eventBus.on('DeploymentRemoved', ({ serverId }) => {
+      const config = configService.getServer(serverId);
+      if (config) {
+        lifecycle.updateConfig(serverId, config);
+      }
+      treeProvider.requestRefresh();
+    }),
     eventBus.on('ServerStateChanged', ({ serverId, state }) => {
       const config = configService.getServer(serverId);
       const name = config?.name ?? serverId;
 
       if (state === 'running') {
+        // clear any previous logs when the server transitions to running
+        const channel = logChannel.getChannel(serverId, name);
+        channel.clear();
         logChannel.showLogs(serverId, name);
         // Enable autosync for running servers
         if (config) autoSyncService.enable(config);
       } else if (state === 'stopped' || state === 'error') {
-        logChannel.detach(serverId);
         autoSyncService.suspend(serverId);
       }
 
@@ -319,6 +376,8 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
       const queue = opQueueFactory(config.id);
       lifecycle.register(config, queue);
     }
+
+    treeProvider.forceRefresh();
 
     // Deferred reconciliation — does not block activation (§9.9)
     lifecycle.reconcileRunningServers(loadResult.value).catch((e) => {

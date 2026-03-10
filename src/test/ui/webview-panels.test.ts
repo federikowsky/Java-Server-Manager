@@ -23,6 +23,7 @@ import { JsmError } from '@core/errors/JsmError';
 import { ok, err } from '@core/result';
 import { WEBVIEW_PROTOCOL_VERSION } from '@ui/webviews/protocol';
 import type { WebviewToHost, HostToWebview, FieldError } from '@ui/webviews/protocol';
+import type { HookConfig } from '@core/types';
 
 /* ══════════════════════════════════════════════════════════════════════════
  * VS Code mock
@@ -162,6 +163,40 @@ function makeDeployment(id = 'dep-1'): DeploymentConfig {
   };
 }
 
+function makeHook(id = 'hook-1'): HookConfig {
+  return {
+    id,
+    enabled: true,
+    phase: 'pre',
+    event: 'lifecycle.start',
+    kind: 'command',
+    timeoutMs: 60_000,
+    continueOnError: false,
+    command: {
+      mode: 'shell',
+      line: 'echo hello',
+      env: { SAMPLE: '1' },
+    },
+  };
+}
+
+function makeShellHook(id = 'hook-shell-1'): HookConfig {
+  return {
+    id,
+    enabled: true,
+    phase: 'pre',
+    event: 'lifecycle.start',
+    kind: 'command',
+    timeoutMs: 60_000,
+    continueOnError: false,
+    command: {
+      mode: 'shell',
+      line: 'npm run build && npm test',
+      env: { SAMPLE: '1' },
+    },
+  };
+}
+
 function mockConfigService() {
   return {
     getServer: vi.fn((_id: string) => undefined as ServerConfig | undefined),
@@ -234,10 +269,15 @@ describe('ServerFormPanel', () => {
       expect(init.mode).toBe('create');
       expect(init.schema.title).toBe('Add Server');
       expect(init.formId).toBe('jsm.serverForm');
+      expect(init.schema.sections[1].fields[1].required).toBe(true);
+      expect(init.schema.sections[1].fields[2].required).toBe(true);
+      expect(init.schema.sections[3].id).toBe('advanced');
+      expect(init.schema.sections[3].fields.some((field: any) => field.name === 'hooks')).toBe(true);
     });
 
     it('should open in edit mode with server data', () => {
       const server = makeServer();
+      server.hooks = [makeHook()];
       configService.getServer.mockReturnValue(server);
 
       openAndReady(panel, 'edit', 'srv-1');
@@ -248,6 +288,7 @@ describe('ServerFormPanel', () => {
       expect(init.data).toBeDefined();
       expect(init.data.name).toBe('My Tomcat');
       expect(init.data['ports.http']).toBe(8080);
+      expect(init.data.hooks).toEqual(server.hooks);
     });
 
     it('should accept valid submit and close panel', async () => {
@@ -271,6 +312,77 @@ describe('ServerFormPanel', () => {
       // Allow async handleSubmit to complete
       await vi.waitFor(() => {
         expect(configService.addServer).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    it('should accept submit without explicit ports and use defaults', async () => {
+      openAndReady(panel, 'create');
+
+      mockPanelInstance!.simulateMessage({
+        v: WEBVIEW_PROTOCOL_VERSION,
+        command: 'submit',
+        data: {
+          name: 'Test Server',
+          'runtime.homePath': '/opt/tomcat',
+          javaHome: '/opt/java',
+          host: '127.0.0.1',
+        },
+      });
+
+      await vi.waitFor(() => {
+        expect(configService.addServer).toHaveBeenCalledTimes(1);
+        const config = configService.addServer.mock.calls[0][0] as ServerConfig;
+        expect(config.ports.http).toBe(8080);
+        expect(config.ports.debug).toBe(5005);
+      });
+    });
+
+    it('should serialize hooks when creating a server', async () => {
+      openAndReady(panel, 'create');
+
+      mockPanelInstance!.simulateMessage({
+        v: WEBVIEW_PROTOCOL_VERSION,
+        command: 'submit',
+        data: {
+          name: 'Test Server',
+          'runtime.homePath': '/opt/tomcat',
+          javaHome: '/opt/java',
+          hooks: [makeHook()],
+        },
+      });
+
+      await vi.waitFor(() => {
+        const config = configService.addServer.mock.calls[0][0] as ServerConfig;
+        expect(config.hooks).toHaveLength(1);
+        expect(config.hooks[0]).toMatchObject({
+          id: 'hook-1',
+          kind: 'command',
+          command: { mode: 'shell', line: 'echo hello' },
+        });
+      });
+    });
+
+    it('should serialize shell hooks when creating a server', async () => {
+      openAndReady(panel, 'create');
+
+      mockPanelInstance!.simulateMessage({
+        v: WEBVIEW_PROTOCOL_VERSION,
+        command: 'submit',
+        data: {
+          name: 'Test Server',
+          'runtime.homePath': '/opt/tomcat',
+          javaHome: '/opt/java',
+          hooks: [makeShellHook()],
+        },
+      });
+
+      await vi.waitFor(() => {
+        const config = configService.addServer.mock.calls[0][0] as ServerConfig;
+        expect(config.hooks[0]).toMatchObject({
+          id: 'hook-shell-1',
+          kind: 'command',
+          command: { mode: 'shell', line: 'npm run build && npm test' },
+        });
       });
     });
 
@@ -413,8 +525,56 @@ describe('ServerFormPanel', () => {
 
       const errors = lastPosted('validationErrors') as any;
       expect(errors).toBeDefined();
-      // Should have errors for name, runtime.homePath, javaHome, ports
+      // Should have errors for name, runtime.homePath, javaHome
       expect(errors.errors.length).toBeGreaterThanOrEqual(3);
+    });
+
+    it('should reject invalid hook configuration', () => {
+      openAndReady(panel, 'create');
+
+      mockPanelInstance!.simulateMessage({
+        v: WEBVIEW_PROTOCOL_VERSION,
+        command: 'submit',
+        data: {
+          name: 'Test',
+          'runtime.homePath': '/opt/tomcat',
+          javaHome: '/opt/java',
+          hooks: [{
+            id: 'hook-1',
+            enabled: true,
+            phase: 'pre',
+            event: 'lifecycle.start',
+            kind: 'command',
+            timeoutMs: 60_000,
+            continueOnError: false,
+            command: { mode: 'shell', line: '' },
+          }],
+        },
+      });
+
+      const errors = lastPosted('validationErrors') as any;
+      expect(errors.errors.some((e: FieldError) => e.field === 'hooks[0].command.line')).toBe(true);
+    });
+
+    it('should reject empty shell hook command lines', () => {
+      openAndReady(panel, 'create');
+
+      mockPanelInstance!.simulateMessage({
+        v: WEBVIEW_PROTOCOL_VERSION,
+        command: 'submit',
+        data: {
+          name: 'Test',
+          'runtime.homePath': '/opt/tomcat',
+          javaHome: '/opt/java',
+          hooks: [{
+            ...makeShellHook(),
+            command: { mode: 'shell', line: '' },
+          }],
+        },
+      });
+
+      const errors = lastPosted('validationErrors') as any;
+      expect(errors.errors.some((e: FieldError) => e.field === 'hooks[0].command.line')).toBe(true);
     });
 
     it('should handle null/undefined values in data', () => {
@@ -1132,11 +1292,14 @@ describe('DeploymentFormPanel', () => {
       const init = lastPosted('init') as any;
       expect(init.schema.title).toBe('Add Deployment');
       expect(init.mode).toBe('create');
+      expect(init.schema.sections[1].id).toBe('advanced');
+      expect(init.schema.sections[1].fields.some((field: any) => field.name === 'hooks')).toBe(true);
     });
 
     it('should open in edit mode with existing deployment data', () => {
       const server = makeServer();
       const dep = makeDeployment();
+      dep.hooks = [makeHook()];
       server.deployments = [dep];
       configService.getServer.mockReturnValue(server);
 
@@ -1145,6 +1308,7 @@ describe('DeploymentFormPanel', () => {
       const init = lastPosted('init') as any;
       expect(init.schema.title).toBe('Edit Deployment');
       expect(init.data?.deployName).toBe('myapp');
+      expect(init.data?.hooks).toEqual(dep.hooks);
     });
 
     it('should submit valid deployment and close', async () => {
@@ -1165,6 +1329,66 @@ describe('DeploymentFormPanel', () => {
         expect(configService.addDeployment).toHaveBeenCalledWith('srv-1', expect.objectContaining({
           deployName: 'myapp',
         }));
+      });
+    });
+
+    it('should serialize hooks for a deployment', async () => {
+      openDeployAndReady('create', 'srv-1');
+
+      mockPanelInstance!.simulateMessage({
+        v: WEBVIEW_PROTOCOL_VERSION,
+        command: 'submit',
+        data: {
+          type: 'exploded',
+          sourcePath: '/builds/myapp',
+          deployName: 'myapp',
+          syncMode: 'auto',
+          hooks: [{
+            id: 'task-hook',
+            enabled: true,
+            phase: 'post',
+            event: 'deploy.full',
+            kind: 'vscodeTask',
+            timeoutMs: 60_000,
+            continueOnError: true,
+            vscodeTask: { taskName: 'Build App' },
+          }],
+        },
+      });
+
+      await vi.waitFor(() => {
+        const deployment = configService.addDeployment.mock.calls[0][1] as DeploymentConfig;
+        expect(deployment.hooks).toHaveLength(1);
+        expect(deployment.hooks[0]).toMatchObject({
+          id: 'task-hook',
+          kind: 'vscodeTask',
+          vscodeTask: { taskName: 'Build App' },
+        });
+      });
+    });
+
+    it('should serialize shell hooks for a deployment', async () => {
+      openDeployAndReady('create', 'srv-1');
+
+      mockPanelInstance!.simulateMessage({
+        v: WEBVIEW_PROTOCOL_VERSION,
+        command: 'submit',
+        data: {
+          type: 'exploded',
+          sourcePath: '/builds/myapp',
+          deployName: 'myapp',
+          syncMode: 'auto',
+          hooks: [makeShellHook()],
+        },
+      });
+
+      await vi.waitFor(() => {
+        const deployment = configService.addDeployment.mock.calls[0][1] as DeploymentConfig;
+        expect(deployment.hooks[0]).toMatchObject({
+          id: 'hook-shell-1',
+          kind: 'command',
+          command: { mode: 'shell', line: 'npm run build && npm test' },
+        });
       });
     });
   });
@@ -1239,6 +1463,34 @@ describe('DeploymentFormPanel', () => {
 
       const result = lastPosted('fieldValidationResult') as any;
       expect(result.error).toBeDefined();
+    });
+
+    it('should reject invalid deployment hook configuration', () => {
+      openDeployAndReady('create', 'srv-1');
+
+      mockPanelInstance!.simulateMessage({
+        v: WEBVIEW_PROTOCOL_VERSION,
+        command: 'submit',
+        data: {
+          type: 'exploded',
+          sourcePath: '/src/app',
+          deployName: 'myapp',
+          syncMode: 'auto',
+          hooks: [{
+            id: 'task-hook',
+            enabled: true,
+            phase: 'post',
+            event: 'deploy.full',
+            kind: 'vscodeTask',
+            timeoutMs: 60_000,
+            continueOnError: true,
+            vscodeTask: { taskName: '' },
+          }],
+        },
+      });
+
+      const errors = lastPosted('validationErrors') as any;
+      expect(errors.errors.some((e: FieldError) => e.field === 'hooks[0].vscodeTask.taskName')).toBe(true);
     });
   });
 

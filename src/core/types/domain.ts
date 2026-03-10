@@ -30,6 +30,13 @@ export type HookEvent =
   | 'deploy.undeploy';
 export type HookKind = 'command' | 'vscodeTask';
 
+export interface HookCommandConfig {
+  mode: 'shell';
+  line: string;
+  cwd?: string;
+  env?: Record<string, string>;
+}
+
 export interface HookConfig {
   id: string;
   enabled: boolean;
@@ -41,12 +48,7 @@ export interface HookConfig {
   /** Default: false */
   continueOnError: boolean;
 
-  command?: {
-    exe: string;
-    args: string[];
-    cwd?: string;
-    env?: Record<string, string>;
-  };
+  command?: HookCommandConfig;
 
   vscodeTask?: {
     taskName: string;

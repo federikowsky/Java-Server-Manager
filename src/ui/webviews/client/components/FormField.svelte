@@ -10,6 +10,7 @@
   import CheckboxInput from './inputs/CheckboxInput.svelte';
   import TextareaInput from './inputs/TextareaInput.svelte';
   import TagList from './inputs/TagList.svelte';
+  import HookList from './HookList.svelte';
 
   const { def }: { def: FormFieldDef } = $props();
 
@@ -49,9 +50,9 @@
   }
 
   const hasError = $derived(error.length > 0);
-  const fieldId = `field-${def.name}`;
-  const helpId = `${def.name}-help`;
-  const errorId = `${def.name}-error`;
+  let fieldId = $derived(`field-${def.name}`);
+  let helpId = $derived(`${def.name}-help`);
+  let errorId = $derived(`${def.name}-error`);
 </script>
 
 {#if visible}
@@ -75,6 +76,8 @@
       <TextareaInput {def} value={value as string | undefined} onChange={handleChange} id={fieldId} />
     {:else if def.type === 'number'}
       <NumberInput {def} value={value as number | undefined} onChange={handleChange} id={fieldId} />
+    {:else if def.type === 'hooks'}
+      <HookList {def} value={value as import('@core/types').HookConfig[] | undefined} onChange={handleChange} id={fieldId} />
     {:else}
       <TextInput {def} value={value as string | undefined} onChange={handleChange} id={fieldId} />
     {/if}

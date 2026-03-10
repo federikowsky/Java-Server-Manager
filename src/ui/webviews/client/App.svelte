@@ -2,7 +2,7 @@
   import { onMount, tick } from 'svelte';
   import { schema, mode, formId, formData, fieldErrors, submitting, globalError } from './stores';
   import { sendReady, onHostMessage } from './bridge';
-  import type { HostToWebview, FieldError } from '../protocol';
+  import type { HostToWebview, FormSchema } from '../protocol';
   import FormHeader from './components/FormHeader.svelte';
   import FormBody from './components/FormBody.svelte';
   import FormActions from './components/FormActions.svelte';
@@ -20,6 +20,18 @@
   globalError.subscribe(v => { currentGlobalError = v; });
   submitting.subscribe(v => { currentSubmitting = v; });
 
+  function collectSchemaDefaults(formSchema: FormSchema): Record<string, unknown> {
+    const defaults: Record<string, unknown> = {};
+    for (const section of formSchema.sections) {
+      for (const field of section.fields) {
+        if (field.defaultValue !== undefined) {
+          defaults[field.name] = field.defaultValue;
+        }
+      }
+    }
+    return defaults;
+  }
+
   function handleHostMessage(msg: HostToWebview): void {
     switch (msg.command) {
       case 'init': {
@@ -30,11 +42,10 @@
         fieldErrors.set({});
         globalError.set('');
         submitting.set(false);
-        if (msg.data) {
-          formData.set({ ...msg.data });
-        } else {
-          formData.set({});
-        }
+        formData.set({
+          ...collectSchemaDefaults(msg.schema),
+          ...(msg.data ?? {}),
+        });
         void tick().then(() => {
           requestAnimationFrame(() => {
             performance.mark('jsm:fcp');

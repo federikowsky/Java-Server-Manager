@@ -7,6 +7,20 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+const mockSchemaValidatorRegisterBuiltInSchemas = vi.fn();
+const mockEventBusOn = vi.fn();
+const mockTreeProviderRequestRefresh = vi.fn();
+const mockTreeProviderForceRefresh = vi.fn();
+const mockLogChannelDetach = vi.fn();
+const mockAutoSyncSuspend = vi.fn();
+const mockLifecycleUpdateConfig = vi.fn();
+const mockLifecycleUnregister = vi.fn();
+
+let mockLogChannelInstance: any = null;
+let mockChannelInstance: any = null;
+
+const eventHandlers = new Map<string, (payload: any) => void>();
+
 /* ══════════════════════════════════════════════════════════════════════════
  * VS Code mock — elaborate mock to support extension.ts activation
  * ══════════════════════════════════════════════════════════════════════════ */
@@ -158,6 +172,8 @@ const mockLifecycleReconcile = vi.fn(async () => {});
 vi.mock('@app/server', () => ({
   ServerLifecycle: class {
     register = mockLifecycleRegister;
+    updateConfig = mockLifecycleUpdateConfig;
+    unregister = mockLifecycleUnregister;
     reconcileRunningServers = mockLifecycleReconcile;
     getRuntime = vi.fn();
   },
@@ -174,7 +190,7 @@ vi.mock('@app/deployment', () => ({
 vi.mock('@app/sync', () => ({
   AutoSyncService: class {
     enable = vi.fn();
-    suspend = vi.fn();
+    suspend = mockAutoSyncSuspend;
     dispose = vi.fn();
   },
 }));
@@ -211,17 +227,25 @@ vi.mock('@ui/adapters', () => ({
 // ServerLogChannel
 vi.mock('@ui/channels', () => ({
   ServerLogChannel: class {
+    constructor() {
+      mockLogChannelInstance = this;
+    }
+
     showLogs = vi.fn();
-    detach = vi.fn();
+    detach = mockLogChannelDetach;
     dispose = vi.fn();
+    getChannel = vi.fn((_serverId: string, _serverName: string) => {
+      mockChannelInstance = { clear: vi.fn() };
+      return mockChannelInstance;
+    });
   },
 }));
 
 // Tree provider
 vi.mock('@ui/tree', () => ({
   ServerTreeViewProvider: class {
-    requestRefresh = vi.fn();
-    forceRefresh = vi.fn();
+    requestRefresh = mockTreeProviderRequestRefresh;
+    forceRefresh = mockTreeProviderForceRefresh;
   },
 }));
 
@@ -248,13 +272,18 @@ vi.mock('@ui/commands', () => ({
 
 // SchemaValidator
 vi.mock('@core/validation/SchemaValidator', () => ({
-  SchemaValidator: class {},
+  SchemaValidator: class {
+    registerBuiltInSchemas = mockSchemaValidatorRegisterBuiltInSchemas;
+  },
 }));
 
 // EventBus
 vi.mock('@core/events/EventBus', () => ({
   EventBus: class {
-    on = vi.fn(() => ({ dispose: vi.fn() }));
+    on = mockEventBusOn.mockImplementation((event: string, handler: (payload: any) => void) => {
+      eventHandlers.set(event, handler);
+      return { dispose: vi.fn() };
+    });
     emit = vi.fn();
     dispose = vi.fn();
   },
@@ -280,6 +309,7 @@ describe('Extension Activation', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    eventHandlers.clear();
     mockConfigServiceLoadWorkspace.mockResolvedValue({ ok: true, value: [] });
     mockLifecycleReconcile.mockResolvedValue(undefined);
 
@@ -322,6 +352,7 @@ describe('Extension Activation', () => {
     expect(ctx.subscriptions.length).toBeGreaterThan(0);
     expect(mockCreateOutputChannel).toHaveBeenCalled();
     expect(mockCreateTreeView).toHaveBeenCalled();
+    expect(mockSchemaValidatorRegisterBuiltInSchemas).toHaveBeenCalledWith(expect.any(Object));
   });
 
   it('should load workspace config on activation', async () => {
@@ -342,12 +373,96 @@ describe('Extension Activation', () => {
     expect(mockLifecycleRegister).toHaveBeenCalledWith(server, expect.anything());
   });
 
+  it('should refresh the tree immediately after loading workspace config', async () => {
+    workspaceFolders = [{ uri: { fsPath: '/test/workspace' } }];
+    const server = { id: 'srv-1', name: 'Test', type: 'tomcat' };
+    mockConfigServiceLoadWorkspace.mockResolvedValue({ ok: true, value: [server] });
+
+    await activate(ctx);
+
+    expect(mockTreeProviderForceRefresh).toHaveBeenCalled();
+  });
+
   it('should trigger reconciliation after loading', async () => {
     workspaceFolders = [{ uri: { fsPath: '/test/workspace' } }];
 
     await activate(ctx);
 
     expect(mockLifecycleReconcile).toHaveBeenCalled();
+  });
+
+  it('should register and refresh when a server is added after activation', async () => {
+    workspaceFolders = [{ uri: { fsPath: '/test/workspace' } }];
+    const server = { id: 'srv-1', name: 'Test', type: 'tomcat' };
+    mockConfigServiceGetServer.mockReturnValue(server);
+
+    await activate(ctx);
+
+    eventHandlers.get('ServerAdded')?.({ serverId: 'srv-1' });
+
+    expect(mockLifecycleRegister).toHaveBeenCalledWith(server, expect.anything());
+    expect(mockTreeProviderRequestRefresh).toHaveBeenCalled();
+  });
+
+  it('should unregister and refresh when a server is deleted', async () => {
+    workspaceFolders = [{ uri: { fsPath: '/test/workspace' } }];
+
+    await activate(ctx);
+
+    eventHandlers.get('ServerDeleted')?.({ serverId: 'srv-1' });
+
+    expect(mockLifecycleUnregister).toHaveBeenCalledWith('srv-1');
+    expect(mockLogChannelDetach).toHaveBeenCalledWith('srv-1');
+    expect(mockAutoSyncSuspend).toHaveBeenCalledWith('srv-1');
+    expect(mockTreeProviderRequestRefresh).toHaveBeenCalled();
+  });
+
+  it('should update lifecycle config and refresh when a deployment changes', async () => {
+    workspaceFolders = [{ uri: { fsPath: '/test/workspace' } }];
+    const server = { id: 'srv-1', name: 'Test', type: 'tomcat' };
+    mockConfigServiceGetServer.mockReturnValue(server);
+
+    await activate(ctx);
+
+    eventHandlers.get('DeploymentAdded')?.({ serverId: 'srv-1', deploymentId: 'dep-1' });
+
+    expect(mockLifecycleUpdateConfig).toHaveBeenCalledWith('srv-1', server);
+    expect(mockTreeProviderRequestRefresh).toHaveBeenCalled();
+  });
+
+  it('should keep the server log channel after a server stops', async () => {
+    workspaceFolders = [{ uri: { fsPath: '/test/workspace' } }];
+    const server = { id: 'srv-1', name: 'Test', type: 'tomcat' };
+    mockConfigServiceGetServer.mockReturnValue(server);
+
+    await activate(ctx);
+
+    eventHandlers.get('ServerStateChanged')?.({ serverId: 'srv-1', state: 'stopped' });
+
+    expect(mockLogChannelDetach).not.toHaveBeenCalled();
+    expect(mockAutoSyncSuspend).toHaveBeenCalledWith('srv-1');
+    expect(mockTreeProviderRequestRefresh).toHaveBeenCalled();
+  });
+
+  it('should clear and show log channel when a server transitions to running', async () => {
+    workspaceFolders = [{ uri: { fsPath: '/test/workspace' } }];
+    const server = { id: 'srv-1', name: 'Test', type: 'tomcat' };
+    mockConfigServiceGetServer.mockReturnValue(server);
+
+    await activate(ctx);
+    // reset any previous spies
+    mockChannelInstance = null;
+    mockLogChannelInstance?.showLogs.mockClear();
+
+    eventHandlers.get('ServerStateChanged')?.({ serverId: 'srv-1', state: 'running' });
+
+    // channel should have been created and cleared
+    expect(mockChannelInstance).not.toBeNull();
+    expect(mockChannelInstance?.clear).toHaveBeenCalled();
+    // logs should be shown
+    expect(mockLogChannelInstance?.showLogs).toHaveBeenCalledWith('srv-1', 'Test');
+    // autosync should be enabled for running server
+    expect(mockAutoSyncSuspend).not.toHaveBeenCalled();
   });
 
   /* ── Negative Path: config load failure ──────────────────────────────── */

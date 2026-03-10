@@ -17,6 +17,19 @@ export interface SpawnOptions {
   onExit?: (code: number | null, signal: string | null) => void;
 }
 
+export interface SpawnShellOptions {
+  /** Command line to execute inside the resolved shell. */
+  line: string;
+  /** Working directory. */
+  cwd?: string;
+  /** Additional environment variables (merged with process.env). */
+  env?: Record<string, string>;
+  /** Callback for stdout/stderr data. */
+  onData?: (chunk: string) => void;
+  /** Callback when process exits. */
+  onExit?: (code: number | null, signal: string | null) => void;
+}
+
 /**
  * Process spawner with `shell: false` (§12.2).
  * On Windows, wraps via `cmd.exe /d /s /c` with deterministic quoting.
@@ -44,11 +57,37 @@ export class ProcessSpawner {
       args = opts.args;
     }
 
+    return this.spawnResolved(exe, args, opts, opts.exe, opts.args);
+  }
+
+  /** Spawn a shell command using the user's default platform shell. */
+  spawnShell(opts: SpawnShellOptions): ChildProcess {
+    const isWindows = os.platform() === 'win32';
+    const exe = isWindows ? (process.env.ComSpec || 'cmd.exe') : (process.env.SHELL || 'sh');
+    const args = isWindows ? ['/d', '/s', '/c', opts.line] : ['-lc', opts.line];
+
+    return this.spawnResolved(exe, args, opts, exe, args, opts.line);
+  }
+
+  private spawnResolved(
+    exe: string,
+    args: string[],
+    opts: {
+      cwd?: string;
+      env?: Record<string, string>;
+      onData?: (chunk: string) => void;
+      onExit?: (code: number | null, signal: string | null) => void;
+    },
+    logExe: string,
+    logArgs: string[],
+    commandLine?: string,
+  ): ChildProcess {
+
     const env = opts.env
       ? { ...process.env, ...opts.env }
       : process.env;
 
-    this.logger.debug(`ProcessSpawner: spawning ${opts.exe}`, { args: opts.args, cwd: opts.cwd });
+    this.logger.debug(`ProcessSpawner: spawning ${logExe}`, { args: logArgs, cwd: opts.cwd, commandLine });
 
     const child = spawn(exe, args, {
       cwd: opts.cwd,
@@ -69,7 +108,7 @@ export class ProcessSpawner {
     }
 
     child.on('error', (err) => {
-      this.logger.error(`ProcessSpawner: spawn error for ${opts.exe}`, err);
+      this.logger.error(`ProcessSpawner: spawn error for ${logExe}`, err);
     });
 
     return child;

@@ -340,6 +340,119 @@ body {
   animation: jsm-shake 0.3s ease;
 }
 
+.hook-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.hook-empty-state {
+  padding: 14px;
+  border: 1px dashed var(--vscode-widget-border, var(--vscode-panel-border));
+  border-radius: 8px;
+  color: var(--vscode-descriptionForeground);
+  background-color: var(--vscode-editorWidget-background, transparent);
+}
+
+.hook-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px;
+  border-radius: 8px;
+  border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
+  background-color: var(--vscode-editorWidget-background, transparent);
+}
+
+.hook-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.hook-card-title {
+  font-weight: 700;
+  line-height: 1.2;
+  word-break: break-word;
+}
+
+.hook-card-subtitle {
+  font-size: 0.88em;
+  color: var(--vscode-descriptionForeground);
+  word-break: break-word;
+}
+
+.hook-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.hook-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.hook-field-error {
+  font-size: 0.85em;
+  color: var(--vscode-errorForeground);
+}
+
+.hook-toggle-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.hook-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hook-subsection {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
+}
+
+.hook-subsection-title {
+  font-weight: 600;
+}
+
+.hook-add,
+.hook-remove,
+.kv-add,
+.kv-remove {
+  align-self: flex-start;
+}
+
+.kv-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.kv-list-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.kv-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(160px, 2fr) auto;
+  gap: 10px;
+}
+
+.kv-input {
+  width: 100%;
+}
+
 /* ── Path Picker ───────────────────────────────────────────────────────────── */
 
 .path-picker-row {

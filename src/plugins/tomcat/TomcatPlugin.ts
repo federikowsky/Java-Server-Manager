@@ -24,6 +24,7 @@ import { copyDir, ensureDir, exists } from '@infra/fs';
 import type {
   IServerPlugin,
   PluginCapabilities,
+  ConfigSource,
   DetectReport,
   StartResult,
   StatusReport,
@@ -64,6 +65,17 @@ async function tryRm(p: string): Promise<void> {
   try {
     await fs.rm(p, { recursive: true, force: true });
   } catch { /* best effort */ }
+}
+
+async function existingConfigSources(candidates: ConfigSource[]): Promise<ConfigSource[]> {
+  const available = await Promise.all(
+    candidates.map(async candidate => ({
+      candidate,
+      exists: await exists(candidate.path),
+    })),
+  );
+
+  return available.filter(entry => entry.exists).map(entry => entry.candidate);
 }
 
 // ── TomcatPlugin ────────────────────────────────────────────────────────────
@@ -760,6 +772,68 @@ export class TomcatPlugin implements IServerPlugin {
     }
 
     return ok({ primary, others });
+  }
+
+  async getConfigSources(config: ServerConfig): Promise<Result<ConfigSource[], JsmError>> {
+    const candidateSpecs: ConfigSource[] = [
+      {
+        id: 'instance-server-xml',
+        title: 'server.xml',
+        kind: 'file',
+        path: path.join(config.instancePath, 'conf', 'server.xml'),
+        description: 'Instance config',
+        detail: 'Active connector and service configuration for this instance',
+      },
+      {
+        id: 'instance-web-xml',
+        title: 'web.xml',
+        kind: 'file',
+        path: path.join(config.instancePath, 'conf', 'web.xml'),
+        description: 'Instance config',
+        detail: 'Default web application configuration for this instance',
+      },
+      {
+        id: 'instance-context-xml',
+        title: 'context.xml',
+        kind: 'file',
+        path: path.join(config.instancePath, 'conf', 'context.xml'),
+        description: 'Instance config',
+        detail: 'Default context configuration for this instance',
+      }
+      // {
+      //   id: 'runtime-server-xml',
+      //   title: 'server.xml',
+      //   kind: 'file',
+      //   path: path.join(config.runtime.homePath, 'conf', 'server.xml'),
+      //   description: 'Runtime config',
+      //   detail: 'Original runtime connector and service configuration',
+      // },
+      // {
+      //   id: 'runtime-web-xml',
+      //   title: 'web.xml',
+      //   kind: 'file',
+      //   path: path.join(config.runtime.homePath, 'conf', 'web.xml'),
+      //   description: 'Runtime config',
+      //   detail: 'Original runtime default web application configuration',
+      // },
+      // {
+      //   id: 'runtime-context-xml',
+      //   title: 'context.xml',
+      //   kind: 'file',
+      //   path: path.join(config.runtime.homePath, 'conf', 'context.xml'),
+      //   description: 'Runtime config',
+      //   detail: 'Original runtime default context configuration',
+      // },
+    ];
+
+    const dedupedCandidates = new Map<string, ConfigSource>();
+    for (const candidate of candidateSpecs) {
+      if (!dedupedCandidates.has(candidate.path)) {
+        dedupedCandidates.set(candidate.path, candidate);
+      }
+    }
+
+    return ok(await existingConfigSources([...dedupedCandidates.values()]));
   }
 
   // ── Defaults ────────────────────────────────────────────────────────

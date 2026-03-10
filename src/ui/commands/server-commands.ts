@@ -2,14 +2,15 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import type { OperationContext, ServerConfig } from '@core/types';
 import type { Result } from '@core/result';
+import { ok, err } from '@core/result';
 import { JsmError } from '@core/errors/JsmError';
 import { ErrorCode } from '@core/errors/codes';
 import type { ServerLifecycle } from '@app/server/ServerLifecycle';
 import type { DeploymentService } from '@app/deployment/DeploymentService';
-import type { DiagnosticsService } from '@app/diagnostics/DiagnosticsService';
 import type { WorkspaceServiceRegistry, WorkspaceScope } from '@app/config';
+import type { PluginRegistry } from '@plugins/registry/PluginRegistry';
+import type { ConfigSource } from '@plugins/interfaces/IServerPlugin';
 import { exists } from '@infra/fs';
-import type { ServerLogChannel } from '@ui/channels/ServerLogChannel';
 import type { ServerTreeViewProvider } from '@ui/tree/ServerTreeViewProvider';
 import type { ServerFormPanel } from '@ui/webviews/panels/ServerFormPanel';
 import {
@@ -22,6 +23,7 @@ import {
 
 export interface ServerCommandsDeps {
   lifecycle: ServerLifecycle;
+  pluginRegistry: PluginRegistry;
   workspaceRegistry?: WorkspaceServiceRegistry;
   configService?: {
     getServer(serverId: string): ServerConfig | undefined;
@@ -31,8 +33,6 @@ export interface ServerCommandsDeps {
     removeServer(serverId: string): Promise<Result<void, JsmError>>;
   };
   deployService: DeploymentService;
-  diagnosticsService: DiagnosticsService;
-  logChannel: ServerLogChannel;
   treeProvider: ServerTreeViewProvider;
   serverFormPanel: ServerFormPanel | {
     open?(mode: 'create' | 'edit', serverId?: string): void;
@@ -75,17 +75,40 @@ async function revealFolder(targetPath: string): Promise<void> {
   await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(targetPath));
 }
 
+async function openConfigFile(targetPath: string): Promise<void> {
+  const document = await vscode.workspace.openTextDocument(vscode.Uri.file(targetPath));
+  await vscode.window.showTextDocument(document, { preview: false });
+}
+
+async function resolveConfigSources(
+  pluginRegistry: PluginRegistry,
+  config: ServerConfig,
+): Promise<Result<ConfigSource[], JsmError>> {
+  const plugin = pluginRegistry.get(config.type);
+  if (!plugin) {
+    return err(new JsmError({
+      code: ErrorCode.InvalidConfig,
+      message: `No plugin registered for server type '${config.type}'.`,
+    }));
+  }
+
+  if (!plugin.getConfigSources) {
+    return ok([]);
+  }
+
+  return plugin.getConfigSources(config);
+}
+
 export function registerServerCommands(
   deps: ServerCommandsDeps,
 ): vscode.Disposable[] {
   const {
     lifecycle,
+    pluginRegistry,
     workspaceRegistry,
     configService,
     provisioningService,
     deployService,
-    diagnosticsService,
-    logChannel,
     treeProvider,
     serverFormPanel,
   } = deps;
@@ -207,9 +230,48 @@ export function registerServerCommands(
       }));
     }],
 
-    ['jsm.server.openLogs', (arg: unknown) => {
+    ['jsm.server.openConfig', async (arg: unknown) => {
       if (!isServerNode(arg)) return;
-      logChannel.showLogs(arg.serverKey, arg.serverConfig.name);
+
+      const sourcesResult = await resolveConfigSources(pluginRegistry, arg.serverConfig);
+      if (!sourcesResult.ok) {
+        showErr(sourcesResult.error);
+        return;
+      }
+
+      const candidates = sourcesResult.value;
+      if (candidates.length === 0) {
+        showErr(new JsmError({
+          code: ErrorCode.InvalidConfig,
+          message: `No editable configuration files were found for server '${arg.serverConfig.name}'.`,
+          details: `The '${arg.serverConfig.type}' plugin did not expose any existing config files for this server.`,
+        }));
+        return;
+      }
+
+      if (candidates.length === 1) {
+        await openConfigFile(candidates[0].path);
+        return;
+      }
+
+      const picked = await vscode.window.showQuickPick(
+        candidates.map(candidate => ({
+          label: candidate.title,
+          description: candidate.description,
+          detail: candidate.path,
+          candidate,
+        })),
+        {
+          placeHolder: `Open a configuration file for '${arg.serverConfig.name}'`,
+          ignoreFocusOut: true,
+        },
+      );
+
+      if (!picked) {
+        return;
+      }
+
+      await openConfigFile(picked.candidate.path);
     }],
 
     ['jsm.server.redeployAll', async (arg: unknown) => {
@@ -228,12 +290,6 @@ export function registerServerCommands(
       if (!result) return;
       if (!result.ok) { showErr(result.error); return; }
       treeProvider.forceRefresh();
-    }],
-
-    ['jsm.diagnostics.copy', async () => {
-      const text = diagnosticsService.generateBundleText();
-      await vscode.env.clipboard.writeText(text);
-      showSuccess('Diagnostics copied to clipboard.');
     }],
   ]);
 }

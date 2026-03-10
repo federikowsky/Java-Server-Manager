@@ -163,48 +163,6 @@ vi.mock('@app/config', () => ({
     getAllServers = mockConfigServiceGetAllServers;
     reload = mockConfigServiceReload;
   },
-  WorkspaceServiceRegistry: class {
-    private readonly entries: any[];
-
-    constructor(entries: any[]) {
-      this.entries = entries;
-    }
-
-    getWorkspaceScopes() {
-      return this.entries.map(entry => entry.scope);
-    }
-
-    getEntry(workspaceFolderUri: string) {
-      return this.entries.find(entry => entry.scope.uri === workspaceFolderUri);
-    }
-
-    getServer({ serverId }: { workspaceFolderUri: string; serverId: string }) {
-      return mockConfigServiceGetServer(serverId);
-    }
-
-    getServers(_workspaceFolderUri: string) {
-      return [];
-    }
-
-    getAllServers() {
-      return [];
-    }
-
-    getServerRecordByKey(serverKey: string) {
-      const serverId = serverKey.split('::').pop() ?? serverKey;
-      const config = mockConfigServiceGetServer(serverId);
-      if (!config) return undefined;
-      return {
-        workspaceFolderUri: '',
-        workspaceFolderName: '',
-        workspaceFolderFsPath: '',
-        serverId,
-        serverKey,
-        config,
-      };
-    }
-  },
-  makeWorkspaceServerKey: (workspaceFolderUri: string, serverId: string) => `${workspaceFolderUri}::${serverId}`,
 }));
 
 // ServerLifecycle
@@ -219,8 +177,6 @@ vi.mock('@app/server', () => ({
     reconcileRunningServers = mockLifecycleReconcile;
     getRuntime = vi.fn();
   },
-  ManagedInstancePathResolver: class {},
-  ServerProvisioningService: class {},
 }));
 
 // DeploymentService
@@ -360,7 +316,6 @@ describe('Extension Activation', () => {
     ctx = {
       extensionUri: { path: '/mock-ext' },
       extension: { packageJSON: { version: '0.0.1-test' } },
-      storageUri: { fsPath: '/mock-storage', path: '/mock-storage' },
       globalState: {
         get: vi.fn(),
         update: vi.fn(),
@@ -415,7 +370,7 @@ describe('Extension Activation', () => {
 
     await activate(ctx);
 
-    expect(mockLifecycleRegister).toHaveBeenCalledWith(expect.stringContaining('srv-1'), server, expect.anything());
+    expect(mockLifecycleRegister).toHaveBeenCalledWith(server, expect.anything());
   });
 
   it('should refresh the tree immediately after loading workspace config', async () => {
@@ -430,8 +385,6 @@ describe('Extension Activation', () => {
 
   it('should trigger reconciliation after loading', async () => {
     workspaceFolders = [{ uri: { fsPath: '/test/workspace' } }];
-    const server = { id: 'srv-1', name: 'Test', type: 'tomcat' };
-    mockConfigServiceLoadWorkspace.mockResolvedValue({ ok: true, value: [server] });
 
     await activate(ctx);
 
@@ -445,9 +398,9 @@ describe('Extension Activation', () => {
 
     await activate(ctx);
 
-    eventHandlers.get('ServerAdded')?.({ serverId: 'srv-1', workspaceFolderUri: '/test/workspace' });
+    eventHandlers.get('ServerAdded')?.({ serverId: 'srv-1' });
 
-    expect(mockLifecycleRegister).toHaveBeenCalledWith(expect.stringContaining('srv-1'), server, expect.anything());
+    expect(mockLifecycleRegister).toHaveBeenCalledWith(server, expect.anything());
     expect(mockTreeProviderRequestRefresh).toHaveBeenCalled();
   });
 
@@ -456,11 +409,11 @@ describe('Extension Activation', () => {
 
     await activate(ctx);
 
-    eventHandlers.get('ServerDeleted')?.({ serverId: 'srv-1', workspaceFolderUri: '/test/workspace' });
+    eventHandlers.get('ServerDeleted')?.({ serverId: 'srv-1' });
 
-    expect(mockLifecycleUnregister).toHaveBeenCalledWith(expect.stringContaining('srv-1'));
-    expect(mockLogChannelDetach).toHaveBeenCalledWith(expect.stringContaining('srv-1'));
-    expect(mockAutoSyncSuspend).toHaveBeenCalledWith(expect.stringContaining('srv-1'));
+    expect(mockLifecycleUnregister).toHaveBeenCalledWith('srv-1');
+    expect(mockLogChannelDetach).toHaveBeenCalledWith('srv-1');
+    expect(mockAutoSyncSuspend).toHaveBeenCalledWith('srv-1');
     expect(mockTreeProviderRequestRefresh).toHaveBeenCalled();
   });
 
@@ -471,9 +424,9 @@ describe('Extension Activation', () => {
 
     await activate(ctx);
 
-    eventHandlers.get('DeploymentAdded')?.({ serverId: 'srv-1', deploymentId: 'dep-1', workspaceFolderUri: '/test/workspace' });
+    eventHandlers.get('DeploymentAdded')?.({ serverId: 'srv-1', deploymentId: 'dep-1' });
 
-    expect(mockLifecycleUpdateConfig).toHaveBeenCalledWith(expect.stringContaining('srv-1'), server);
+    expect(mockLifecycleUpdateConfig).toHaveBeenCalledWith('srv-1', server);
     expect(mockTreeProviderRequestRefresh).toHaveBeenCalled();
   });
 

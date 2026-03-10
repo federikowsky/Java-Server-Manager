@@ -72,6 +72,15 @@ export interface LogSource {
   path?: string;
 }
 
+export interface ConfigSource {
+  id: string;
+  title: string;
+  kind: 'file';
+  path: string;
+  description?: string;
+  detail?: string;
+}
+
 export interface LogSources {
   primary?: LogSource;
   others: LogSource[];
@@ -106,6 +115,9 @@ export interface IServerPlugin {
 
   // Logs
   getLogSources(config: ServerConfig): Promise<Result<LogSources, JsmError>>;
+
+  // Config editing
+  getConfigSources?(config: ServerConfig): Promise<Result<ConfigSource[], JsmError>>;
 
   // Defaults and cleanup
   getDefaultConfig(): Partial<ServerConfig>;

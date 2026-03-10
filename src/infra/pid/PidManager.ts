@@ -1,5 +1,6 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import { createHash } from 'crypto';
 import type { ServerId } from '@core/types';
 import type { Logger } from '@core/types/logger';
 import { ensureDir } from '../fs/FileUtils';
@@ -61,6 +62,9 @@ export class PidManager {
   }
 
   private pidPath(serverId: ServerId): string {
-    return path.join(this.baseDir, `${serverId}.pid`);
+    const normalizedServerId = String(serverId);
+    const digest = createHash('sha1').update(normalizedServerId).digest('hex').slice(0, 12);
+    const safeSegment = normalizedServerId.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(-80);
+    return path.join(this.baseDir, `${safeSegment}.${digest}.pid`);
   }
 }

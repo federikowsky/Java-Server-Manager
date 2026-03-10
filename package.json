@@ -60,11 +60,6 @@
         "icon": "$(cloud-upload)"
       },
       {
-        "command": "jsm.server.openLogs",
-        "title": "Open Logs",
-        "icon": "$(file)"
-      },
-      {
         "command": "jsm.server.remove",
         "title": "Remove Server",
         "icon": "$(trash)"
@@ -75,9 +70,9 @@
         "icon": "$(folder-opened)"
       },
       {
-        "command": "jsm.diagnostics.copy",
-        "title": "Copy Diagnostics",
-        "icon": "$(copy)"
+        "command": "jsm.server.openConfig",
+        "title": "Open Config Files",
+        "icon": "$(file-code)"
       },
       {
         "command": "jsm.deployment.add",
@@ -225,14 +220,9 @@
           "group": "manage@2.5"
         },
         {
-          "command": "jsm.server.openLogs",
+          "command": "jsm.server.openConfig",
           "when": "view == javaServerManagerView && viewItem =~ /jsm\\.server\\..*/",
           "group": "troubleshooting@1"
-        },
-        {
-          "command": "jsm.diagnostics.copy",
-          "when": "view == javaServerManagerView && viewItem =~ /jsm\\.server\\..*/",
-          "group": "troubleshooting@3"
         },
         {
           "command": "jsm.deployment.redeploy",

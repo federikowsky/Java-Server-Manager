@@ -40,6 +40,20 @@ describe('PidManager', () => {
     expect(pid).toBeUndefined();
   });
 
+  it('writes and reads a PID file for a composite workspace server key', async () => {
+    const compositeKey = 'file:/Users/federicofilippi/.mcp/mcp-councilor::66940821-6613-4fff-9587-3e86c2544ab6';
+
+    await pm.writePid(compositeKey, 321);
+
+    const pid = await pm.readPid(compositeKey);
+    expect(pid).toBe(321);
+
+    const entries = await fs.readdir(tmpDir);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].endsWith('.pid')).toBe(true);
+    expect(entries[0].includes('/')).toBe(false);
+  });
+
   it('clearPid is idempotent', async () => {
     // No error when clearing a non-existent PID
     await pm.clearPid('nonexistent');

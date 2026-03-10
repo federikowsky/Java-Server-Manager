@@ -176,6 +176,27 @@ describe('TomcatPlugin — validateConfig', () => {
   });
 });
 
+describe('TomcatPlugin — getConfigSources', () => {
+  it('returns only existing config files for the Tomcat server', async () => {
+    const homePath = path.join(tmpDir, 'tomcat-home');
+    const instancePath = path.join(tmpDir, 'instance');
+    await createFakeTomcatHome(homePath);
+    await fs.mkdir(path.join(instancePath, 'conf'), { recursive: true });
+    await fs.writeFile(path.join(instancePath, 'conf', 'web.xml'), '<web-app/>');
+
+    const config = fakeConfig(homePath, instancePath);
+    const result = await plugin.getConfigSources(config);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.map(source => source.path)).toEqual([
+        path.join(instancePath, 'conf', 'web.xml'),
+        path.join(homePath, 'conf', 'server.xml'),
+      ]);
+    }
+  });
+});
+
 // ── Deploy Plan Tests ───────────────────────────────────────────────────────
 
 describe('TomcatPlugin — planDeploy', () => {

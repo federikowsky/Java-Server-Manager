@@ -23,7 +23,6 @@ import { ManagedInstancePathResolver, ServerProvisioningService } from '@app/ser
 import { DeploymentService } from '@app/deployment';
 import { AutoSyncService } from '@app/sync';
 import { TemplateService } from '@app/templates';
-import { DiagnosticsService } from '@app/diagnostics';
 import { HookRunner } from '@app/hooks';
 import type { HookExecutor } from '@app/hooks';
 import { OutputSinkAdapter, MementoAdapter, DebugAdapter, FileWatcherAdapter } from '@ui/adapters';
@@ -302,17 +301,6 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
     logger,
   });
 
-  const extensionVersion = vscode.extensions.getExtension('java-server-manager')?.packageJSON?.version
-    ?? ctx.extension.packageJSON.version
-    ?? '0.0.0';
-
-  const diagnosticsService = new DiagnosticsService({
-    extensionVersion,
-    getConfigs: () => workspaceServiceRegistry.getAllServers().map(record => record.config),
-    getRuntimeState: (sid: ServerId) => lifecycle.getRuntime(sid)?.getState(),
-    getLogBuffer: () => ringBuffer.getAll().join('\n'),
-  });
-
   // ── 6. UI presentation ────────────────────────────────────────────────
 
   const treeProvider = new ServerTreeViewProvider({
@@ -360,10 +348,9 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
   disposables.push(
     ...registerServerCommands({
       lifecycle,
+      pluginRegistry,
       workspaceRegistry: workspaceServiceRegistry,
       deployService,
-      diagnosticsService,
-      logChannel,
       treeProvider,
       serverFormPanel,
     }),
@@ -430,12 +417,12 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
       const config = record?.config;
       const name = config?.name ?? serverId;
 
-      if (state === 'running') {
-        // clear any previous logs when the server transitions to running
+      if (state === 'starting') {
         const channel = logChannel.getChannel(serverId, name);
         channel.clear();
         logChannel.showLogs(serverId, name);
-        // Enable autosync for running servers
+      } else if (state === 'running') {
+        logChannel.showLogs(serverId, name);
         if (config) autoSyncService.enable(config, serverId);
       } else if (state === 'stopped' || state === 'error') {
         autoSyncService.suspend(serverId);

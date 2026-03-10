@@ -11,6 +11,7 @@ import type {
 } from '../protocol';
 import { WEBVIEW_PROTOCOL_VERSION } from '../protocol';
 import { normalizeHookList, validateHookList } from '../hookForm';
+import { areHookTaskOptionsEqual, fetchHookTaskOptions, type HookTaskOption } from '../hookTaskOptions';
 import { BaseFormPanel } from './BaseFormPanel';
 
 // ── Dependency contract ─────────────────────────────────────────────────────
@@ -33,7 +34,7 @@ const DEFAULT_DEBUG_PORT = 5005;
 
 // ── Server Form Schema (§7.7) ──────────────────────────────────────────────
 
-function serverFormSchema(mode: 'create' | 'edit'): FormSchema {
+function serverFormSchema(mode: 'create' | 'edit', hookTaskOptions: HookTaskOption[]): FormSchema {
   const identityFields: FormFieldDef[] = [
     {
       name: 'name',
@@ -130,6 +131,9 @@ function serverFormSchema(mode: 'create' | 'edit'): FormSchema {
             type: 'hooks',
             defaultValue: [],
             helpText: 'Configure server hooks as terminal commands or VS Code tasks. New hooks start with a default Hook-N identifier used in logs and diagnostics.',
+            hookOptions: {
+              taskOptions: hookTaskOptions,
+            },
           },
         ],
       },
@@ -146,6 +150,7 @@ export class ServerFormPanel extends BaseFormPanel {
   private readonly logger: Logger;
   private editServerLocator: WorkspaceServerLocator | undefined;
   private createWorkspaceFolderUri: string | undefined;
+  private hookTaskOptions: HookTaskOption[] = [];
 
   constructor(deps: ServerFormPanelDeps) {
     super(deps.extensionUri, ServerFormPanel.viewType, 'Server Configuration');
@@ -164,10 +169,11 @@ export class ServerFormPanel extends BaseFormPanel {
       getAllServers: () => [],
     } as unknown as WorkspaceServiceRegistry;
     this.logger = deps.logger;
+    void this.refreshHookTaskOptions();
   }
 
   getFormSchema(mode: 'create' | 'edit'): FormSchema {
-    return serverFormSchema(mode);
+    return serverFormSchema(mode, this.hookTaskOptions);
   }
 
   openCreate(workspaceFolderUri: string): void {
@@ -178,6 +184,7 @@ export class ServerFormPanel extends BaseFormPanel {
     this.editServerLocator = undefined;
     this.createWorkspaceFolderUri = workspaceFolderUri;
     this.show('create', template ? templateToServerFormData(template) : undefined);
+    void this.refreshHookTaskOptions();
   }
 
   openEdit(locator: WorkspaceServerLocator): void {
@@ -191,6 +198,7 @@ export class ServerFormPanel extends BaseFormPanel {
     }
 
     this.show('edit', data);
+    void this.refreshHookTaskOptions();
   }
 
   open(mode: 'create' | 'edit', serverId?: string): void {
@@ -226,6 +234,7 @@ export class ServerFormPanel extends BaseFormPanel {
   async handleMessage(msg: WebviewToHost): Promise<void> {
     switch (msg.command) {
       case 'ready':
+        this.pushHookTaskOptions();
         break;
 
       case 'submit':
@@ -416,6 +425,29 @@ export class ServerFormPanel extends BaseFormPanel {
         path: result[0].fsPath,
       });
     }
+  }
+
+  private async refreshHookTaskOptions(): Promise<void> {
+    const nextTaskOptions = await fetchHookTaskOptions(this.logger);
+    if (areHookTaskOptionsEqual(this.hookTaskOptions, nextTaskOptions)) {
+      return;
+    }
+
+    this.hookTaskOptions = nextTaskOptions;
+    this.pushHookTaskOptions();
+  }
+
+  private pushHookTaskOptions(): void {
+    if (!this.panel) {
+      return;
+    }
+
+    this.postMessage({
+      v: WEBVIEW_PROTOCOL_VERSION,
+      command: 'hookOptions',
+      fields: ['hooks'],
+      taskOptions: this.hookTaskOptions,
+    });
   }
 }
 

@@ -4,7 +4,8 @@ import { EventBus } from '@core/events/EventBus';
 import type { Logger } from '@core/types/logger';
 import type { PluginRegistry } from '@plugins/registry/PluginRegistry';
 import type { IServerPlugin } from '@plugins/interfaces/IServerPlugin';
-import type { ServerConfig, DeploymentConfig } from '@core/types/domain';
+import type { ServerConfig, DeploymentConfig, HookConfig } from '@core/types/domain';
+import type { EventMap } from '@core/types/events';
 import type { OperationContext } from '@core/types';
 import { ok, err } from '@core/result';
 import { JsmError } from '@core/errors/JsmError';
@@ -51,6 +52,19 @@ function makeDep(id = 'd1'): DeploymentConfig {
   };
 }
 
+function makeHook(event: HookConfig['event'], phase: HookConfig['phase'] = 'pre', id = `${event}-${phase}`): HookConfig {
+  return {
+    id,
+    enabled: true,
+    phase,
+    event,
+    kind: 'command',
+    timeoutMs: 60_000,
+    continueOnError: false,
+    command: { mode: 'shell', line: 'echo ok' },
+  };
+}
+
 function makeCtx(serverId = 's1', deploymentId = 'd1', kind: OperationContext['kind'] = 'DeployFull'): OperationContext {
   return {
     operationId: 'op-1',
@@ -70,6 +84,7 @@ describe('DeploymentService', () => {
   let service: DeploymentService;
   let mockPlugin: IServerPlugin;
   let mockRegistry: PluginRegistry;
+  let hookRunner: { runHooks: ReturnType<typeof vi.fn> };
 
   beforeEach(() => {
     bus = new EventBus(mockLogger());
@@ -103,10 +118,15 @@ describe('DeploymentService', () => {
       get: vi.fn().mockReturnValue(mockPlugin),
     } as unknown as PluginRegistry;
 
+    hookRunner = {
+      runHooks: vi.fn(async () => ok({ executed: 0, skipped: 0, failed: 0, errors: [] })),
+    };
+
     service = new DeploymentService({
       pluginRegistry: mockRegistry,
       bus,
       logger: mockLogger(),
+      hookRunner: hookRunner as never,
     });
   });
 
@@ -119,13 +139,42 @@ describe('DeploymentService', () => {
     const dep = makeDep();
 
     const events: unknown[] = [];
-    bus.on('DeploymentStateChanged', e => events.push(e));
+    bus.on('DeploymentStateChanged', (e: EventMap['DeploymentStateChanged']) => events.push(e));
 
     const result = await service.fullRedeploy(makeCtx(), config, dep);
     expect(result.ok).toBe(true);
     expect(service.getDeploymentState('s1', 'd1')).toBe('synced');
     // deploying → synced
     expect(events).toHaveLength(2);
+  });
+
+  it('runs merged deploy.full hooks from server and deployment config', async () => {
+    const config = {
+      ...makeConfig(),
+      hooks: [makeHook('deploy.full', 'pre', 'server-pre')],
+    };
+    const dep = {
+      ...makeDep(),
+      hooks: [makeHook('deploy.full', 'post', 'dep-post')],
+    };
+
+    const result = await service.fullRedeploy(makeCtx(), config, dep);
+
+    expect(result.ok).toBe(true);
+    expect(hookRunner.runHooks).toHaveBeenNthCalledWith(
+      1,
+      's1',
+      'pre',
+      'deploy.full',
+      [...config.hooks, ...dep.hooks],
+    );
+    expect(hookRunner.runHooks).toHaveBeenNthCalledWith(
+      2,
+      's1',
+      'post',
+      'deploy.full',
+      [...config.hooks, ...dep.hooks],
+    );
   });
 
   it('fullRedeploy transitions to error on plan failure', async () => {

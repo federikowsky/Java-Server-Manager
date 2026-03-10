@@ -29,6 +29,11 @@ export interface FormFieldDef {
     patternMessage?: string;
   };
   visibleWhen?: { field: string; equals: unknown };
+  hookOptions?: {
+    events?: { value: string; label: string }[];
+    defaultEvent?: string;
+    taskOptions?: { value: string; label: string }[];
+  };
 }
 
 export interface FormSection {
@@ -70,4 +75,5 @@ export type HostToWebview =
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'fieldValidationResult'; field: string; error?: string }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'browsed'; field: string; path: string }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'defaults'; data: Record<string, unknown> }
+  | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'hookOptions'; fields: string[]; taskOptions: { value: string; label: string }[] }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'error'; message: string; details?: string };

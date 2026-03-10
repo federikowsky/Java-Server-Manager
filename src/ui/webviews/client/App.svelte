@@ -32,6 +32,30 @@
     return defaults;
   }
 
+  function applyHookTaskOptions(formSchema: FormSchema, fieldNames: string[], taskOptions: { value: string; label: string }[]): FormSchema {
+    const fieldNameSet = new Set(fieldNames);
+
+    return {
+      ...formSchema,
+      sections: formSchema.sections.map(section => ({
+        ...section,
+        fields: section.fields.map(field => {
+          if (field.type !== 'hooks' || !fieldNameSet.has(field.name)) {
+            return field;
+          }
+
+          return {
+            ...field,
+            hookOptions: {
+              ...(field.hookOptions ?? {}),
+              taskOptions,
+            },
+          };
+        }),
+      })),
+    };
+  }
+
   function handleHostMessage(msg: HostToWebview): void {
     switch (msg.command) {
       case 'init': {
@@ -82,6 +106,9 @@
         break;
       case 'defaults':
         formData.update(d => ({ ...d, ...msg.data }));
+        break;
+      case 'hookOptions':
+        schema.update(current => current ? applyHookTaskOptions(current, msg.fields, msg.taskOptions) : current);
         break;
       case 'error':
         globalError.set(msg.message);

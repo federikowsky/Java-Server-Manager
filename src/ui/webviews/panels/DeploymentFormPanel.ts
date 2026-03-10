@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import type { WorkspaceServerLocator, WorkspaceServiceRegistry } from '@app/config';
-import type { Logger } from '@core/types';
+import type { HookEvent, Logger } from '@core/types';
 import type {
   FormSchema,
   WebviewToHost,
@@ -8,7 +8,14 @@ import type {
 } from '../protocol';
 import { WEBVIEW_PROTOCOL_VERSION } from '../protocol';
 import { normalizeHookList, validateHookList } from '../hookForm';
+import { areHookTaskOptionsEqual, fetchHookTaskOptions, type HookTaskOption } from '../hookTaskOptions';
 import { BaseFormPanel } from './BaseFormPanel';
+
+const DEPLOYMENT_HOOK_EVENTS: { value: HookEvent; label: string }[] = [
+  { value: 'deploy.full', label: 'Deploy Full' },
+  { value: 'deploy.incremental', label: 'Deploy Incremental' },
+  { value: 'deploy.undeploy', label: 'Deploy Undeploy' },
+];
 
 // ── Dependency contract ─────────────────────────────────────────────────────
 
@@ -25,7 +32,7 @@ export interface DeploymentFormPanelDeps {
 
 // ── Deployment Form Schema ──────────────────────────────────────────────────
 
-function deploymentFormSchema(mode: 'create' | 'edit'): FormSchema {
+function deploymentFormSchema(mode: 'create' | 'edit', hookTaskOptions: HookTaskOption[]): FormSchema {
   return {
     title: mode === 'create' ? 'Add Deployment' : 'Edit Deployment',
     sections: [
@@ -96,6 +103,11 @@ function deploymentFormSchema(mode: 'create' | 'edit'): FormSchema {
             type: 'hooks',
             defaultValue: [],
             helpText: 'Configure deployment hooks as terminal commands or VS Code tasks. New hooks start with a default Hook-N identifier used in logs and diagnostics.',
+            hookOptions: {
+              events: DEPLOYMENT_HOOK_EVENTS,
+              defaultEvent: 'deploy.full',
+              taskOptions: hookTaskOptions,
+            },
           },
         ],
       },
@@ -112,6 +124,7 @@ export class DeploymentFormPanel extends BaseFormPanel {
   private readonly logger: Logger;
   private targetServer: WorkspaceServerLocator | undefined;
   private editDeploymentId: string | undefined;
+  private hookTaskOptions: HookTaskOption[] = [];
 
   constructor(deps: DeploymentFormPanelDeps) {
     super(deps.extensionUri, DeploymentFormPanel.viewType, 'Deployment Configuration');
@@ -122,16 +135,18 @@ export class DeploymentFormPanel extends BaseFormPanel {
       getAllServers: () => [],
     } as unknown as WorkspaceServiceRegistry;
     this.logger = deps.logger;
+    void this.refreshHookTaskOptions();
   }
 
   getFormSchema(mode: 'create' | 'edit'): FormSchema {
-    return deploymentFormSchema(mode);
+    return deploymentFormSchema(mode, this.hookTaskOptions);
   }
 
   openCreate(targetServer: WorkspaceServerLocator): void {
     this.targetServer = targetServer;
     this.editDeploymentId = undefined;
     this.show('create');
+    void this.refreshHookTaskOptions();
   }
 
   openEdit(targetServer: WorkspaceServerLocator, deploymentId: string): void {
@@ -154,6 +169,7 @@ export class DeploymentFormPanel extends BaseFormPanel {
     }
 
     this.show('edit', data);
+    void this.refreshHookTaskOptions();
   }
 
   open(mode: 'create' | 'edit', serverId: string, deploymentId?: string): void {
@@ -181,6 +197,7 @@ export class DeploymentFormPanel extends BaseFormPanel {
   async handleMessage(msg: WebviewToHost): Promise<void> {
     switch (msg.command) {
       case 'ready':
+        this.pushHookTaskOptions();
         break;
 
       case 'submit':
@@ -376,6 +393,29 @@ export class DeploymentFormPanel extends BaseFormPanel {
       });
     }
   }
+
+  private async refreshHookTaskOptions(): Promise<void> {
+    const nextTaskOptions = await fetchHookTaskOptions(this.logger);
+    if (areHookTaskOptionsEqual(this.hookTaskOptions, nextTaskOptions)) {
+      return;
+    }
+
+    this.hookTaskOptions = nextTaskOptions;
+    this.pushHookTaskOptions();
+  }
+
+  private pushHookTaskOptions(): void {
+    if (!this.panel) {
+      return;
+    }
+
+    this.postMessage({
+      v: WEBVIEW_PROTOCOL_VERSION,
+      command: 'hookOptions',
+      fields: ['hooks'],
+      taskOptions: this.hookTaskOptions,
+    });
+  }
 }
 
 // ── Form Data Helpers ───────────────────────────────────────────────────────
@@ -436,7 +476,11 @@ function validateDeploymentForm(data: Record<string, unknown>): FieldError[] {
     });
   }
 
-  errors.push(...validateHookList(data['hooks']));
+  errors.push(...validateHookList(
+    data['hooks'],
+    'hooks',
+    DEPLOYMENT_HOOK_EVENTS.map(option => option.value),
+  ));
 
   return errors;
 }

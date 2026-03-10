@@ -67,10 +67,10 @@ function normalizePhase(value: unknown): HookPhase {
   return value === 'post' || value === 'onError' ? value : 'pre';
 }
 
-function normalizeEvent(value: unknown): HookEvent {
-  return HOOK_EVENT_OPTIONS.some(option => option.value === value)
+function normalizeEvent(value: unknown, allowedEvents: readonly HookEvent[] = HOOK_EVENT_OPTIONS.map(option => option.value)): HookEvent {
+  return allowedEvents.includes(value as HookEvent)
     ? (value as HookEvent)
-    : 'lifecycle.start';
+    : allowedEvents[0] ?? 'lifecycle.start';
 }
 
 function normalizeCommand(command: HookInput['command']): HookCommandConfig {
@@ -109,7 +109,7 @@ export function toShellCommand(
   };
 }
 
-function normalizeHook(input: unknown, _index: number): HookConfig {
+function normalizeHook(input: unknown, _index: number, allowedEvents: readonly HookEvent[]): HookConfig {
   const raw = isRecord(input) ? (input as HookInput) : {};
   const kind = normalizeKind(raw.kind);
   const id = typeof raw.id === 'string' && raw.id.trim().length > 0
@@ -121,7 +121,7 @@ function normalizeHook(input: unknown, _index: number): HookConfig {
       id,
       enabled: raw.enabled !== false,
       phase: normalizePhase(raw.phase),
-      event: normalizeEvent(raw.event),
+      event: normalizeEvent(raw.event, allowedEvents),
       kind,
       timeoutMs: normalizeTimeout(raw.timeoutMs),
       continueOnError: raw.continueOnError === true,
@@ -137,7 +137,7 @@ function normalizeHook(input: unknown, _index: number): HookConfig {
     id,
     enabled: raw.enabled !== false,
     phase: normalizePhase(raw.phase),
-    event: normalizeEvent(raw.event),
+    event: normalizeEvent(raw.event, allowedEvents),
     kind,
     timeoutMs: normalizeTimeout(raw.timeoutMs),
     continueOnError: raw.continueOnError === true,
@@ -145,12 +145,12 @@ function normalizeHook(input: unknown, _index: number): HookConfig {
   };
 }
 
-export function createDefaultHook(index: number): HookConfig {
+export function createDefaultHook(index: number, defaults?: { event?: HookEvent }): HookConfig {
   return {
     id: createDefaultHookId(index),
     enabled: true,
     phase: 'pre',
-    event: 'lifecycle.start',
+    event: defaults?.event ?? 'lifecycle.start',
     kind: 'command',
     timeoutMs: DEFAULT_TIMEOUT_MS,
     continueOnError: false,
@@ -161,12 +161,16 @@ export function createDefaultHook(index: number): HookConfig {
   };
 }
 
-export function normalizeHookList(value: unknown): HookConfig[] {
+export function normalizeHookList(value: unknown, allowedEvents: readonly HookEvent[] = HOOK_EVENT_OPTIONS.map(option => option.value)): HookConfig[] {
   if (!Array.isArray(value)) return [];
-  return value.map((hook, index) => normalizeHook(hook, index));
+  return value.map((hook, index) => normalizeHook(hook, index, allowedEvents));
 }
 
-export function validateHookList(value: unknown, fieldPrefix = 'hooks'): FieldError[] {
+export function validateHookList(
+  value: unknown,
+  fieldPrefix = 'hooks',
+  allowedEvents: readonly HookEvent[] = HOOK_EVENT_OPTIONS.map(option => option.value),
+): FieldError[] {
   if (value === undefined) return [];
   if (!Array.isArray(value)) {
     return [{
@@ -177,10 +181,18 @@ export function validateHookList(value: unknown, fieldPrefix = 'hooks'): FieldEr
   }
 
   const errors: FieldError[] = [];
-  const hooks = normalizeHookList(value);
+  const hooks = normalizeHookList(value, allowedEvents);
 
   hooks.forEach((hook, index) => {
     const base = `${fieldPrefix}[${index}]`;
+
+    if (!allowedEvents.includes(hook.event)) {
+      errors.push({
+        field: `${base}.event`,
+        message: 'This event is not allowed in this hook context.',
+        suggestedFix: `Choose one of: ${allowedEvents.join(', ')}.`,
+      });
+    }
 
     if (hook.id.trim().length === 0) {
       errors.push({

@@ -8,6 +8,7 @@ import type {
   DebugAttacher,
   TrustGate,
   OutputSink,
+  HookEvent,
 } from '@core/types';
 import type { Result } from '@core/result';
 import { ok, err } from '@core/result';
@@ -20,6 +21,7 @@ import type { IServerPlugin } from '@plugins/interfaces/IServerPlugin';
 import type { PluginRegistry } from '@plugins/registry/PluginRegistry';
 import { PidManager } from '@infra/pid';
 import { PortScanner } from '@infra/ports';
+import type { HookRunner } from '@app/hooks';
 import { ServerRuntime } from './ServerRuntime';
 import { READINESS_PROBE_INTERVAL_MS, RECONCILIATION_BUDGET_MS } from '../../constants';
 
@@ -33,6 +35,7 @@ export interface ServerLifecycleDeps {
   debugAttacher: DebugAttacher;
   logger: Logger;
   trustGate?: TrustGate;
+  hookRunner?: Pick<HookRunner, 'runHooks'>;
   getOutputSink?: (serverKey: ServerId, serverName: string) => OutputSink;
 }
 
@@ -234,8 +237,7 @@ export class ServerLifecycle {
           break;
         case 'LifecycleRestart': {
           const mode = (entry.meta?.['mode'] as StartMode) ?? 'run';
-          await this.doStop(server);
-          await this.doStart(server, mode);
+          await this.doRestart(server, mode);
           break;
         }
         case 'StatusRefresh':
@@ -267,8 +269,16 @@ export class ServerLifecycle {
   // ── Start Flow ────────────────────────────────────────────────────
 
   private async doStart(server: ServerEntry, mode: StartMode): Promise<void> {
+    await this.doStartInternal(server, mode, 'lifecycle.start');
+  }
+
+  private async doStartInternal(server: ServerEntry, mode: StartMode, hookEvent?: HookEvent): Promise<void> {
     const { config, runtime } = server;
     const plugin = this.getPlugin(config);
+
+    if (hookEvent) {
+      await this.runServerHooks(server, 'pre', hookEvent);
+    }
 
     runtime.transition('starting', { startMode: mode });
 
@@ -285,71 +295,86 @@ export class ServerLifecycle {
       this.deps.getOutputSink?.(server.serverKey, config.name),
     );
 
-    const startResult = await plugin.start(ctx, config, mode);
-    if (!startResult.ok) {
-      runtime.transition('error', { error: startResult.error });
-      throw startResult.error;
-    }
-
-    const { pid } = startResult.value;
-    await this.deps.pidManager.writePid(server.serverKey, pid);
-
-    // Readiness probe loop
-    const startedAt = Date.now();
-    let ready = false;
-
-    while (!ready && (Date.now() - startedAt) < timeoutMs) {
-      await sleep(READINESS_PROBE_INTERVAL_MS);
-
-      const portOpen = await this.deps.portScanner.probe(config.ports.http, config.host);
-      const decision = decideReadiness({
-        portOpen,
-        elapsed: Date.now() - startedAt,
-        timeoutMs,
-      });
-
-      if (decision === 'ready') {
-        ready = true;
-      } else if (decision === 'timeout') {
-        break;
+    try {
+      const startResult = await plugin.start(ctx, config, mode);
+      if (!startResult.ok) {
+        runtime.transition('error', { error: startResult.error });
+        throw startResult.error;
       }
-      // else 'retry' → continue loop
-    }
 
-    if (!ready) {
-      runtime.transition('error', {
-        error: new JsmError({
+      const { pid } = startResult.value;
+      await this.deps.pidManager.writePid(server.serverKey, pid);
+
+      // Readiness probe loop
+      const startedAt = Date.now();
+      let ready = false;
+
+      while (!ready && (Date.now() - startedAt) < timeoutMs) {
+        await sleep(READINESS_PROBE_INTERVAL_MS);
+
+        const portOpen = await this.deps.portScanner.probe(config.ports.http, config.host);
+        const decision = decideReadiness({
+          portOpen,
+          elapsed: Date.now() - startedAt,
+          timeoutMs,
+        });
+
+        if (decision === 'ready') {
+          ready = true;
+        } else if (decision === 'timeout') {
+          break;
+        }
+      }
+
+      if (!ready) {
+        runtime.transition('error', {
+          error: new JsmError({
+            code: ErrorCode.Timeout,
+            message: `Server '${config.name}' failed readiness check within ${timeoutMs}ms`,
+          }),
+        });
+        throw new JsmError({
           code: ErrorCode.Timeout,
-          message: `Server '${config.name}' failed readiness check within ${timeoutMs}ms`,
-        }),
-      });
-      throw new JsmError({
-        code: ErrorCode.Timeout,
-        message: `Readiness timeout for '${config.name}'`,
-      });
-    }
+          message: `Readiness timeout for '${config.name}'`,
+        });
+      }
 
-    runtime.transition('running', { pid });
+      runtime.transition('running', { pid });
 
-    // Debug attach
-    if (mode === 'debug' && config.debug.enabled) {
-      await sleep(config.debug.attachDelayMs);
-      await this.deps.debugAttacher.attach({
-        serverId: server.serverKey,
-        port: config.ports.debug,
-        name: `Debug: ${config.name}`,
-        bind: config.debug.bind,
-      });
+      if (mode === 'debug' && config.debug.enabled) {
+        await sleep(config.debug.attachDelayMs);
+        await this.deps.debugAttacher.attach({
+          serverId: server.serverKey,
+          port: config.ports.debug,
+          name: `Debug: ${config.name}`,
+          bind: config.debug.bind,
+        });
+      }
+
+      if (hookEvent) {
+        await this.runServerHooks(server, 'post', hookEvent);
+      }
+    } catch (cause) {
+      await this.runServerOnErrorHooks(server, hookEvent, cause);
+      throw cause;
     }
   }
 
   // ── Stop Flow ─────────────────────────────────────────────────────
 
   private async doStop(server: ServerEntry): Promise<void> {
+    await this.doStopInternal(server, 'lifecycle.stop');
+  }
+
+  private async doStopInternal(server: ServerEntry, hookEvent?: HookEvent): Promise<void> {
     const { config, runtime } = server;
     const plugin = this.getPlugin(config);
 
     if (runtime.state === 'stopped') return;
+
+    if (hookEvent) {
+      await this.runServerHooks(server, 'pre', hookEvent);
+    }
 
     runtime.transition('stopping');
 
@@ -363,32 +388,53 @@ export class ServerLifecycle {
       this.deps.getOutputSink?.(server.serverKey, config.name),
     );
 
-    const stopResult = await plugin.stop(ctx, config);
-    if (!stopResult.ok) {
-      this.deps.logger.warn(`ServerLifecycle: stop error for '${config.name}'`, stopResult.error);
-    }
-
-    // Wait for graceful shutdown with escalation
-    const startedAt = Date.now();
-    const pid = runtime.pid;
-
-    if (pid) {
-      while (Date.now() - startedAt < timeoutMs) {
-        if (!this.deps.pidManager.isProcessAlive(pid)) break;
-
-        const decision = decideStopEscalation(Date.now() - startedAt, timeoutMs);
-        if (decision === 'force-kill') {
-          this.deps.logger.warn(`ServerLifecycle: force-killing ${config.name} (PID ${pid})`);
-          try { process.kill(pid, 'SIGKILL'); } catch { /* already dead */ }
-          break;
-        }
-        await sleep(500);
+    try {
+      const stopResult = await plugin.stop(ctx, config);
+      if (!stopResult.ok) {
+        this.deps.logger.warn(`ServerLifecycle: stop error for '${config.name}'`, stopResult.error);
       }
-    }
 
-    await this.deps.pidManager.clearPid(server.serverKey);
-    await this.deps.debugAttacher.detach(server.serverKey);
-    runtime.transition('stopped');
+      const startedAt = Date.now();
+      const pid = runtime.pid;
+
+      if (pid) {
+        while (Date.now() - startedAt < timeoutMs) {
+          if (!this.deps.pidManager.isProcessAlive(pid)) break;
+
+          const decision = decideStopEscalation(Date.now() - startedAt, timeoutMs);
+          if (decision === 'force-kill') {
+            this.deps.logger.warn(`ServerLifecycle: force-killing ${config.name} (PID ${pid})`);
+            try { process.kill(pid, 'SIGKILL'); } catch { /* already dead */ }
+            break;
+          }
+          await sleep(500);
+        }
+      }
+
+      await this.deps.pidManager.clearPid(server.serverKey);
+      await this.deps.debugAttacher.detach(server.serverKey);
+      runtime.transition('stopped');
+
+      if (hookEvent) {
+        await this.runServerHooks(server, 'post', hookEvent);
+      }
+    } catch (cause) {
+      await this.runServerOnErrorHooks(server, hookEvent, cause);
+      throw cause;
+    }
+  }
+
+  private async doRestart(server: ServerEntry, mode: StartMode): Promise<void> {
+    const hookEvent: HookEvent = 'lifecycle.restart';
+    await this.runServerHooks(server, 'pre', hookEvent);
+    try {
+      await this.doStopInternal(server);
+      await this.doStartInternal(server, mode);
+      await this.runServerHooks(server, 'post', hookEvent);
+    } catch (cause) {
+      await this.runServerOnErrorHooks(server, hookEvent, cause);
+      throw cause;
+    }
   }
 
   // ── Status Refresh ────────────────────────────────────────────────
@@ -471,6 +517,25 @@ export class ServerLifecycle {
 
   private checkTrust(): boolean {
     return !this.deps.trustGate || this.deps.trustGate.isTrusted();
+  }
+
+  private async runServerHooks(server: ServerEntry, phase: 'pre' | 'post' | 'onError', event: HookEvent): Promise<void> {
+    if (!this.deps.hookRunner) return;
+    const result = await this.deps.hookRunner.runHooks(server.serverKey, phase, event, server.config.hooks);
+    if (!result.ok) {
+      throw result.error;
+    }
+  }
+
+  private async runServerOnErrorHooks(server: ServerEntry, event: HookEvent | undefined, cause: unknown): Promise<void> {
+    if (!event || !this.deps.hookRunner) return;
+    const result = await this.deps.hookRunner.runHooks(server.serverKey, 'onError', event, server.config.hooks);
+    if (!result.ok) {
+      this.deps.logger.warn(`ServerLifecycle: onError hook failed for '${server.config.name}'`, result.error);
+    }
+    if (cause instanceof JsmError) {
+      server.runtime.transition('error', { error: cause });
+    }
   }
 
   private untrustedErr(): Result<never, JsmError> {

@@ -8,6 +8,8 @@ import type {
   Logger,
   FileChangeBatch,
   TrustGate,
+  HookConfig,
+  HookEvent,
 } from '@core/types';
 import type { Result } from '@core/result';
 import { ok, err } from '@core/result';
@@ -16,6 +18,7 @@ import { ErrorCode } from '@core/errors/codes';
 import type { EventBus } from '@core/events/EventBus';
 import type { IServerPlugin } from '@plugins/interfaces/IServerPlugin';
 import type { PluginRegistry } from '@plugins/registry/PluginRegistry';
+import type { HookRunner } from '@app/hooks';
 
 
 // ── Deployment Runtime State ────────────────────────────────────────────────
@@ -64,6 +67,7 @@ export class DeploymentService {
   private readonly bus: EventBus;
   private readonly logger: Logger;
   private readonly trustGate?: TrustGate;
+  private readonly hookRunner?: Pick<HookRunner, 'runHooks'>;
   private readonly states = new Map<string, DeploymentEntry>();
 
   constructor(deps: {
@@ -71,11 +75,13 @@ export class DeploymentService {
     bus: EventBus;
     logger: Logger;
     trustGate?: TrustGate;
+    hookRunner?: Pick<HookRunner, 'runHooks'>;
   }) {
     this.pluginRegistry = deps.pluginRegistry;
     this.bus = deps.bus;
     this.logger = deps.logger;
     this.trustGate = deps.trustGate;
+    this.hookRunner = deps.hookRunner;
   }
 
   // ── State Management ──────────────────────────────────────────────
@@ -122,36 +128,20 @@ export class DeploymentService {
     config: ServerConfig,
     dep: DeploymentConfig,
   ): Promise<Result<void, JsmError>> {
-    const trustCheck = this.checkTrust();
-    if (!trustCheck.ok) return trustCheck;
-
-    const plugin = this.getPlugin(config);
-
-    this.transitionDeploy(ctx.serverId, dep.id, 'deploying');
-
-    try {
-      // Plan
+    return this.runDeploymentOperation(ctx, config, dep, 'deploy.full', async plugin => {
       const planResult = await plugin.planDeploy(ctx, config, dep);
       if (!planResult.ok) {
-        this.transitionDeploy(ctx.serverId, dep.id, 'error', { error: planResult.error });
         return planResult;
       }
 
-      // Execute
       const deployResult = await plugin.deployFull(ctx, config, dep, planResult.value);
       if (!deployResult.ok) {
-        this.transitionDeploy(ctx.serverId, dep.id, 'error', { error: deployResult.error });
         return deployResult;
       }
 
-      this.transitionDeploy(ctx.serverId, dep.id, 'synced');
       this.logger.info(`DeploymentService: deployed ${dep.deployName} via ${deployResult.value.strategy}`);
       return ok(undefined);
-    } catch (cause) {
-      const error = cause instanceof JsmError ? cause : JsmError.fromUnknown(cause);
-      this.transitionDeploy(ctx.serverId, dep.id, 'error', { error });
-      return err(error);
-    }
+    });
   }
 
   // ── Incremental Sync ──────────────────────────────────────────────
@@ -176,33 +166,21 @@ export class DeploymentService {
       return this.fullRedeploy(ctx, config, dep);
     }
 
-    this.transitionDeploy(ctx.serverId, dep.id, 'deploying');
-
-    try {
-      // Plan
+    return this.runDeploymentOperation(ctx, config, dep, 'deploy.incremental', async () => {
       const planResult = await plugin.planDeploy(ctx, config, dep);
       if (!planResult.ok) {
-        this.transitionDeploy(ctx.serverId, dep.id, 'error', { error: planResult.error });
         return planResult;
       }
 
-      // Override plan strategy for incremental
       const incrementalPlan = { ...planResult.value, strategy: 'incremental-dir' as const };
-
-      const result = await plugin.deployIncremental(ctx, config, dep, changes, incrementalPlan);
+      const result = await plugin.deployIncremental!(ctx, config, dep, changes, incrementalPlan);
       if (!result.ok) {
-        this.transitionDeploy(ctx.serverId, dep.id, 'error', { error: result.error });
         return result;
       }
 
-      this.transitionDeploy(ctx.serverId, dep.id, 'synced');
       this.logger.debug(`DeploymentService: incremental sync for ${dep.deployName} (${changes.changes.length} files)`);
       return ok(undefined);
-    } catch (cause) {
-      const error = cause instanceof JsmError ? cause : JsmError.fromUnknown(cause);
-      this.transitionDeploy(ctx.serverId, dep.id, 'error', { error });
-      return err(error);
-    }
+    });
   }
 
   // ── Undeploy ──────────────────────────────────────────────────────
@@ -220,14 +198,21 @@ export class DeploymentService {
 
     // undeploy from error or synced → undeployed
     if (currentState !== 'undeployed') {
+      await this.runDeploymentHooks(ctx.serverId, config, dep, 'pre', 'deploy.undeploy');
+
       try {
         const result = await plugin.undeploy(ctx, config, dep);
-        if (!result.ok) return result;
+        if (!result.ok) {
+          await this.runDeploymentOnErrorHooks(ctx.serverId, config, dep, 'deploy.undeploy');
+          return result;
+        }
       } catch (cause) {
+        await this.runDeploymentOnErrorHooks(ctx.serverId, config, dep, 'deploy.undeploy');
         return err(cause instanceof JsmError ? cause : JsmError.fromUnknown(cause));
       }
 
       this.transitionDeploy(ctx.serverId, dep.id, 'undeployed');
+      await this.runDeploymentHooks(ctx.serverId, config, dep, 'post', 'deploy.undeploy');
     }
 
     return ok(undefined);
@@ -304,5 +289,69 @@ export class DeploymentService {
     const extensionIndex = fileName.lastIndexOf('.');
     const extension = extensionIndex >= 0 ? fileName.slice(extensionIndex) : '';
     return SAFE_INCREMENTAL_EXTENSIONS.has(extension);
+  }
+
+  private async runDeploymentOperation(
+    ctx: OperationContext,
+    config: ServerConfig,
+    dep: DeploymentConfig,
+    event: HookEvent,
+    operation: (plugin: IServerPlugin) => Promise<Result<void, JsmError>>,
+  ): Promise<Result<void, JsmError>> {
+    const trustCheck = this.checkTrust();
+    if (!trustCheck.ok) return trustCheck;
+
+    const plugin = this.getPlugin(config);
+    this.transitionDeploy(ctx.serverId, dep.id, 'deploying');
+
+    try {
+      await this.runDeploymentHooks(ctx.serverId, config, dep, 'pre', event);
+      const result = await operation(plugin);
+      if (!result.ok) {
+        await this.runDeploymentOnErrorHooks(ctx.serverId, config, dep, event);
+        this.transitionDeploy(ctx.serverId, dep.id, 'error', { error: result.error });
+        return result;
+      }
+
+      this.transitionDeploy(ctx.serverId, dep.id, 'synced');
+      await this.runDeploymentHooks(ctx.serverId, config, dep, 'post', event);
+      return ok(undefined);
+    } catch (cause) {
+      const error = cause instanceof JsmError ? cause : JsmError.fromUnknown(cause);
+      await this.runDeploymentOnErrorHooks(ctx.serverId, config, dep, event);
+      this.transitionDeploy(ctx.serverId, dep.id, 'error', { error });
+      return err(error);
+    }
+  }
+
+  private mergedHooks(config: ServerConfig, dep: DeploymentConfig): HookConfig[] {
+    return [...config.hooks, ...dep.hooks];
+  }
+
+  private async runDeploymentHooks(
+    serverId: ServerId,
+    config: ServerConfig,
+    dep: DeploymentConfig,
+    phase: 'pre' | 'post' | 'onError',
+    event: HookEvent,
+  ): Promise<void> {
+    if (!this.hookRunner) return;
+    const result = await this.hookRunner.runHooks(serverId, phase, event, this.mergedHooks(config, dep));
+    if (!result.ok) {
+      throw result.error;
+    }
+  }
+
+  private async runDeploymentOnErrorHooks(
+    serverId: ServerId,
+    config: ServerConfig,
+    dep: DeploymentConfig,
+    event: HookEvent,
+  ): Promise<void> {
+    if (!this.hookRunner) return;
+    const result = await this.hookRunner.runHooks(serverId, 'onError', event, this.mergedHooks(config, dep));
+    if (!result.ok) {
+      this.logger.warn(`DeploymentService: onError hook failed for '${dep.deployName}'`, result.error);
+    }
   }
 }

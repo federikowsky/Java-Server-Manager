@@ -102,6 +102,35 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
 
   // ── 5. App layer ──────────────────────────────────────────────────────
 
+  async function resolveHookTask(taskName: string): Promise<Result<vscode.Task, JsmError>> {
+    const normalizedTaskName = taskName.trim();
+    if (normalizedTaskName.length === 0) {
+      return err(new JsmError({
+        code: ErrorCode.InvalidConfig,
+        message: 'VS Code hook task name is required',
+      }));
+    }
+
+    const tasks = await vscode.tasks.fetchTasks();
+    const matches = tasks.filter(candidate => candidate.name.trim() === normalizedTaskName);
+
+    if (matches.length === 0) {
+      return err(new JsmError({
+        code: ErrorCode.InvalidConfig,
+        message: `VS Code task '${normalizedTaskName}' not found`,
+      }));
+    }
+
+    if (matches.length > 1) {
+      return err(new JsmError({
+        code: ErrorCode.InvalidConfig,
+        message: `VS Code task '${normalizedTaskName}' is ambiguous; use a unique task name`,
+      }));
+    }
+
+    return ok(matches[0]);
+  }
+
   const hookExecutor: HookExecutor = {
     async runCommand(hook: HookConfig): Promise<Result<void, JsmError>> {
       try {
@@ -131,23 +160,28 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
     async runVscodeTask(hook: HookConfig): Promise<Result<void, JsmError>> {
       try {
         const taskName = hook.vscodeTask?.taskName ?? 'JSM Hook';
-        const taskExecution = await vscode.tasks.executeTask(
-          new vscode.Task(
-            { type: 'jsm.hook' },
-            vscode.TaskScope.Workspace,
-            taskName,
-            'JSM',
-            new vscode.ShellExecution(taskName),
-          ),
-        );
-        await new Promise<void>((resolve) => {
+        const taskResult = await resolveHookTask(taskName);
+        if (!taskResult.ok) {
+          return taskResult;
+        }
+
+        const taskExecution = await vscode.tasks.executeTask(taskResult.value);
+        const exitCode = await new Promise<number | undefined>((resolve) => {
           const d = vscode.tasks.onDidEndTaskProcess((ev) => {
             if (ev.execution === taskExecution) {
               d.dispose();
-              resolve();
+              resolve(ev.exitCode);
             }
           });
         });
+
+        if (exitCode !== undefined && exitCode !== 0) {
+          return err(new JsmError({
+            code: ErrorCode.HookFailed,
+            message: `VS Code task '${taskName}' failed with exit code ${exitCode}`,
+          }));
+        }
+
         return ok(undefined);
       } catch (e) {
         return err(
@@ -157,8 +191,10 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
     },
   };
 
-  // HookRunner available for future use in lifecycle hooks
-  void new HookRunner({ executor: hookExecutor, logger });
+  // TrustGate (§12.8): injected into services that perform side-effecting operations
+  const trustGate = { isTrusted: () => vscode.workspace.isTrusted };
+
+  const hookRunner = new HookRunner({ executor: hookExecutor, logger, trustGate });
 
   const workspaceServiceRegistry = new WorkspaceServiceRegistry(
     workspaceFolders.map(folder => {
@@ -195,9 +231,6 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
     logger,
   );
 
-  // TrustGate (§12.8): injected into services that perform side-effecting operations
-  const trustGate = { isTrusted: () => vscode.workspace.isTrusted };
-
   const lifecycle = new ServerLifecycle({
     pluginRegistry,
     bus: eventBus,
@@ -206,6 +239,7 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
     debugAttacher: debugAdapter,
     logger,
     trustGate,
+    hookRunner,
     getOutputSink: (serverId, serverName) => ({
       append: (text: string) => {
         logChannel.getChannel(serverId, serverName).append(text);
@@ -224,6 +258,7 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
     bus: eventBus,
     logger,
     trustGate,
+    hookRunner,
   });
 
   const autoSyncService = new AutoSyncService({

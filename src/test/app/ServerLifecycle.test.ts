@@ -4,6 +4,7 @@ import type { ServerConfig } from '@core/types/domain';
 import type { Logger } from '@core/types/logger';
 import { ok } from '@core/result';
 import { ErrorCode } from '@core/errors/codes';
+import type { HookConfig } from '@core/types/domain';
 
 /* ── helpers ─────────────────────────────────────────────────────────────── */
 
@@ -86,6 +87,25 @@ function mockQueue(serverId = 'srv-1') {
   };
 }
 
+function mockHookRunner() {
+  return {
+    runHooks: vi.fn(async () => ok({ executed: 0, skipped: 0, failed: 0, errors: [] })),
+  };
+}
+
+function makeHook(event: HookConfig['event']): HookConfig {
+  return {
+    id: `hook-${event}`,
+    enabled: true,
+    phase: 'pre',
+    event,
+    kind: 'command',
+    timeoutMs: 60_000,
+    continueOnError: false,
+    command: { mode: 'shell', line: 'echo ok' },
+  };
+}
+
 /* ── tests ───────────────────────────────────────────────────────────────── */
 
 describe('ServerLifecycle', () => {
@@ -94,6 +114,7 @@ describe('ServerLifecycle', () => {
   let pidManager: ReturnType<typeof mockPidManager>;
   let portScanner: ReturnType<typeof mockPortScanner>;
   let debugAttacher: ReturnType<typeof mockDebugAttacher>;
+  let hookRunner: ReturnType<typeof mockHookRunner>;
   let lifecycle: ServerLifecycle;
 
   beforeEach(() => {
@@ -102,6 +123,7 @@ describe('ServerLifecycle', () => {
     pidManager = mockPidManager();
     portScanner = mockPortScanner();
     debugAttacher = mockDebugAttacher();
+    hookRunner = mockHookRunner();
 
     lifecycle = new ServerLifecycle({
       pluginRegistry: pluginRegistry as never,
@@ -110,6 +132,7 @@ describe('ServerLifecycle', () => {
       portScanner: portScanner as never,
       debugAttacher: debugAttacher as never,
       logger: mockLogger(),
+      hookRunner: hookRunner as never,
     });
   });
 
@@ -118,13 +141,13 @@ describe('ServerLifecycle', () => {
   describe('register', () => {
     it('returns a ServerRuntime in stopped state', () => {
       const queue = mockQueue();
-      const runtime = lifecycle.register(makeServer(), queue as never);
+      const runtime = lifecycle.register('srv-1', makeServer(), queue as never);
       expect(runtime.state).toBe('stopped');
     });
 
     it('wires the queue executor', () => {
       const queue = mockQueue();
-      lifecycle.register(makeServer(), queue as never);
+      lifecycle.register('srv-1', makeServer(), queue as never);
       expect(queue.setExecutor).toHaveBeenCalledOnce();
     });
 
@@ -148,6 +171,7 @@ describe('ServerLifecycle', () => {
         start: pluginStart,
         stop: vi.fn(),
         getStatus: vi.fn(),
+        detect: vi.fn(),
       });
       portScanner.probe.mockResolvedValue(true);
 
@@ -161,7 +185,7 @@ describe('ServerLifecycle', () => {
         getOutputSink: () => ({ append, appendLine, clear }),
       });
 
-      lifecycle.register(makeServer(), queue as never);
+      lifecycle.register('srv-1', makeServer(), queue as never);
       const executor = queue.setExecutor.mock.calls[0][0] as (entry: { kind: string; meta?: Record<string, unknown> }) => Promise<void>;
 
       await executor({ kind: 'LifecycleStart', meta: { mode: 'run' } });
@@ -173,6 +197,73 @@ describe('ServerLifecycle', () => {
       expect(logger.info).not.toHaveBeenCalledWith('[srv-1] Starting Tomcat...');
       expect(logger.debug).not.toHaveBeenCalledWith('catalina output');
     });
+
+    it('runs lifecycle.start hooks during the real start flow', async () => {
+      const queue = mockQueue();
+      const config = {
+        ...makeServer(),
+        hooks: [
+          makeHook('lifecycle.start'),
+          { ...makeHook('lifecycle.start'), id: 'hook-post', phase: 'post' },
+        ],
+      };
+      const pluginStart = vi.fn(async () => ok({
+        pid: 123,
+        httpUrl: 'http://127.0.0.1:8080',
+        hints: [],
+      }));
+
+      pluginRegistry.get.mockReturnValue({
+        start: pluginStart,
+        stop: vi.fn(),
+        getStatus: vi.fn(),
+        detect: vi.fn(),
+      });
+      portScanner.probe.mockResolvedValue(true);
+
+      lifecycle.register('srv-1', config, queue as never);
+      const executor = queue.setExecutor.mock.calls[0][0] as (entry: { kind: string; meta?: Record<string, unknown> }) => Promise<void>;
+
+      await executor({ kind: 'LifecycleStart', meta: { mode: 'run' } });
+
+      expect(hookRunner.runHooks).toHaveBeenNthCalledWith(1, 'srv-1', 'pre', 'lifecycle.start', config.hooks);
+      expect(hookRunner.runHooks).toHaveBeenNthCalledWith(2, 'srv-1', 'post', 'lifecycle.start', config.hooks);
+    });
+
+    it('runs only lifecycle.restart hooks for restart operations', async () => {
+      const queue = mockQueue();
+      const config = {
+        ...makeServer(),
+        hooks: [
+          makeHook('lifecycle.restart'),
+          { ...makeHook('lifecycle.restart'), id: 'hook-restart-post', phase: 'post' },
+        ],
+      };
+      const pluginStart = vi.fn(async () => ok({
+        pid: 123,
+        httpUrl: 'http://127.0.0.1:8080',
+        hints: [],
+      }));
+      const pluginStop = vi.fn(async () => ok(undefined));
+
+      pluginRegistry.get.mockReturnValue({
+        start: pluginStart,
+        stop: pluginStop,
+        getStatus: vi.fn(),
+        detect: vi.fn(),
+      });
+      portScanner.probe.mockResolvedValue(true);
+
+      const runtime = lifecycle.register('srv-1', config, queue as never);
+      runtime.forceState('running', { pid: 321 });
+      const executor = queue.setExecutor.mock.calls[0][0] as (entry: { kind: string; meta?: Record<string, unknown> }) => Promise<void>;
+
+      await executor({ kind: 'LifecycleRestart', meta: { mode: 'run' } });
+
+      expect(hookRunner.runHooks).toHaveBeenNthCalledWith(1, 'srv-1', 'pre', 'lifecycle.restart', config.hooks);
+      expect(hookRunner.runHooks).toHaveBeenNthCalledWith(2, 'srv-1', 'post', 'lifecycle.restart', config.hooks);
+      expect(hookRunner.runHooks).toHaveBeenCalledTimes(2);
+    });
   });
 
   /* ── getRuntime ──────────────────────────────────────────────────── */
@@ -180,7 +271,7 @@ describe('ServerLifecycle', () => {
   describe('getRuntime', () => {
     it('returns runtime for registered server', () => {
       const queue = mockQueue();
-      lifecycle.register(makeServer(), queue as never);
+      lifecycle.register('srv-1', makeServer(), queue as never);
       expect(lifecycle.getRuntime('srv-1')).toBeDefined();
     });
 
@@ -194,7 +285,7 @@ describe('ServerLifecycle', () => {
   describe('start', () => {
     it('enqueues start for stopped server', () => {
       const queue = mockQueue();
-      lifecycle.register(makeServer(), queue as never);
+      lifecycle.register('srv-1', makeServer(), queue as never);
 
       const result = lifecycle.start('srv-1', 'run');
       expect(result.ok).toBe(true);
@@ -212,7 +303,7 @@ describe('ServerLifecycle', () => {
 
     it('rejects start when server is already running', () => {
       const queue = mockQueue();
-      const runtime = lifecycle.register(makeServer(), queue as never);
+      const runtime = lifecycle.register('srv-1', makeServer(), queue as never);
       // Force to running state for the guard check
       runtime.forceState('running', { pid: 123 });
 
@@ -225,7 +316,7 @@ describe('ServerLifecycle', () => {
   describe('stop', () => {
     it('enqueues stop for running server', () => {
       const queue = mockQueue();
-      const runtime = lifecycle.register(makeServer(), queue as never);
+      const runtime = lifecycle.register('srv-1', makeServer(), queue as never);
       runtime.forceState('running', { pid: 123 });
 
       const result = lifecycle.stop('srv-1');
@@ -235,7 +326,7 @@ describe('ServerLifecycle', () => {
 
     it('rejects stop for stopped server', () => {
       const queue = mockQueue();
-      lifecycle.register(makeServer(), queue as never);
+      lifecycle.register('srv-1', makeServer(), queue as never);
 
       const result = lifecycle.stop('srv-1');
       expect(result.ok).toBe(false);
@@ -251,7 +342,7 @@ describe('ServerLifecycle', () => {
   describe('restart', () => {
     it('enqueues restart', () => {
       const queue = mockQueue();
-      lifecycle.register(makeServer(), queue as never);
+      lifecycle.register('srv-1', makeServer(), queue as never);
 
       const result = lifecycle.restart('srv-1', 'debug');
       expect(result.ok).toBe(true);
@@ -272,7 +363,7 @@ describe('ServerLifecycle', () => {
   describe('cancel', () => {
     it('clears the queue for registered server', () => {
       const queue = mockQueue();
-      lifecycle.register(makeServer(), queue as never);
+      lifecycle.register('srv-1', makeServer(), queue as never);
       lifecycle.cancel('srv-1');
       expect(queue.clear).toHaveBeenCalledOnce();
     });
@@ -288,7 +379,7 @@ describe('ServerLifecycle', () => {
   describe('updateConfig', () => {
     it('updates config reference', () => {
       const queue = mockQueue();
-      lifecycle.register(makeServer(), queue as never);
+      lifecycle.register('srv-1', makeServer(), queue as never);
       const updated = makeServer('srv-1', 'New Name');
       lifecycle.updateConfig('srv-1', updated);
       // If getRuntime still works, config was accepted
@@ -299,7 +390,7 @@ describe('ServerLifecycle', () => {
   describe('unregister', () => {
     it('removes server from management', () => {
       const queue = mockQueue();
-      lifecycle.register(makeServer(), queue as never);
+      lifecycle.register('srv-1', makeServer(), queue as never);
       lifecycle.unregister('srv-1');
       expect(lifecycle.getRuntime('srv-1')).toBeUndefined();
     });
@@ -310,11 +401,11 @@ describe('ServerLifecycle', () => {
   describe('reconcileRunningServers', () => {
     it('marks server stopped when no PID file', async () => {
       const queue = mockQueue();
-      const runtime = lifecycle.register(makeServer(), queue as never);
+      const runtime = lifecycle.register('srv-1', makeServer(), queue as never);
 
       pidManager.readPid.mockResolvedValue(null);
 
-      await lifecycle.reconcileRunningServers([makeServer()]);
+      await lifecycle.reconcileRunningServers([{ serverKey: 'srv-1', config: makeServer() }]);
 
       expect(runtime.state).toBe('stopped');
       expect(bus.emit).toHaveBeenCalledWith('WorkspaceLoaded', { serverCount: 1 });
@@ -322,24 +413,24 @@ describe('ServerLifecycle', () => {
 
     it('marks server running when PID is alive', async () => {
       const queue = mockQueue();
-      const runtime = lifecycle.register(makeServer(), queue as never);
+      const runtime = lifecycle.register('srv-1', makeServer(), queue as never);
 
       pidManager.readPid.mockResolvedValue(42);
       pidManager.isProcessAlive.mockReturnValue(true);
 
-      await lifecycle.reconcileRunningServers([makeServer()]);
+      await lifecycle.reconcileRunningServers([{ serverKey: 'srv-1', config: makeServer() }]);
 
       expect(runtime.state).toBe('running');
     });
 
     it('clears stale PID and marks stopped', async () => {
       const queue = mockQueue();
-      const runtime = lifecycle.register(makeServer(), queue as never);
+      const runtime = lifecycle.register('srv-1', makeServer(), queue as never);
 
       pidManager.readPid.mockResolvedValue(42);
       pidManager.isProcessAlive.mockReturnValue(false);
 
-      await lifecycle.reconcileRunningServers([makeServer()]);
+      await lifecycle.reconcileRunningServers([{ serverKey: 'srv-1', config: makeServer() }]);
 
       expect(runtime.state).toBe('stopped');
       expect(pidManager.clearPid).toHaveBeenCalledWith('srv-1');
@@ -356,7 +447,7 @@ describe('ServerLifecycle', () => {
   describe('refreshStatus', () => {
     it('enqueues StatusRefresh for registered server', () => {
       const queue = mockQueue();
-      lifecycle.register(makeServer(), queue as never);
+      lifecycle.register('srv-1', makeServer(), queue as never);
       const result = lifecycle.refreshStatus('srv-1');
       expect(result.ok).toBe(true);
       expect(queue.enqueue).toHaveBeenCalledWith({ kind: 'StatusRefresh' });
@@ -388,7 +479,7 @@ describe('ServerLifecycle', () => {
 
     it('blocks start in untrusted workspace', () => {
       const queue = mockQueue();
-      untrustedLifecycle.register(makeServer(), queue as never);
+      untrustedLifecycle.register('srv-1', makeServer(), queue as never);
       const result = untrustedLifecycle.start('srv-1', 'run');
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error.code).toBe(ErrorCode.WorkspaceUntrusted);
@@ -396,7 +487,7 @@ describe('ServerLifecycle', () => {
 
     it('blocks stop in untrusted workspace', () => {
       const queue = mockQueue();
-      const runtime = untrustedLifecycle.register(makeServer(), queue as never);
+      const runtime = untrustedLifecycle.register('srv-1', makeServer(), queue as never);
       runtime.forceState('running', { pid: 123 });
       const result = untrustedLifecycle.stop('srv-1');
       expect(result.ok).toBe(false);
@@ -405,7 +496,7 @@ describe('ServerLifecycle', () => {
 
     it('blocks restart in untrusted workspace', () => {
       const queue = mockQueue();
-      untrustedLifecycle.register(makeServer(), queue as never);
+      untrustedLifecycle.register('srv-1', makeServer(), queue as never);
       const result = untrustedLifecycle.restart('srv-1', 'run');
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error.code).toBe(ErrorCode.WorkspaceUntrusted);
@@ -422,7 +513,7 @@ describe('ServerLifecycle', () => {
         trustGate: { isTrusted: () => true },
       });
       const queue = mockQueue();
-      trustedLifecycle.register(makeServer(), queue as never);
+      trustedLifecycle.register('srv-1', makeServer(), queue as never);
       const result = trustedLifecycle.start('srv-1', 'run');
       expect(result.ok).toBe(true);
     });

@@ -22,15 +22,19 @@
 
   let nextHookIndex = $state(1);
   let hookErrors = $state<FieldError[]>([]);
+  const allowedEvents = $derived((def.hookOptions?.events ?? HOOK_EVENT_OPTIONS).map(option => option.value as HookConfig['event']));
+  const eventOptions = $derived(def.hookOptions?.events ?? HOOK_EVENT_OPTIONS);
+  const defaultEvent = $derived((def.hookOptions?.defaultEvent as HookConfig['event'] | undefined) ?? allowedEvents[0] ?? 'lifecycle.start');
+  const taskOptions = $derived(def.hookOptions?.taskOptions ?? []);
 
   $effect(() => {
-    const hooks = normalizeHookList(value);
+    const hooks = normalizeHookList(value, allowedEvents);
     nextHookIndex = Math.max(nextHookIndex, hooks.length + 1);
-    hookErrors = validateHookList(value, def.name);
+    hookErrors = validateHookList(value, def.name, allowedEvents);
   });
 
   function getHooks(): HookConfig[] {
-    return normalizeHookList(value);
+    return normalizeHookList(value, allowedEvents);
   }
 
   function commit(hooks: HookConfig[]): void {
@@ -38,7 +42,7 @@
   }
 
   function addHook(): void {
-    commit([...getHooks(), createDefaultHook(nextHookIndex)]);
+    commit([...getHooks(), createDefaultHook(nextHookIndex, { event: defaultEvent })]);
     nextHookIndex += 1;
   }
 
@@ -171,7 +175,7 @@
             class="field-input"
             onchange={(e: Event) => updateHook(index, { event: (e.target as HTMLSelectElement).value as HookConfig['event'] })}
           >
-            {#each HOOK_EVENT_OPTIONS as option (option.value)}
+            {#each eventOptions as option (option.value)}
               <option value={option.value} selected={hook.event === option.value}>{option.label}</option>
             {/each}
           </select>
@@ -241,7 +245,7 @@
               spellcheck="false"
               value={getHookCommandLine(hook.command)}
               oninput={(e: Event) => updateCommandLine(index, (e.target as HTMLTextAreaElement).value)}
-            />
+            ></textarea>
             <!-- <span class="field-help">Runs in a shell, so operators like &&, ||, pipes, and redirects work as expected.</span> -->
             {#each getErrorMessages(`${def.name}[${index}].command.line`) as message (message)}
               <span class="hook-field-error">{message}</span>
@@ -279,9 +283,19 @@
               id={fieldId(index, 'vscodeTask.taskName')}
               class="field-input"
               type="text"
+              list={fieldId(index, 'vscodeTask.taskName-options')}
+              placeholder={taskOptions.length > 0 ? 'Type to filter available tasks' : 'Enter the task name'}
               value={hook.vscodeTask?.taskName ?? ''}
               oninput={(e: Event) => updateVsCodeTask(index, (e.target as HTMLInputElement).value)}
             />
+            {#if taskOptions.length > 0}
+              <datalist id={fieldId(index, 'vscodeTask.taskName-options')}>
+                {#each taskOptions as option (option.value)}
+                  <option value={option.value}>{option.label}</option>
+                {/each}
+              </datalist>
+              <span class="field-help">Start typing to filter the tasks currently available in the workspace.</span>
+            {/if}
             {#each getErrorMessages(`${def.name}[${index}].vscodeTask.taskName`) as message (message)}
               <span class="hook-field-error">{message}</span>
             {/each}

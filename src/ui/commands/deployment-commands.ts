@@ -36,7 +36,7 @@ export interface DeploymentCommandsDeps {
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 function nextSyncMode(current: SyncMode): SyncMode {
-  const cycle: SyncMode[] = ['off', 'manual', 'auto'];
+  const cycle: SyncMode[] = ['manual', 'auto'];
   return cycle[(cycle.indexOf(current) + 1) % cycle.length];
 }
 
@@ -79,8 +79,8 @@ export function registerDeploymentCommands(
       deploymentFormPanel.open?.('create', arg.serverId);
     }],
 
-    // §8.2 — jsm.deployment.sync
-    ['jsm.deployment.sync', async (arg: unknown) => {
+    // §8.2 — jsm.deployment.redeploy
+    ['jsm.deployment.redeploy', async (arg: unknown) => {
       if (!isDeploymentNode(arg)) return;
       const config = resolveServer(arg.workspaceFolderUri, arg.serverId);
       const dep = config?.deployments.find((d: DeploymentConfig) => d.id === arg.deploymentId);
@@ -88,19 +88,7 @@ export function registerDeploymentCommands(
       const ctx = makeOpCtx(arg.serverKey, 'DeployFull', arg.deploymentId);
       const result = await deployService.fullRedeploy(ctx, config, dep);
       if (!result.ok) { showErr(result.error); return; }
-      showSuccess(`Sync completed for "${dep.deployName}".`);
-    }],
-
-    // §8.2 — jsm.deployment.fullRedeploy
-    ['jsm.deployment.fullRedeploy', async (arg: unknown) => {
-      if (!isDeploymentNode(arg)) return;
-      const config = resolveServer(arg.workspaceFolderUri, arg.serverId);
-      const dep = config?.deployments.find((d: DeploymentConfig) => d.id === arg.deploymentId);
-      if (!config || !dep) return;
-      const ctx = makeOpCtx(arg.serverKey, 'DeployFull', arg.deploymentId);
-      const result = await deployService.fullRedeploy(ctx, config, dep);
-      if (!result.ok) { showErr(result.error); return; }
-      showSuccess(`Full Redeploy completed for "${dep.deployName}".`);
+      showSuccess(`Redeploy completed for "${dep.deployName}".`);
     }],
 
     // §8.2 — jsm.deployment.undeploy
@@ -127,6 +115,7 @@ export function registerDeploymentCommands(
 
       const dep = server.deployments.find((d: DeploymentConfig) => d.id === arg.deploymentId);
       if (!dep) return;
+      if (dep.type !== 'exploded') return;
 
       const newMode = nextSyncMode(dep.syncMode);
       const updatedDep = { ...dep, syncMode: newMode };

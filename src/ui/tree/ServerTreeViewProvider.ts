@@ -11,7 +11,7 @@ import type { ServerRuntimeState } from '@core/types/runtime';
 import type { WorkspaceServerRecord } from '@app/config';
 import {
   SERVER_CONTEXT,
-  DEPLOYMENT_CONTEXT,
+  deploymentContextValue,
   SERVER_ICON,
   DEPLOYMENT_ICON,
 } from './constants';
@@ -137,7 +137,7 @@ export class DeploymentNode extends vscode.TreeItem {
     this.serverId = normalizedServerNode.serverId;
     this.deploymentId = dep.id;
     this.deploymentConfig = dep;
-    this.contextValue = DEPLOYMENT_CONTEXT[state];
+    this.contextValue = deploymentContextValue(dep.type, state);
     this.description = `${dep.type} • ${state}`;
     this.iconPath = new vscode.ThemeIcon(DEPLOYMENT_ICON[state]);
     this.tooltip = DeploymentNode.buildTooltip(dep, state);
@@ -150,7 +150,7 @@ export class DeploymentNode extends vscode.TreeItem {
     md.appendMarkdown(`- **Type:** ${dep.type}\n`);
     md.appendMarkdown(`- **State:** ${state}\n`);
     md.appendMarkdown(`- **Source:** ${dep.sourcePath}\n`);
-    md.appendMarkdown(`- **Sync:** ${dep.syncMode}\n`);
+    md.appendMarkdown(`- **Auto-Sync:** ${dep.syncMode}\n`);
     return md;
   }
 }

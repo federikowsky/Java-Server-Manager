@@ -90,9 +90,16 @@ describe('AutoSyncService', () => {
     expect(watcherFactory.watch).not.toHaveBeenCalled();
   });
 
-  it('does not create watcher for syncMode=off', () => {
+  it('does not create watcher for syncMode=manual', () => {
     const config = makeConfig();
-    config.deployments[0].syncMode = 'off';
+    config.deployments[0].syncMode = 'manual';
+    service.enable(config);
+    expect(watcherFactory.watch).not.toHaveBeenCalled();
+  });
+
+  it('does not create watcher for war deployments', () => {
+    const config = makeConfig();
+    config.deployments[0].type = 'war';
     service.enable(config);
     expect(watcherFactory.watch).not.toHaveBeenCalled();
   });

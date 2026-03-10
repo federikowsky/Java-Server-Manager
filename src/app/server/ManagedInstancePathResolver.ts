@@ -1,10 +1,9 @@
 import * as path from 'path';
 
-const INSTANCES_DIR = 'instances';
-
 /**
  * Resolves deterministic managed instance paths inside workspace-scoped
- * extension storage.
+ * extension storage. The provided storageRoot is expected to already be the
+ * instances container directory for the workspace.
  */
 export class ManagedInstancePathResolver {
   private readonly storageRoot: string;
@@ -18,6 +17,6 @@ export class ManagedInstancePathResolver {
   }
 
   resolve(serverId: string): string {
-    return path.join(this.storageRoot, INSTANCES_DIR, serverId);
+    return path.join(this.storageRoot, serverId);
   }
 }

@@ -9,4 +9,4 @@ export type StartMode = 'run' | 'debug';
 
 export type DeploymentType = 'war' | 'exploded';
 
-export type SyncMode = 'off' | 'manual' | 'auto';
+export type SyncMode = 'manual' | 'auto';

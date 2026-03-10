@@ -212,22 +212,13 @@ export function registerServerCommands(
       logChannel.showLogs(arg.serverKey, arg.serverConfig.name);
     }],
 
-    ['jsm.server.syncAllDeployments', async (arg: unknown) => {
-      if (!isServerNode(arg)) return;
-      const config = resolveServer(arg.workspaceFolderUri, arg.serverId);
-      if (!config || config.deployments.length === 0) return;
-      const ctx = makeOpCtx(arg.serverKey, 'SyncAll');
-      await deployService.redeployAll(ctx, config);
-      showSuccess(`Sync All completed for "${arg.serverConfig.name}".`);
-    }],
-
-    ['jsm.server.fullRedeployAll', async (arg: unknown) => {
+    ['jsm.server.redeployAll', async (arg: unknown) => {
       if (!isServerNode(arg)) return;
       const config = resolveServer(arg.workspaceFolderUri, arg.serverId);
       if (!config || config.deployments.length === 0) return;
       const ctx = makeOpCtx(arg.serverKey, 'RedeployAll');
       await deployService.redeployAll(ctx, config);
-      showSuccess(`Full Redeploy All completed for "${arg.serverConfig.name}".`);
+      showSuccess(`Redeploy All completed for "${arg.serverConfig.name}".`);
     }],
 
     ['jsm.view.refresh', async () => {

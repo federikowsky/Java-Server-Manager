@@ -76,9 +76,9 @@ function makeServer(id = 'srv-1', name = 'My Tomcat'): ServerConfig {
   };
 }
 
-function makeDeployment(id = 'dep-1', syncMode: 'off' | 'manual' | 'auto' = 'auto'): DeploymentConfig {
+function makeDeployment(id = 'dep-1', syncMode: 'manual' | 'auto' = 'auto', type: 'war' | 'exploded' = 'exploded'): DeploymentConfig {
   return {
-    id, type: 'exploded', sourcePath: '/src/app', deployName: 'myapp',
+    id, type, sourcePath: '/src/app', deployName: 'myapp',
     syncMode, ignoreGlobs: [], hooks: [],
   };
 }
@@ -136,7 +136,7 @@ describe('Deployment Commands', () => {
 
   it('should register all expected deployment commands', () => {
     const expected = [
-      'jsm.deployment.add', 'jsm.deployment.sync', 'jsm.deployment.fullRedeploy',
+      'jsm.deployment.add', 'jsm.deployment.redeploy',
       'jsm.deployment.undeploy', 'jsm.deployment.toggleAutosync',
       'jsm.deployment.configureIgnoreGlobs', 'jsm.deployment.edit',
       'jsm.deployment.remove', 'jsm.deployment.openLogs',
@@ -161,33 +161,18 @@ describe('Deployment Commands', () => {
       expect(deps.deploymentFormPanel.open).toHaveBeenCalledWith('edit', 'srv-1', 'dep-1');
     });
 
-    it('jsm.deployment.sync should call deployService.fullRedeploy', async () => {
+    it('jsm.deployment.redeploy should call deployService.fullRedeploy', async () => {
       const dep = makeDeployment();
       const server = makeServer();
       server.deployments = [dep];
       deps.configService.getServer.mockReturnValue(server);
 
       const node = createDeploymentNode('srv-1', dep);
-      await invoke('jsm.deployment.sync', node);
+      await invoke('jsm.deployment.redeploy', node);
 
       expect(deps.deployService.fullRedeploy).toHaveBeenCalled();
       expect(mockShowInfoMessage).toHaveBeenCalledWith(
-        expect.stringContaining('Sync completed'),
-      );
-    });
-
-    it('jsm.deployment.fullRedeploy should call deployService.fullRedeploy', async () => {
-      const dep = makeDeployment();
-      const server = makeServer();
-      server.deployments = [dep];
-      deps.configService.getServer.mockReturnValue(server);
-
-      const node = createDeploymentNode('srv-1', dep);
-      await invoke('jsm.deployment.fullRedeploy', node);
-
-      expect(deps.deployService.fullRedeploy).toHaveBeenCalled();
-      expect(mockShowInfoMessage).toHaveBeenCalledWith(
-        expect.stringContaining('Full Redeploy completed'),
+        expect.stringContaining('Redeploy completed'),
       );
     });
 
@@ -220,22 +205,6 @@ describe('Deployment Commands', () => {
   /* ── Toggle Autosync Cycling ─────────────────────────────────────────── */
 
   describe('toggleAutosync cycling', () => {
-    it('should cycle off → manual', async () => {
-      const dep = makeDeployment('dep-1', 'off');
-      const server = makeServer();
-      server.deployments = [dep];
-      deps.configService.getServer.mockReturnValue(server);
-
-      const node = createDeploymentNode('srv-1', dep);
-      await invoke('jsm.deployment.toggleAutosync', node);
-
-      expect(deps.configService.updateServer).toHaveBeenCalledWith(
-        expect.objectContaining({
-          deployments: [expect.objectContaining({ syncMode: 'manual' })],
-        }),
-      );
-    });
-
     it('should cycle manual → auto', async () => {
       const dep = makeDeployment('dep-1', 'manual');
       const server = makeServer();
@@ -252,7 +221,7 @@ describe('Deployment Commands', () => {
       );
     });
 
-    it('should cycle auto → off', async () => {
+    it('should cycle auto → manual', async () => {
       const dep = makeDeployment('dep-1', 'auto');
       const server = makeServer();
       server.deployments = [dep];
@@ -263,13 +232,25 @@ describe('Deployment Commands', () => {
 
       expect(deps.configService.updateServer).toHaveBeenCalledWith(
         expect.objectContaining({
-          deployments: [expect.objectContaining({ syncMode: 'off' })],
+          deployments: [expect.objectContaining({ syncMode: 'manual' })],
         }),
       );
     });
 
+    it('should do nothing for war deployments', async () => {
+      const dep = makeDeployment('dep-1', 'auto', 'war');
+      const server = makeServer();
+      server.deployments = [dep];
+      deps.configService.getServer.mockReturnValue(server);
+
+      const node = createDeploymentNode('srv-1', dep);
+      await invoke('jsm.deployment.toggleAutosync', node);
+
+      expect(deps.configService.updateServer).not.toHaveBeenCalled();
+    });
+
     it('should show error when updateServer fails', async () => {
-      const dep = makeDeployment('dep-1', 'off');
+      const dep = makeDeployment('dep-1', 'manual');
       const server = makeServer();
       server.deployments = [dep];
       deps.configService.getServer.mockReturnValue(server);
@@ -288,7 +269,7 @@ describe('Deployment Commands', () => {
 
   describe('Type Guard: non-DeploymentNode arguments', () => {
     const depCommands = [
-      'jsm.deployment.sync', 'jsm.deployment.fullRedeploy', 'jsm.deployment.undeploy',
+      'jsm.deployment.redeploy', 'jsm.deployment.undeploy',
       'jsm.deployment.toggleAutosync', 'jsm.deployment.edit', 'jsm.deployment.remove',
     ];
 
@@ -317,24 +298,24 @@ describe('Deployment Commands', () => {
   /* ── Negative Path ───────────────────────────────────────────────────── */
 
   describe('Negative Path', () => {
-    it('sync should silently return when server not found', async () => {
+    it('redeploy should silently return when server not found', async () => {
       deps.configService.getServer.mockReturnValue(undefined);
       const node = createDeploymentNode();
-      await invoke('jsm.deployment.sync', node);
+      await invoke('jsm.deployment.redeploy', node);
       expect(deps.deployService.fullRedeploy).not.toHaveBeenCalled();
     });
 
-    it('sync should silently return when deployment not found in server', async () => {
+    it('redeploy should silently return when deployment not found in server', async () => {
       const server = makeServer();
       server.deployments = []; // No deployments
       deps.configService.getServer.mockReturnValue(server);
 
       const node = createDeploymentNode();
-      await invoke('jsm.deployment.sync', node);
+      await invoke('jsm.deployment.redeploy', node);
       expect(deps.deployService.fullRedeploy).not.toHaveBeenCalled();
     });
 
-    it('sync should show error when fullRedeploy fails', async () => {
+    it('redeploy should show error when fullRedeploy fails', async () => {
       const dep = makeDeployment();
       const server = makeServer();
       server.deployments = [dep];
@@ -344,7 +325,7 @@ describe('Deployment Commands', () => {
       );
 
       const node = createDeploymentNode('srv-1', dep);
-      await invoke('jsm.deployment.sync', node);
+      await invoke('jsm.deployment.redeploy', node);
 
       expect(mockShowErrorMessage).toHaveBeenCalledWith(
         expect.stringContaining('Deploy error'),

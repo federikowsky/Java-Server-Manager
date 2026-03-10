@@ -94,7 +94,7 @@ export class AutoSyncService {
   // ── Enable / Disable ──────────────────────────────────────────────
 
   /**
-   * Enable autosync for a server's deployments that have syncMode !== 'off'.
+   * Enable autosync for exploded deployments with syncMode === 'auto'.
    * Respects watcher global cap (§10.4).
    */
   enable(config: ServerConfig, serverId: ServerId = config.id): void {
@@ -105,7 +105,7 @@ export class AutoSyncService {
     }
 
     for (const dep of config.deployments) {
-      if (dep.syncMode === 'off') continue;
+      if (dep.type !== 'exploded' || dep.syncMode !== 'auto') continue;
       this.startWatching(config, dep, serverId);
     }
   }

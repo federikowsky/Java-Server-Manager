@@ -55,13 +55,8 @@
         "icon": "$(edit)"
       },
       {
-        "command": "jsm.server.syncAllDeployments",
-        "title": "Sync All Deployments",
-        "icon": "$(sync)"
-      },
-      {
-        "command": "jsm.server.fullRedeployAll",
-        "title": "Full Redeploy All",
+        "command": "jsm.server.redeployAll",
+        "title": "Redeploy All",
         "icon": "$(cloud-upload)"
       },
       {
@@ -100,13 +95,8 @@
         "icon": "$(trash)"
       },
       {
-        "command": "jsm.deployment.sync",
-        "title": "Sync",
-        "icon": "$(sync)"
-      },
-      {
-        "command": "jsm.deployment.fullRedeploy",
-        "title": "Full Redeploy",
+        "command": "jsm.deployment.redeploy",
+        "title": "Redeploy",
         "icon": "$(cloud-upload)"
       },
       {
@@ -116,7 +106,7 @@
       },
       {
         "command": "jsm.deployment.toggleAutosync",
-        "title": "Toggle AutoSync",
+        "title": "Toggle Auto-Sync",
         "icon": "$(sync)"
       },
       {
@@ -210,14 +200,9 @@
           "group": "inline@2"
         },
         {
-          "command": "jsm.server.syncAllDeployments",
+          "command": "jsm.server.redeployAll",
           "when": "view == javaServerManagerView && viewItem =~ /jsm\\.server\\..*/",
           "group": "deploy@1"
-        },
-        {
-          "command": "jsm.server.fullRedeployAll",
-          "when": "view == javaServerManagerView && viewItem =~ /jsm\\.server\\..*/",
-          "group": "deploy@2"
         },
         {
           "command": "jsm.deployment.add",
@@ -250,23 +235,18 @@
           "group": "troubleshooting@3"
         },
         {
-          "command": "jsm.deployment.sync",
+          "command": "jsm.deployment.redeploy",
           "when": "view == javaServerManagerView && viewItem =~ /jsm\\.deployment\\..*/",
           "group": "inline@1"
         },
         {
-          "command": "jsm.deployment.fullRedeploy",
+          "command": "jsm.deployment.undeploy",
           "when": "view == javaServerManagerView && viewItem =~ /jsm\\.deployment\\..*/",
           "group": "actions@2"
         },
         {
-          "command": "jsm.deployment.undeploy",
-          "when": "view == javaServerManagerView && viewItem =~ /jsm\\.deployment\\..*/",
-          "group": "actions@3"
-        },
-        {
           "command": "jsm.deployment.toggleAutosync",
-          "when": "view == javaServerManagerView && viewItem =~ /jsm\\.deployment\\..*/",
+          "when": "view == javaServerManagerView && viewItem =~ /jsm\\.deployment\\.exploded\\..*/",
           "group": "autosync@1"
         },
         {
@@ -286,6 +266,7 @@
         {
           "id": "javaServerManagerView",
           "name": "Java Servers",
+          "icon": "$(server)",
           "when": "workspaceFolderCount >= 0"
         }
       ]

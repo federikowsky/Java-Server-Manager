@@ -66,15 +66,16 @@ function deploymentFormSchema(mode: 'create' | 'edit'): FormSchema {
           },
           {
             name: 'syncMode',
-            label: 'Sync Mode',
+            label: 'Auto-Sync',
             type: 'select',
             required: true,
             defaultValue: 'auto',
             options: [
-              { value: 'off', label: 'Off' },
               { value: 'manual', label: 'Manual' },
               { value: 'auto', label: 'Auto' },
             ],
+            visibleWhen: { field: 'type', equals: 'exploded' },
+            helpText: 'Only available for exploded deployments. Auto applies safe file changes and falls back to redeploy when needed.',
           },
         ],
       },
@@ -386,12 +387,13 @@ function formDataToDeploymentConfig(
   data: Record<string, unknown>,
   id: string,
 ): DeploymentConfig {
+  const type = (data['type'] as DeploymentType) ?? 'exploded';
   return {
     id,
-    type: (data['type'] as DeploymentType) ?? 'exploded',
+    type,
     sourcePath: String(data['sourcePath'] ?? ''),
     deployName: String(data['deployName'] ?? ''),
-    syncMode: (data['syncMode'] as SyncMode) ?? 'auto',
+    syncMode: type === 'war' ? 'manual' : ((data['syncMode'] as SyncMode) ?? 'auto'),
     ignoreGlobs: Array.isArray(data['ignoreGlobs'])
       ? (data['ignoreGlobs'] as string[])
       : [],

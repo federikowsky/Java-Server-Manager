@@ -5,6 +5,7 @@ import type { Logger } from '@core/types/logger';
 import type { PluginRegistry } from '@plugins/registry/PluginRegistry';
 import type { IServerPlugin } from '@plugins/interfaces/IServerPlugin';
 import type { ServerConfig, DeploymentConfig } from '@core/types/domain';
+import type { OperationContext } from '@core/types';
 import { ok, err } from '@core/result';
 import { JsmError } from '@core/errors/JsmError';
 import { ErrorCode } from '@core/errors/codes';
@@ -47,6 +48,20 @@ function makeDep(id = 'd1'): DeploymentConfig {
     syncMode: 'manual',
     ignoreGlobs: [],
     hooks: [],
+  };
+}
+
+function makeCtx(serverId = 's1', deploymentId = 'd1', kind: OperationContext['kind'] = 'DeployFull'): OperationContext {
+  return {
+    operationId: 'op-1',
+    serverId,
+    kind,
+    targetDeploymentId: deploymentId,
+    startedAt: Date.now(),
+    timeoutMs: 60_000,
+    cancel: { isCancelled: false, onCancelled: () => ({ dispose: () => {} }) },
+    progress: { report: () => {} },
+    output: { append: () => {}, appendLine: () => {}, clear: () => {} },
   };
 }
 
@@ -106,7 +121,7 @@ describe('DeploymentService', () => {
     const events: unknown[] = [];
     bus.on('DeploymentStateChanged', e => events.push(e));
 
-    const result = await service.fullRedeploy({} as never, config, dep);
+    const result = await service.fullRedeploy(makeCtx(), config, dep);
     expect(result.ok).toBe(true);
     expect(service.getDeploymentState('s1', 'd1')).toBe('synced');
     // deploying → synced
@@ -118,7 +133,7 @@ describe('DeploymentService', () => {
       err(new JsmError({ code: ErrorCode.DeployFailed, message: 'plan failed' })),
     );
 
-    const result = await service.fullRedeploy({} as never, makeConfig(), makeDep());
+    const result = await service.fullRedeploy(makeCtx(), makeConfig(), makeDep());
     expect(result.ok).toBe(false);
     expect(service.getDeploymentState('s1', 'd1')).toBe('error');
   });
@@ -128,17 +143,17 @@ describe('DeploymentService', () => {
     const dep = makeDep();
 
     // First deploy
-    await service.fullRedeploy({} as never, config, dep);
+    await service.fullRedeploy(makeCtx(), config, dep);
     expect(service.getDeploymentState('s1', 'd1')).toBe('synced');
 
     // Then undeploy
-    const result = await service.undeploy({} as never, config, dep);
+    const result = await service.undeploy(makeCtx('s1', 'd1', 'Undeploy'), config, dep);
     expect(result.ok).toBe(true);
     expect(service.getDeploymentState('s1', 'd1')).toBe('undeployed');
   });
 
   it('undeploy from undeployed is a no-op success', async () => {
-    const result = await service.undeploy({} as never, makeConfig(), makeDep());
+    const result = await service.undeploy(makeCtx('s1', 'd1', 'Undeploy'), makeConfig(), makeDep());
     expect(result.ok).toBe(true);
     expect(mockPlugin.undeploy).not.toHaveBeenCalled();
   });
@@ -148,9 +163,25 @@ describe('DeploymentService', () => {
     const dep = makeDep();
     const batch = { changes: [], totalFiles: 0, totalBytes: 0 };
 
-    await service.sync({} as never, config, dep, batch);
+    await service.sync(makeCtx('s1', 'd1', 'DeployIncremental'), config, dep, batch);
     expect(mockPlugin.planDeploy).toHaveBeenCalled();
     expect(mockPlugin.deployFull).toHaveBeenCalled();
+  });
+
+  it('sync falls back to fullRedeploy for risky exploded changes', async () => {
+    const config = makeConfig();
+    const dep = { ...makeDep(), type: 'exploded', sourcePath: '/src/app' };
+    const batch = {
+      changes: [{ type: 'change', path: '/src/app/WEB-INF/classes/App.class', relativePath: 'WEB-INF/classes/App.class' }],
+      totalFiles: 1,
+      totalBytes: 100,
+    };
+
+    mockPlugin.deployIncremental = vi.fn().mockResolvedValue(ok(undefined));
+
+    await service.sync(makeCtx('s1', 'd1', 'DeployIncremental'), config, dep, batch);
+    expect(mockPlugin.deployFull).toHaveBeenCalled();
+    expect(mockPlugin.deployIncremental).not.toHaveBeenCalled();
   });
 
   it('throws on unsupported server type', async () => {
@@ -158,7 +189,7 @@ describe('DeploymentService', () => {
     const config = { ...makeConfig(), type: 'unknown' as never };
 
     await expect(
-      service.fullRedeploy({} as never, config, makeDep()),
+      service.fullRedeploy(makeCtx(), config, makeDep()),
     ).rejects.toThrow();
   });
 
@@ -175,22 +206,22 @@ describe('DeploymentService', () => {
     });
 
     it('blocks fullRedeploy in untrusted workspace', async () => {
-      const result = await untrustedService.fullRedeploy({} as never, makeConfig(), makeDep());
+      const result = await untrustedService.fullRedeploy(makeCtx(), makeConfig(), makeDep());
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error.code).toBe(ErrorCode.WorkspaceUntrusted);
     });
 
     it('blocks sync in untrusted workspace', async () => {
       const batch = { changes: [], totalFiles: 0, totalBytes: 0 };
-      const result = await untrustedService.sync({} as never, makeConfig(), makeDep(), batch);
+      const result = await untrustedService.sync(makeCtx('s1', 'd1', 'DeployIncremental'), makeConfig(), makeDep(), batch);
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error.code).toBe(ErrorCode.WorkspaceUntrusted);
     });
 
     it('blocks undeploy in untrusted workspace', async () => {
       // First deploy in a trusted service, then try to undeploy in untrusted
-      await service.fullRedeploy({} as never, makeConfig(), makeDep());
-      const result = await untrustedService.undeploy({} as never, makeConfig(), makeDep());
+      await service.fullRedeploy(makeCtx(), makeConfig(), makeDep());
+      const result = await untrustedService.undeploy(makeCtx('s1', 'd1', 'Undeploy'), makeConfig(), makeDep());
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error.code).toBe(ErrorCode.WorkspaceUntrusted);
     });

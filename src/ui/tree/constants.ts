@@ -1,4 +1,4 @@
-import type { ServerState, DeploymentState } from '@core/types';
+import type { ServerState, DeploymentState, DeploymentType } from '@core/types';
 
 // ── View IDs ────────────────────────────────────────────────────────────────
 
@@ -22,6 +22,10 @@ export const DEPLOYMENT_CONTEXT: Record<DeploymentState, string> = {
   synced:     'jsm.deployment.synced',
   error:      'jsm.deployment.error',
 };
+
+export function deploymentContextValue(type: DeploymentType, state: DeploymentState): string {
+  return `jsm.deployment.${type}.${state}`;
+}
 
 // ── Icon Mappings ───────────────────────────────────────────────────────────
 

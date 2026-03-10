@@ -28,6 +28,24 @@ interface DeploymentEntry {
   lastError?: JsmError;
 }
 
+const SAFE_INCREMENTAL_EXTENSIONS = new Set([
+  '.css',
+  '.gif',
+  '.htm',
+  '.html',
+  '.ico',
+  '.jpeg',
+  '.jpg',
+  '.js',
+  '.jsp',
+  '.jspx',
+  '.map',
+  '.png',
+  '.svg',
+  '.txt',
+  '.webp',
+]);
+
 // ── Deployment State Transitions (§9.1.1) ───────────────────────────────────
 
 const DEPLOY_TRANSITIONS: Record<DeploymentState, ReadonlySet<DeploymentState>> = {
@@ -153,6 +171,11 @@ export class DeploymentService {
       return this.fullRedeploy(ctx, config, dep);
     }
 
+    if (!this.canUseIncrementalSync(dep, changes)) {
+      this.logger.debug(`DeploymentService: falling back to redeploy for ${dep.deployName}`);
+      return this.fullRedeploy(ctx, config, dep);
+    }
+
     this.transitionDeploy(ctx.serverId, dep.id, 'deploying');
 
     try {
@@ -257,5 +280,29 @@ export class DeploymentService {
       }));
     }
     return ok(undefined);
+  }
+
+  private canUseIncrementalSync(dep: DeploymentConfig, changes: FileChangeBatch): boolean {
+    if (dep.type !== 'exploded') {
+      return false;
+    }
+
+    return changes.changes.every(change => this.isSafeIncrementalPath(change.relativePath));
+  }
+
+  private isSafeIncrementalPath(relativePath: string): boolean {
+    const normalizedPath = relativePath.replace(/\\/g, '/').toLowerCase();
+
+    if (
+      normalizedPath.startsWith('web-inf/')
+      || normalizedPath.startsWith('meta-inf/')
+    ) {
+      return false;
+    }
+
+    const fileName = normalizedPath.split('/').pop() ?? '';
+    const extensionIndex = fileName.lastIndexOf('.');
+    const extension = extensionIndex >= 0 ? fileName.slice(extensionIndex) : '';
+    return SAFE_INCREMENTAL_EXTENSIONS.has(extension);
   }
 }

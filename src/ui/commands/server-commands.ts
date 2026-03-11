@@ -133,14 +133,34 @@ export function registerServerCommands(
       serverFormPanel.open?.('create');
     }],
 
-    ['jsm.server.startRun', (arg: unknown) => {
+    ['jsm.server.startRun', async (arg: unknown) => {
       if (!isServerNode(arg)) return;
+      const config = resolveServer(arg.workspaceFolderUri, arg.serverId);
+      if (config?.deployments?.length) {
+        try {
+          const ctx = makeOpCtx(arg.serverKey, 'RedeployAll');
+          await deployService.deployUndeployed(ctx, config);
+        } catch (e) {
+          showErr(JsmError.fromUnknown(e));
+          return;
+        }
+      }
       const result = lifecycle.start(arg.serverKey, 'run');
       if (!result.ok) showErr(result.error);
     }],
 
-    ['jsm.server.startDebug', (arg: unknown) => {
+    ['jsm.server.startDebug', async (arg: unknown) => {
       if (!isServerNode(arg)) return;
+      const config = resolveServer(arg.workspaceFolderUri, arg.serverId);
+      if (config?.deployments?.length) {
+        try {
+          const ctx = makeOpCtx(arg.serverKey, 'RedeployAll');
+          await deployService.deployUndeployed(ctx, config);
+        } catch (e) {
+          showErr(JsmError.fromUnknown(e));
+          return;
+        }
+      }
       const result = lifecycle.start(arg.serverKey, 'debug');
       if (!result.ok) showErr(result.error);
     }],

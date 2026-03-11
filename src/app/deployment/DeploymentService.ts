@@ -244,6 +244,28 @@ export class DeploymentService {
     }
   }
 
+  /**
+   * Deploys only deployments that are in 'undeployed' state (e.g. before first start).
+   * Skips those already synced or in error. Throws on first deploy failure.
+   */
+  async deployUndeployed(
+    ctx: OperationContext,
+    config: ServerConfig,
+  ): Promise<void> {
+    const undeployed = config.deployments.filter(
+      dep => this.getDeploymentState(ctx.serverId, dep.id) === 'undeployed',
+    );
+    for (const dep of undeployed) {
+      const deployCtx: OperationContext = {
+        ...ctx,
+        kind: 'DeployFull',
+        targetDeploymentId: dep.id,
+      };
+      const result = await this.fullRedeploy(deployCtx, config, dep);
+      if (!result.ok) throw result.error;
+    }
+  }
+
   // ── Helpers ───────────────────────────────────────────────────────
 
   private getPlugin(config: ServerConfig): IServerPlugin {

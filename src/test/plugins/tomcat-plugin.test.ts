@@ -5,9 +5,19 @@ import * as os from 'os';
 import { TomcatPlugin } from '@plugins/tomcat/TomcatPlugin';
 import { TomcatStartupMonitor } from '@plugins/tomcat/TomcatStartupMonitor';
 import type { ServerConfig, DeploymentConfig, OperationContext } from '@core/types';
+import type { KeyValueStore } from '@core/types';
 import type { Logger } from '@core/types/logger';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
+
+function mockKeyValueStore(): KeyValueStore {
+  const data = new Map<string, unknown>();
+  return {
+    get: <T>(key: string) => data.get(key) as T | undefined,
+    set: async <T>(key: string, value: T) => { data.set(key, value); },
+    delete: async (key: string) => { data.delete(key); },
+  };
+}
 
 function noopLogger(): Logger {
   const noop = () => {};
@@ -41,7 +51,7 @@ let plugin: TomcatPlugin;
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'jsm-tomcat-test-'));
-  plugin = new TomcatPlugin(noopLogger());
+  plugin = new TomcatPlugin(noopLogger(), { keyValueStore: mockKeyValueStore() });
 });
 
 afterEach(async () => {
@@ -291,7 +301,7 @@ describe('TomcatPlugin — initializeInstancePath', () => {
     await createFakeTomcatHome(homePath);
     const instancePath = path.join(tmpDir, 'instance');
     const templatePath = await createTemplateFile(tmpDir);
-    plugin = new TomcatPlugin(noopLogger(), { serverXmlTemplatePath: templatePath });
+    plugin = new TomcatPlugin(noopLogger(), { serverXmlTemplatePath: templatePath, keyValueStore: mockKeyValueStore() });
     const config = fakeConfig(homePath, instancePath, {
       ports: { http: 9999, debug: 5005 },
     });
@@ -330,6 +340,7 @@ describe('TomcatPlugin — initializeInstancePath', () => {
     plugin = new TomcatPlugin(noopLogger(), {
       startupListenerJarPath: listenerAsset,
       serverXmlTemplatePath: templatePath,
+      keyValueStore: mockKeyValueStore(),
     });
     const config = fakeConfig(homePath, instancePath);
 

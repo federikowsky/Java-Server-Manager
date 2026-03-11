@@ -14,6 +14,7 @@ import type {
   OperationContext,
   FileChangeBatch,
   Logger,
+  KeyValueStore,
 } from '@core/types';
 import { DEPLOY_BACKUP_MAX_KEPT, DEPLOY_NAME_PATTERN } from '../../constants';
 import { ProcessSpawner } from '@infra/process';
@@ -53,11 +54,14 @@ const INSTANCE_EMPTY_DIRS = ['logs', 'temp', 'work', 'webapps'] as const;
 const TOMCAT_STARTUP_LISTENER_FILENAME = 'jsm-tomcat-startup-listener.jar';
 const DEFAULT_SHUTDOWN_PORT = 8005;
 const DEFAULT_SHUTDOWN_COMMAND = 'SHUTDOWN';
+const SHUTDOWN_PORT_KEY_PREFIX = 'jsm.tomcat.shutdownPort.';
 
 export interface TomcatPluginOptions {
   startupListenerJarPath?: string;
   /** Path to server.xml template with ${http.port}, ${shutdown.port}, ${shutdown.command}. */
   serverXmlTemplatePath?: string;
+  /** Optional: persists dynamic shutdown port so stop works after reload. */
+  keyValueStore: KeyValueStore;
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -88,9 +92,9 @@ async function existingConfigSources(candidates: ConfigSource[]): Promise<Config
 }
 
 /** JVM system properties for Tomcat connector/shutdown (template placeholders). */
-function tomcatConfigVmArgs(config: ServerConfig): string[] {
+function tomcatConfigVmArgs(config: ServerConfig, shutdownPortOverride?: number): string[] {
   const pluginConfig = config.pluginConfig as TomcatPluginConfig | undefined;
-  const shutdownPort = pluginConfig?.shutdownPort ?? DEFAULT_SHUTDOWN_PORT;
+  const shutdownPort = shutdownPortOverride ?? pluginConfig?.shutdownPort ?? DEFAULT_SHUTDOWN_PORT;
   return [
     `-Dhttp.port=${config.ports.http}`,
     `-Dshutdown.port=${shutdownPort}`,
@@ -109,15 +113,17 @@ export class TomcatPlugin implements IServerPlugin {
   private readonly portScanner: PortScanner;
   private readonly startupListenerJarPath?: string;
   private readonly serverXmlTemplatePath?: string;
+  private readonly keyValueStore: KeyValueStore;
   /** Track running child processes by serverId for stop(). */
   private readonly childProcesses = new Map<string, ChildProcess>();
 
-  constructor(logger: Logger, options: TomcatPluginOptions = {}) {
+  constructor(logger: Logger, options: TomcatPluginOptions) {
     this.logger = logger;
     this.spawner = new ProcessSpawner(logger);
     this.portScanner = new PortScanner();
     this.startupListenerJarPath = options.startupListenerJarPath;
     this.serverXmlTemplatePath = options.serverXmlTemplatePath;
+    this.keyValueStore = options.keyValueStore;
   }
 
   getCapabilities(): PluginCapabilities {
@@ -289,7 +295,14 @@ export class TomcatPlugin implements IServerPlugin {
       ...config.run.env,
     };
 
-    const catOpts: string[] = tomcatConfigVmArgs(config);
+    let shutdownPort: number = (config.pluginConfig as TomcatPluginConfig | undefined)?.shutdownPort ?? DEFAULT_SHUTDOWN_PORT;
+    const free = await this.portScanner.findFreePort(DEFAULT_SHUTDOWN_PORT);
+    if (free !== null) {
+      shutdownPort = free;
+      await this.keyValueStore.set(SHUTDOWN_PORT_KEY_PREFIX + ctx.serverId, free);
+    }
+
+    const catOpts: string[] = tomcatConfigVmArgs(config, shutdownPort);
     if (config.run.vmArgs.length > 0) {
       catOpts.push(...config.run.vmArgs);
     }
@@ -404,7 +417,10 @@ export class TomcatPlugin implements IServerPlugin {
       CATALINA_BASE: config.instancePath,
       JAVA_HOME: config.javaHome,
     };
-    const stopOpts = tomcatConfigVmArgs(config);
+    let shutdownPort: number = (config.pluginConfig as TomcatPluginConfig | undefined)?.shutdownPort ?? DEFAULT_SHUTDOWN_PORT;
+    const saved = this.keyValueStore.get<number>(SHUTDOWN_PORT_KEY_PREFIX + ctx.serverId);
+    if (saved !== undefined) shutdownPort = saved;
+    const stopOpts = tomcatConfigVmArgs(config, shutdownPort);
     if (stopOpts.length > 0) {
       env['CATALINA_OPTS'] = stopOpts.join(' ');
     }
@@ -438,6 +454,7 @@ export class TomcatPlugin implements IServerPlugin {
     if (exitCode !== 0 && exitCode !== null) {
       this.logger.warn(`TomcatPlugin: stop script exited with code ${exitCode}`);
     }
+    await this.keyValueStore.delete(SHUTDOWN_PORT_KEY_PREFIX + ctx.serverId);
 
     this.logger.info(`TomcatPlugin: stopped ${config.name}`);
     return ok(undefined);

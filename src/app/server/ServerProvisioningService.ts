@@ -117,6 +117,66 @@ export class ServerProvisioningService {
     return ok(serverConfig);
   }
 
+  /**
+   * Duplicate a server: clone config with new id, new instancePath (own instance), init dir, save.
+   * After duplicate, the two servers are independent (fork).
+   */
+  async duplicateServer(source: ServerConfig): Promise<Result<ServerConfig, JsmError>> {
+    const plugin = this.pluginRegistry.get(source.type);
+    if (!plugin) {
+      return err(new JsmError({
+        code: ErrorCode.Unsupported,
+        message: `No plugin registered for server type '${source.type}'`,
+      }));
+    }
+    if (!plugin.initializeInstancePath) {
+      return err(new JsmError({
+        code: ErrorCode.Unsupported,
+        message: `Plugin '${source.type}' does not support managed instance provisioning`,
+      }));
+    }
+
+    const newId = uuid();
+    const instancePath = this.pathResolver.resolve(newId);
+    const cloned: ServerConfig = {
+      ...source,
+      id: newId,
+      name: `${source.name} (Copy)`,
+      runtime: {
+        ...source.runtime,
+        id: uuid(),
+      },
+      instancePath,
+      deployments: source.deployments.map(d => ({ ...d, id: uuid() })),
+      hooks: source.hooks.map(h => ({ ...h })),
+      autosync: { ...source.autosync },
+      pluginConfig: source.pluginConfig ? { ...source.pluginConfig } : undefined,
+    };
+
+    const validateResult = await plugin.validateConfig(cloned);
+    if (!validateResult.ok) {
+      return validateResult;
+    }
+
+    const initResult = await plugin.initializeInstancePath(
+      source.runtime.homePath,
+      cloned.instancePath,
+      cloned,
+    );
+    if (!initResult.ok) {
+      return initResult;
+    }
+
+    const saveResult = await this.configService.addServer(cloned);
+    if (!saveResult.ok) {
+      await this.cleanupManagedInstance(cloned.instancePath);
+      return err(saveResult.error);
+    }
+
+    this.logger.info(`ServerProvisioningService: duplicated server '${source.name}' as '${cloned.name}'`);
+    return ok(cloned);
+  }
+
   async removeServer(serverId: string): Promise<Result<void, JsmError>> {
     const existing = this.configService.getServer(serverId);
     if (!existing) {

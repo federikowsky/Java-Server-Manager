@@ -79,24 +79,6 @@ async function openConfigFile(targetPath: string): Promise<void> {
   await vscode.window.showTextDocument(document, { preview: false });
 }
 
-/** Clone server config for duplicate command: new id, name (Copy), runtime.id; instancePath unchanged. */
-function cloneServerConfigForDuplicate(source: ServerConfig): ServerConfig {
-  const newId = crypto.randomUUID();
-  return {
-    ...source,
-    id: newId,
-    name: `${source.name} (Copy)`,
-    runtime: {
-      ...source.runtime,
-      id: crypto.randomUUID(),
-    },
-    deployments: source.deployments.map(d => ({ ...d })),
-    hooks: source.hooks.map(h => ({ ...h })),
-    autosync: { ...source.autosync },
-    pluginConfig: source.pluginConfig ? { ...source.pluginConfig } : undefined,
-  };
-}
-
 async function resolveConfigSources(
   pluginRegistry: PluginRegistry,
   config: ServerConfig,
@@ -228,13 +210,22 @@ export function registerServerCommands(
         return;
       }
 
-      const cloned = cloneServerConfigForDuplicate(arg.serverConfig);
-      const result = await workspaceRegistry.addServer(arg.workspaceFolderUri, cloned);
+      const entry = workspaceRegistry.getEntry(arg.workspaceFolderUri);
+      if (!entry) {
+        showErr(new JsmError({
+          code: ErrorCode.InvalidConfig,
+          message: 'Workspace not found.',
+          details: arg.workspaceFolderUri,
+        }));
+        return;
+      }
+
+      const result = await entry.provisioningService.duplicateServer(arg.serverConfig);
       if (!result.ok) {
         showErr(result.error);
         return;
       }
-      showSuccess(`Server "${cloned.name}" added.`);
+      showSuccess(`Server "${result.value.name}" added with its own instance.`);
       treeProvider.requestRefresh();
     }],
 

@@ -234,25 +234,31 @@ describe('Server Commands', () => {
   describe('jsm.server.duplicate', () => {
     const workspaceUri = 'file:///test-ws';
 
-    it('calls workspaceRegistry.addServer with cloned config (new id, name with " (Copy)", new runtime.id)', async () => {
+    it('calls entry.provisioningService.duplicateServer and refreshes (new instance)', async () => {
       const server = makeServer('srv-1', 'My Server');
+      const duplicatedConfig = { ...server, id: 'srv-2', name: 'My Server (Copy)', instancePath: '/managed/srv-2' };
+      const mockDuplicate = vi.fn(async () => ok(duplicatedConfig));
+      deps.workspaceRegistry.getEntry.mockReturnValue({
+        provisioningService: { duplicateServer: mockDuplicate },
+      });
       const node = createServerNodeWithWorkspace(workspaceUri, server);
+
       await invoke('jsm.server.duplicate', node);
 
-      expect(deps.workspaceRegistry.addServer).toHaveBeenCalledTimes(1);
-      const [, config] = (deps.workspaceRegistry.addServer as ReturnType<typeof vi.fn>).mock.calls[0];
-      expect(config.id).not.toBe(server.id);
-      expect(config.name).toBe('My Server (Copy)');
-      expect(config.runtime.id).not.toBe(server.runtime.id);
-      expect(config.instancePath).toBe(server.instancePath);
+      expect(deps.workspaceRegistry.getEntry).toHaveBeenCalledWith(workspaceUri);
+      expect(mockDuplicate).toHaveBeenCalledTimes(1);
+      expect(mockDuplicate).toHaveBeenCalledWith(server);
       expect(mockShowInfoMessage).toHaveBeenCalledWith(expect.stringContaining('added'));
+      expect(mockShowInfoMessage).toHaveBeenCalledWith(expect.stringContaining('instance'));
       expect(deps.treeProvider.requestRefresh).toHaveBeenCalled();
     });
 
-    it('shows error and does not refresh when addServer fails', async () => {
-      deps.workspaceRegistry.addServer.mockResolvedValue(
-        err(new JsmError({ code: ErrorCode.InvalidConfig, message: 'Duplicate ID' })),
-      );
+    it('shows error and does not refresh when duplicateServer fails', async () => {
+      deps.workspaceRegistry.getEntry.mockReturnValue({
+        provisioningService: {
+          duplicateServer: vi.fn(async () => err(new JsmError({ code: ErrorCode.InvalidConfig, message: 'Validation failed' }))),
+        },
+      });
       const node = createServerNodeWithWorkspace(workspaceUri);
       await invoke('jsm.server.duplicate', node);
 
@@ -260,9 +266,19 @@ describe('Server Commands', () => {
       expect(deps.treeProvider.requestRefresh).not.toHaveBeenCalled();
     });
 
+    it('shows error when workspace entry not found', async () => {
+      deps.workspaceRegistry.getEntry.mockReturnValue(undefined);
+      const node = createServerNodeWithWorkspace(workspaceUri);
+      await invoke('jsm.server.duplicate', node);
+
+      expect(mockShowErrorMessage).toHaveBeenCalledWith(expect.stringContaining('Workspace not found'));
+      expect(deps.treeProvider.requestRefresh).not.toHaveBeenCalled();
+    });
+
     it('does nothing when arg is not a ServerNode', async () => {
+      deps.workspaceRegistry.getEntry.mockReturnValue({ provisioningService: { duplicateServer: vi.fn() } });
       await invoke('jsm.server.duplicate', undefined);
-      expect(deps.workspaceRegistry.addServer).not.toHaveBeenCalled();
+      expect(deps.workspaceRegistry.getEntry).not.toHaveBeenCalled();
     });
 
     it('shows error when workspaceRegistry is not available', async () => {

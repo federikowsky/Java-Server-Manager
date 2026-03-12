@@ -69,6 +69,10 @@ export interface DeploymentConfig {
   /** Per-deployment ignore patterns, merged with server-level autosync.ignoreGlobs. */
   ignoreGlobs: string[];
   hooks: HookConfig[];
+  /** Optional health check path (e.g. "/myapp/health", "/actuator/health"). GET http://host:port{healthCheckPath}. */
+  healthCheckPath?: string;
+  /** Timeout in ms for deployment health GET. Default 5000. */
+  healthCheckTimeoutMs?: number;
 }
 
 // ── Server Config ───────────────────────────────────────────────────────────

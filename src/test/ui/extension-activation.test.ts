@@ -163,6 +163,19 @@ vi.mock('@app/config', () => ({
     getAllServers = mockConfigServiceGetAllServers;
     reload = mockConfigServiceReload;
   },
+  WorkspaceServiceRegistry: class {
+    getWorkspaceScopes = vi.fn(() => []);
+    getServers = vi.fn(() => []);
+    getServer = vi.fn();
+    getServerRecordByKey = vi.fn();
+    getEntry = vi.fn();
+    getEntryByFolderUri = vi.fn();
+    reloadAll = vi.fn(async () => ({ ok: true, value: undefined }));
+    addServer = vi.fn(async () => ({ ok: true, value: undefined }));
+    updateServer = vi.fn(async () => ({ ok: true, value: undefined }));
+    addDeployment = vi.fn(async () => ({ ok: true, value: undefined }));
+  },
+  makeWorkspaceServerKey: (uri: string, serverId: string) => `${uri}::${serverId}`,
 }));
 
 // ServerLifecycle
@@ -177,6 +190,8 @@ vi.mock('@app/server', () => ({
     reconcileRunningServers = mockLifecycleReconcile;
     getRuntime = vi.fn();
   },
+  ManagedInstancePathResolver: class {},
+  ServerProvisioningService: class {},
 }));
 
 // DeploymentService

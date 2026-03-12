@@ -23,6 +23,7 @@ import type { PluginRegistry } from '@plugins/registry/PluginRegistry';
 import { PidManager } from '@infra/pid';
 import { PortScanner } from '@infra/ports';
 import type { HookRunner } from '@app/hooks';
+import type { DeploymentService } from '@app/deployment/DeploymentService';
 import { ServerRuntime } from './ServerRuntime';
 import {
   READINESS_PROBE_INTERVAL_MS,
@@ -42,6 +43,7 @@ export interface ServerLifecycleDeps {
   trustGate?: TrustGate;
   hookRunner?: Pick<HookRunner, 'runHooks'>;
   getOutputSink?: (serverKey: ServerId, serverName: string) => OutputSink;
+  deployService?: DeploymentService;
 }
 
 interface ServerEntry {
@@ -417,6 +419,10 @@ export class ServerLifecycle {
           runtime.transition('error', { error: err });
           throw err;
         }
+      }
+
+      if (this.deps.deployService) {
+        await this.deps.deployService.runHealthChecksForServer(server.serverKey, config);
       }
 
       if (mode === 'debug' && config.debug.enabled) {

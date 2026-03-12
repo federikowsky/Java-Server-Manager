@@ -348,6 +348,14 @@ export function registerServerCommands(
       for (const serverKey of lifecycle.getServerKeysInState('running', 'starting')) {
         lifecycle.refreshStatus(serverKey);
       }
+      if (workspaceRegistry) {
+        for (const serverKey of lifecycle.getServerKeysInState('running', 'starting')) {
+          const record = workspaceRegistry.getServerRecordByKey(serverKey);
+          if (record?.config) {
+            await deployService.runHealthChecksForServer(serverKey, record.config);
+          }
+        }
+      }
       treeProvider.forceRefresh();
     }],
   ]);

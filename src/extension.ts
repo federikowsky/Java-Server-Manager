@@ -234,6 +234,14 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
     logger,
   );
 
+  const deployService = new DeploymentService({
+    pluginRegistry,
+    bus: eventBus,
+    logger,
+    trustGate,
+    hookRunner,
+  });
+
   const lifecycle = new ServerLifecycle({
     pluginRegistry,
     bus: eventBus,
@@ -254,14 +262,7 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
         logChannel.getChannel(serverId, serverName).clear();
       },
     }),
-  });
-
-  const deployService = new DeploymentService({
-    pluginRegistry,
-    bus: eventBus,
-    logger,
-    trustGate,
-    hookRunner,
+    deployService,
   });
 
   const autoSyncService = new AutoSyncService({
@@ -316,6 +317,8 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
     getRuntimeState: (sid: ServerId) => lifecycle.getRuntime(sid)?.getState(),
     getDeploymentState: (sid: ServerId, did: DeploymentId) =>
       deployService.getDeploymentState(sid, did),
+    getDeploymentHealth: (sid: ServerId, did: DeploymentId) =>
+      deployService.getDeploymentHealth(sid, did),
   });
 
   const treeView = vscode.window.createTreeView(VIEW_ID, {

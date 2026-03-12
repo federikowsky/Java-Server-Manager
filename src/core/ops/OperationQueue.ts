@@ -9,6 +9,7 @@ const PRIORITY: Record<OperationKind, number> = {
   LifecycleStart:     2,
   DeployFull:         3,
   DeployIncremental:  3,
+  DeployHotReload:    3,
   SyncAll:            3,
   RedeployAll:        3,
   Undeploy:           3,
@@ -48,6 +49,37 @@ function coalesce(existing: QueueEntry, incoming: QueueEntry): CoalesceAction {
     return sameDeployment(existing.targetDeploymentId, incoming.targetDeploymentId)
       ? 'keep-last'
       : 'queue';
+  }
+
+  // DeployHotReload(dep) + DeployHotReload(dep) → keep last
+  if (ek === 'DeployHotReload' && ik === 'DeployHotReload') {
+    return sameDeployment(existing.targetDeploymentId, incoming.targetDeploymentId)
+      ? 'keep-last'
+      : 'queue';
+  }
+
+  // DeployHotReload(dep) + DeployIncremental(dep) → keep last (hot-reload overrides incremental)
+  if (ek === 'DeployHotReload' && ik === 'DeployIncremental' &&
+      sameDeployment(existing.targetDeploymentId, incoming.targetDeploymentId)) {
+    return 'keep-last';
+  }
+
+  // DeployIncremental(dep) + DeployHotReload(dep) → replace with hot-reload
+  if (ek === 'DeployIncremental' && ik === 'DeployHotReload' &&
+      sameDeployment(existing.targetDeploymentId, incoming.targetDeploymentId)) {
+    return 'replace';
+  }
+
+  // DeployHotReload(dep) + DeployFull(dep) → replace with full
+  if (ek === 'DeployHotReload' && ik === 'DeployFull' &&
+      sameDeployment(existing.targetDeploymentId, incoming.targetDeploymentId)) {
+    return 'replace';
+  }
+
+  // DeployFull(dep) + DeployHotReload(dep) → drop (full overrides hot-reload)
+  if (ek === 'DeployFull' && ik === 'DeployHotReload' &&
+      sameDeployment(existing.targetDeploymentId, incoming.targetDeploymentId)) {
+    return 'drop';
   }
 
   // DeployFull(dep) + DeployIncremental(dep) → drop new

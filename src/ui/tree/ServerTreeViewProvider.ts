@@ -143,7 +143,7 @@ export class DeploymentNode extends vscode.TreeItem {
     this.deploymentConfig = dep;
     this.healthReport = healthReport;
     this.contextValue = deploymentContextValue(dep.type, state);
-    this.description = `${dep.type} • ${state}`;
+    this.description = `${dep.type} • ${state}${dep.type === 'exploded' && dep.hotReload ? ' • hot-reload' : ''}`;
     this.iconPath = new vscode.ThemeIcon(DEPLOYMENT_ICON[state]);
     this.tooltip = DeploymentNode.buildTooltip(dep, state, healthReport);
   }
@@ -159,6 +159,9 @@ export class DeploymentNode extends vscode.TreeItem {
     }
     md.appendMarkdown(`- **Source:** ${dep.sourcePath}\n`);
     md.appendMarkdown(`- **Auto-Sync:** ${dep.syncMode}\n`);
+    if (dep.type === 'exploded') {
+      md.appendMarkdown(`- **Hot Reload:** ${dep.hotReload ? 'enabled' : 'disabled'}\n`);
+    }
     return md;
   }
 }

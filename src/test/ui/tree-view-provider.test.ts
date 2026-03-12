@@ -81,7 +81,7 @@ function makeServer(id = 'srv-1', name = 'Tomcat', deployments: DeploymentConfig
 function makeDep(id = 'dep-1', deployName = 'myapp'): DeploymentConfig {
   return {
     id, type: 'exploded', sourcePath: '/src/app', deployName,
-    syncMode: 'auto', ignoreGlobs: [], hooks: [],
+    syncMode: 'auto', hotReload: false, ignoreGlobs: [], hooks: [],
   };
 }
 

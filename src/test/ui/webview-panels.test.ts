@@ -158,6 +158,7 @@ function makeDeployment(id = 'dep-1'): DeploymentConfig {
     sourcePath: '/src/app',
     deployName: 'myapp',
     syncMode: 'auto',
+    hotReload: false,
     ignoreGlobs: [],
     hooks: [],
   };

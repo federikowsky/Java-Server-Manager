@@ -28,6 +28,7 @@ function makeConfig(overrides: Partial<ServerConfig> = {}): ServerConfig {
         sourcePath: '/src/app',
         deployName: 'app',
         syncMode: 'auto',
+        hotReload: false,
         ignoreGlobs: [],
         hooks: [],
       },

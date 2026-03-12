@@ -188,6 +188,7 @@ describe('SchemaValidator', () => {
           sourcePath: '/app/target/app.war',
           deployName: '../evil',
           syncMode: 'manual',
+          hotReload: false,
           ignoreGlobs: [],
           hooks: [],
         }],

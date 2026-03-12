@@ -66,6 +66,8 @@ export interface DeploymentConfig {
   deployName: string;
   /** Default: 'auto' for exploded, 'manual' for war. */
   syncMode: SyncMode;
+  /** Enable hot-reload for exploded deployments. Default: false. */
+  hotReload: boolean;
   /** Per-deployment ignore patterns, merged with server-level autosync.ignoreGlobs. */
   ignoreGlobs: string[];
   hooks: HookConfig[];

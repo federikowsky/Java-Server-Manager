@@ -84,6 +84,14 @@ function deploymentFormSchema(mode: 'create' | 'edit', hookTaskOptions: HookTask
             visibleWhen: { field: 'type', equals: 'exploded' },
             helpText: 'Only available for exploded deployments. Auto applies safe file changes and falls back to redeploy when needed.',
           },
+          {
+            name: 'hotReload',
+            label: 'Hot Reload',
+            type: 'checkbox',
+            defaultValue: false,
+            visibleWhen: { field: 'type', equals: 'exploded' },
+            helpText: 'Enable hot-reload for exploded deployments. Applies file changes and triggers Tomcat context reload without full redeploy. Only affects files outside WEB-INF/ and META-INF/.',
+          },
         ],
       },
       {
@@ -445,6 +453,7 @@ function formDataToDeploymentConfig(
     sourcePath: String(data['sourcePath'] ?? ''),
     deployName: String(data['deployName'] ?? ''),
     syncMode: type === 'war' ? 'manual' : ((data['syncMode'] as SyncMode) ?? 'auto'),
+    hotReload: type === 'exploded' && data['hotReload'] === true,
     ignoreGlobs: Array.isArray(data['ignoreGlobs'])
       ? (data['ignoreGlobs'] as string[])
       : [],

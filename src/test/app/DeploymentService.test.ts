@@ -47,6 +47,7 @@ function makeDep(id = 'd1'): DeploymentConfig {
     sourcePath: '/src/app.war',
     deployName: 'app',
     syncMode: 'manual',
+    hotReload: false,
     ignoreGlobs: [],
     hooks: [],
   };

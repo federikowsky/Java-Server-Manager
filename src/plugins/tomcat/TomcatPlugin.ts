@@ -42,6 +42,7 @@ const TOMCAT_CAPABILITIES: PluginCapabilities = {
   supportsExplodedDeploy: true,
   supportsWarDeploy: true,
   supportsIncrementalDeploy: true,
+  supportsHotReload: true,
   supportsLogFollow: true,
   supportsAutoDetect: true,
   supportsMultipleInstances: true,
@@ -610,6 +611,185 @@ export class TomcatPlugin implements IServerPlugin {
         details: cause instanceof Error ? cause.message : String(cause),
         cause,
       }));
+    }
+  }
+
+  // ── Hot Reload ──────────────────────────────────────────────────────
+
+  async hotReload(
+    ctx: OperationContext,
+    config: ServerConfig,
+    dep: DeploymentConfig,
+    changes: FileChangeBatch,
+    plan: DeployPlan,
+  ): Promise<Result<void, JsmError>> {
+    if (plan.strategy !== 'incremental-dir') {
+      return err(new JsmError({
+        code: ErrorCode.Unsupported,
+        message: 'Hot-reload only supports exploded directories',
+      }));
+    }
+
+    ctx.progress.report(`Hot-reloading ${dep.deployName} (${changes.changes.length} files)...`);
+
+    // Step 1: Copy changed files (same as incremental deploy)
+    try {
+      for (const change of changes.changes) {
+        const targetFile = path.join(plan.targetPath, change.relativePath);
+
+        switch (change.type) {
+          case 'add':
+          case 'change':
+            await ensureDir(path.dirname(targetFile));
+            await fs.copyFile(change.path, targetFile);
+            break;
+          case 'delete':
+            await tryRm(targetFile);
+            break;
+        }
+      }
+      this.logger.debug(`TomcatPlugin: copied ${changes.changes.length} files for hot-reload of ${dep.deployName}`);
+    } catch (cause) {
+      return err(new JsmError({
+        code: ErrorCode.DeployFailed,
+        message: `Hot-reload file copy failed for ${dep.deployName}`,
+        details: cause instanceof Error ? cause.message : String(cause),
+        cause,
+      }));
+    }
+
+    // Step 2: Trigger Tomcat reload via Manager API or context.xml touch
+    const reloadResult = await this.triggerContextReload(config, dep);
+    if (!reloadResult.ok) {
+      return reloadResult;
+    }
+
+    this.logger.info(`TomcatPlugin: hot-reload triggered for ${dep.deployName}`);
+    return ok(undefined);
+  }
+
+  /**
+   * Trigger Tomcat context reload via Manager API or context.xml touch.
+   * Falls back to touch-based reload if Manager is not available.
+   */
+  private async triggerContextReload(
+    config: ServerConfig,
+    dep: DeploymentConfig,
+  ): Promise<Result<void, JsmError>> {
+    // Try Manager API reload first
+    const managerResult = await this.callManagerReload(config, dep);
+    if (managerResult.ok) {
+      return ok(undefined);
+    }
+
+    this.logger.debug(`Manager reload failed for ${dep.deployName}, falling back to touch: ${managerResult.error.message}`);
+
+    // Fallback: touch context.xml to trigger auto-deploy reload
+    return this.touchContextXml(config, dep);
+  }
+
+  /**
+   * Call Tomcat Manager /reload endpoint.
+   * Requires manager-script role and credentials.
+   */
+  private async callManagerReload(
+    config: ServerConfig,
+    dep: DeploymentConfig,
+  ): Promise<Result<void, JsmError>> {
+    const managerUrl = `http://${config.host}:${config.ports.http}/manager/text`;
+    const reloadUrl = `${managerUrl}/reload?path=/${dep.deployName}`;
+
+    // Get credentials from environment or plugin config
+    const username = config.run.env['JSM_MANAGER_USER'] ?? 'manager';
+    const password = config.run.env['JSM_MANAGER_PASS'];
+
+    if (!password) {
+      return err(new JsmError({
+        code: ErrorCode.InvalidConfig,
+        message: 'Tomcat Manager password not configured (set JSM_MANAGER_PASS env var)',
+      }));
+    }
+
+    const auth = Buffer.from(`${username}:${password}`).toString('base64');
+    const timeoutMs = 10000;
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+      const response = await fetch(reloadUrl, {
+        method: 'GET',
+        headers: { 'Authorization': `Basic ${auth}` },
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const body = await response.text();
+        return err(new JsmError({
+          code: ErrorCode.DeployFailed,
+          message: `Manager reload failed: ${response.status} ${response.statusText}`,
+          details: body,
+        }));
+      }
+
+      const body = await response.text();
+      if (!body.startsWith('OK')) {
+        return err(new JsmError({
+          code: ErrorCode.DeployFailed,
+          message: `Manager reload rejected: ${body}`,
+        }));
+      }
+
+      return ok(undefined);
+    } catch (cause) {
+      if (cause instanceof Error && cause.name === 'AbortError') {
+        return err(new JsmError({
+          code: ErrorCode.Timeout,
+          message: 'Manager reload timed out',
+        }));
+      }
+      return err(JsmError.fromUnknown(cause, ErrorCode.DeployFailed));
+    }
+  }
+
+  /**
+   * Touch context.xml to trigger Tomcat auto-deploy reload.
+   * This is a fallback when Manager API is not available.
+   */
+  private async touchContextXml(
+    config: ServerConfig,
+    dep: DeploymentConfig,
+  ): Promise<Result<void, JsmError>> {
+    const contextXmlPath = path.join(
+      config.instancePath, 'conf', 'Catalina', 'localhost', `${dep.deployName}.xml`
+    );
+
+    try {
+      // Check if context.xml exists
+      if (await exists(contextXmlPath)) {
+        // Touch the file to update its timestamp
+        const now = new Date();
+        await fs.utimes(contextXmlPath, now, now);
+        this.logger.debug(`TomcatPlugin: touched ${contextXmlPath} for reload`);
+      } else {
+        // No context.xml exists, touch the WAR/directory in webapps
+        const webappPath = path.join(config.instancePath, 'webapps', dep.deployName);
+        if (await exists(webappPath)) {
+          const now = new Date();
+          await fs.utimes(webappPath, now, now);
+          this.logger.debug(`TomcatPlugin: touched ${webappPath} for reload`);
+        } else {
+          return err(new JsmError({
+            code: ErrorCode.DeployFailed,
+            message: `Neither context.xml nor webapp directory found for ${dep.deployName}`,
+          }));
+        }
+      }
+      return ok(undefined);
+    } catch (cause) {
+      return err(JsmError.fromUnknown(cause, ErrorCode.DeployFailed));
     }
   }
 

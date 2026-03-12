@@ -52,6 +52,17 @@ const SAFE_INCREMENTAL_EXTENSIONS = new Set([
   '.webp',
 ]);
 
+// ── Hot Reload Helpers ──────────────────────────────────────────────────────
+
+/**
+ * Check if a path is safe for hot-reload (excludes WEB-INF/ and META-INF/).
+ * Users can use ignoreGlobs to exclude specific files.
+ */
+function isSafeHotReloadPath(relativePath: string): boolean {
+  const normalizedPath = relativePath.replace(/\\/g, '/').toLowerCase();
+  return !normalizedPath.startsWith('web-inf/') && !normalizedPath.startsWith('meta-inf/');
+}
+
 // ── Deployment State Transitions (§9.1.1) ───────────────────────────────────
 
 const DEPLOY_TRANSITIONS: Record<DeploymentState, ReadonlySet<DeploymentState>> = {
@@ -198,7 +209,37 @@ export class DeploymentService {
     if (!trustCheck.ok) return trustCheck;
 
     const plugin = this.getPlugin(config);
+    const currentState = this.getDeploymentState(ctx.serverId, dep.id);
 
+    // ── Hot Reload Path ─────────────────────────────────────────────
+    // Attempt hot-reload if: flag enabled, plugin supports, state allows, changes are safe
+    if (dep.hotReload && plugin.getCapabilities().supportsHotReload && plugin.hotReload) {
+      if (currentState !== 'synced' && currentState !== 'undeployed') {
+        this.logger.debug(`Cannot hot-reload '${dep.deployName}' in state '${currentState}', falling back`);
+      } else if (!this.canUseHotReload(dep, changes)) {
+        this.logger.debug(`Changes not eligible for hot-reload for '${dep.deployName}' (WEB-INF/META-INF)`);
+      } else {
+        // Attempt hot-reload
+        const hotReloadCtx: OperationContext = { ...ctx, kind: 'DeployHotReload' };
+        const result = await this.runDeploymentOperation(hotReloadCtx, config, dep, 'deploy.incremental', async () => {
+          const planResult = await plugin.planDeploy(hotReloadCtx, config, dep);
+          if (!planResult.ok) return planResult;
+
+          const hotReloadPlan = { ...planResult.value, strategy: 'incremental-dir' as const };
+          const hotReloadResult = await plugin.hotReload!(hotReloadCtx, config, dep, changes, hotReloadPlan);
+          return hotReloadResult;
+        });
+
+        if (result.ok) {
+          this.logger.info(`Hot-reload succeeded for '${dep.deployName}'`);
+          return ok(undefined);
+        }
+        this.logger.warn(`Hot-reload failed for '${dep.deployName}', falling back: ${result.error.message}`);
+        // Fall through to incremental/full deploy
+      }
+    }
+
+    // ── Incremental Deploy Path ─────────────────────────────────────
     if (!plugin.deployIncremental) {
       return this.fullRedeploy(ctx, config, dep);
     }
@@ -353,6 +394,18 @@ export class DeploymentService {
     const extensionIndex = fileName.lastIndexOf('.');
     const extension = extensionIndex >= 0 ? fileName.slice(extensionIndex) : '';
     return SAFE_INCREMENTAL_EXTENSIONS.has(extension);
+  }
+
+  /**
+   * Check if changes are eligible for hot-reload.
+   * Only exploded deployments with hotReload flag enabled.
+   * Excludes WEB-INF/ and META-INF/ paths (no extension whitelist).
+   */
+  private canUseHotReload(dep: DeploymentConfig, changes: FileChangeBatch): boolean {
+    if (dep.type !== 'exploded' || !dep.hotReload) {
+      return false;
+    }
+    return changes.changes.every(change => isSafeHotReloadPath(change.relativePath));
   }
 
   private async runDeploymentOperation(

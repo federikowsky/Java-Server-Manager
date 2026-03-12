@@ -17,6 +17,7 @@ export interface PluginCapabilities {
   supportsExplodedDeploy: boolean;
   supportsWarDeploy: boolean;
   supportsIncrementalDeploy: boolean;
+  supportsHotReload: boolean;
   supportsLogFollow: boolean;
   supportsAutoDetect: boolean;
   supportsMultipleInstances: boolean;
@@ -119,6 +120,7 @@ export interface IServerPlugin {
   planDeploy(ctx: OperationContext, config: ServerConfig, dep: DeploymentConfig): Promise<Result<DeployPlan, JsmError>>;
   deployFull(ctx: OperationContext, config: ServerConfig, dep: DeploymentConfig, plan: DeployPlan): Promise<Result<DeployResult, JsmError>>;
   deployIncremental?(ctx: OperationContext, config: ServerConfig, dep: DeploymentConfig, changes: FileChangeBatch, plan: DeployPlan): Promise<Result<void, JsmError>>;
+  hotReload?(ctx: OperationContext, config: ServerConfig, dep: DeploymentConfig, changes: FileChangeBatch, plan: DeployPlan): Promise<Result<void, JsmError>>;
   undeploy(ctx: OperationContext, config: ServerConfig, dep: DeploymentConfig): Promise<Result<void, JsmError>>;
 
   // Status

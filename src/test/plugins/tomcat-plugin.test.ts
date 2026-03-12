@@ -220,6 +220,7 @@ describe('TomcatPlugin — planDeploy', () => {
       sourcePath: '/some/app.war',
       deployName: 'myapp',
       syncMode: 'manual',
+      hotReload: false,
       ignoreGlobs: [],
       hooks: [],
     };
@@ -242,6 +243,7 @@ describe('TomcatPlugin — planDeploy', () => {
       sourcePath: '/some/app',
       deployName: 'myapp',
       syncMode: 'auto',
+      hotReload: false,
       ignoreGlobs: [],
       hooks: [],
     };
@@ -432,6 +434,7 @@ describe('TomcatPlugin — deployFull', () => {
       sourcePath,
       deployName: 'myapp',
       syncMode: 'manual',
+      hotReload: false,
       ignoreGlobs: [],
       hooks: [],
     };
@@ -469,6 +472,7 @@ describe('TomcatPlugin — deployFull', () => {
       sourcePath,
       deployName: 'myapp',
       syncMode: 'manual',
+      hotReload: false,
       ignoreGlobs: [],
       hooks: [],
     };
@@ -494,6 +498,7 @@ describe('TomcatPlugin — deployFull', () => {
       sourcePath: path.join(tmpDir, 'nonexistent'),
       deployName: 'missing',
       syncMode: 'manual',
+      hotReload: false,
       ignoreGlobs: [],
       hooks: [],
     };
@@ -529,6 +534,7 @@ describe('TomcatPlugin — undeploy', () => {
       sourcePath: '/any',
       deployName: 'myapp',
       syncMode: 'manual',
+      hotReload: false,
       ignoreGlobs: [],
       hooks: [],
     };

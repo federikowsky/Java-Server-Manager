@@ -38,6 +38,7 @@ export type OperationKind =
   | 'LifecycleRestart'
   | 'DeployFull'
   | 'DeployIncremental'
+  | 'DeployHotReload'
   | 'SyncAll'
   | 'RedeployAll'
   | 'Undeploy'

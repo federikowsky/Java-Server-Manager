@@ -2,7 +2,6 @@ import * as path from 'path';
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import type { ChildProcess } from 'child_process';
-import { XMLParser, XMLBuilder } from 'fast-xml-parser';
 
 import { ok, err, type Result } from '@core/result';
 import { JsmError } from '@core/errors/JsmError';
@@ -15,6 +14,7 @@ import type {
   OperationContext,
   FileChangeBatch,
   Logger,
+  KeyValueStore,
 } from '@core/types';
 import { DEPLOY_BACKUP_MAX_KEPT, DEPLOY_NAME_PATTERN } from '../../constants';
 import { ProcessSpawner } from '@infra/process';
@@ -33,6 +33,7 @@ import type {
   DeployResult,
   LogSources,
 } from '../interfaces/IServerPlugin';
+import { TomcatStartupMonitor } from './TomcatStartupMonitor';
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
@@ -50,6 +51,18 @@ const TOMCAT_CAPABILITIES: PluginCapabilities = {
 const INSTANCE_SEED_DIRS = ['conf'] as const;
 /** Directories created empty on instancePath initialization. */
 const INSTANCE_EMPTY_DIRS = ['logs', 'temp', 'work', 'webapps'] as const;
+const TOMCAT_STARTUP_LISTENER_FILENAME = 'jsm-tomcat-startup-listener.jar';
+const DEFAULT_SHUTDOWN_PORT = 8005;
+const DEFAULT_SHUTDOWN_COMMAND = 'SHUTDOWN';
+const SHUTDOWN_PORT_KEY_PREFIX = 'jsm.tomcat.shutdownPort.';
+
+export interface TomcatPluginOptions {
+  startupListenerJarPath?: string;
+  /** Path to server.xml template with ${http.port}, ${shutdown.port}, ${shutdown.command}. */
+  serverXmlTemplatePath?: string;
+  /** Optional: persists dynamic shutdown port so stop works after reload. */
+  keyValueStore: KeyValueStore;
+}
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -78,6 +91,17 @@ async function existingConfigSources(candidates: ConfigSource[]): Promise<Config
   return available.filter(entry => entry.exists).map(entry => entry.candidate);
 }
 
+/** JVM system properties for Tomcat connector/shutdown (template placeholders). */
+function tomcatConfigVmArgs(config: ServerConfig, shutdownPortOverride?: number): string[] {
+  const pluginConfig = config.pluginConfig as TomcatPluginConfig | undefined;
+  const shutdownPort = shutdownPortOverride ?? pluginConfig?.shutdownPort ?? DEFAULT_SHUTDOWN_PORT;
+  return [
+    `-Dhttp.port=${config.ports.http}`,
+    `-Dshutdown.port=${shutdownPort}`,
+    `-Dshutdown.command=${DEFAULT_SHUTDOWN_COMMAND}`,
+  ];
+}
+
 // ── TomcatPlugin ────────────────────────────────────────────────────────────
 
 export class TomcatPlugin implements IServerPlugin {
@@ -87,13 +111,19 @@ export class TomcatPlugin implements IServerPlugin {
   private readonly logger: Logger;
   private readonly spawner: ProcessSpawner;
   private readonly portScanner: PortScanner;
+  private readonly startupListenerJarPath?: string;
+  private readonly serverXmlTemplatePath?: string;
+  private readonly keyValueStore: KeyValueStore;
   /** Track running child processes by serverId for stop(). */
   private readonly childProcesses = new Map<string, ChildProcess>();
 
-  constructor(logger: Logger) {
+  constructor(logger: Logger, options: TomcatPluginOptions) {
     this.logger = logger;
     this.spawner = new ProcessSpawner(logger);
     this.portScanner = new PortScanner();
+    this.startupListenerJarPath = options.startupListenerJarPath;
+    this.serverXmlTemplatePath = options.serverXmlTemplatePath;
+    this.keyValueStore = options.keyValueStore;
   }
 
   getCapabilities(): PluginCapabilities {
@@ -203,15 +233,15 @@ export class TomcatPlugin implements IServerPlugin {
 
   /**
    * Initialize a CATALINA_BASE instance directory from CATALINA_HOME.
-   * Copies conf/, creates empty dirs, patches server.xml ports, removes AJP.
+   * Copies conf/, creates empty dirs. If serverXmlTemplatePath is set, overwrites
+   * conf/server.xml with the template (port/shutdown passed later via JVM args).
    */
   async initializeInstancePath(
     homePath: string,
     instancePath: string,
-    config: ServerConfig,
+    _config: ServerConfig,
   ): Promise<Result<void, JsmError>> {
     try {
-      // Seed directories from CATALINA_HOME
       for (const dir of INSTANCE_SEED_DIRS) {
         const src = path.join(homePath, dir);
         const dest = path.join(instancePath, dir);
@@ -220,16 +250,14 @@ export class TomcatPlugin implements IServerPlugin {
         }
       }
 
-      // Create empty directories
       for (const dir of INSTANCE_EMPTY_DIRS) {
         await ensureDir(path.join(instancePath, dir));
       }
 
-      // Patch server.xml
-      const serverXmlPath = path.join(instancePath, 'conf', 'server.xml');
-      if (await exists(serverXmlPath)) {
-        const patchResult = await this.patchServerXml(serverXmlPath, config);
-        if (!patchResult.ok) return patchResult;
+      const serverXmlDest = path.join(instancePath, 'conf', 'server.xml');
+      if (this.serverXmlTemplatePath && await exists(this.serverXmlTemplatePath)) {
+        await fs.copyFile(this.serverXmlTemplatePath, serverXmlDest);
+        this.logger.info('TomcatPlugin: applied server.xml template (ports via JVM args)');
       }
 
       this.logger.info(`TomcatPlugin: initialized instance at ${instancePath}`);
@@ -244,137 +272,6 @@ export class TomcatPlugin implements IServerPlugin {
       }));
     }
   }
-
-  // ── Server.xml Patching (XXE-safe XML parser, §7.7) ────────────────
-
-  private async patchServerXml(
-    serverXmlPath: string,
-    config: ServerConfig,
-  ): Promise<Result<void, JsmError>> {
-    try {
-      const xml = await fs.readFile(serverXmlPath, 'utf-8');
-
-      // XXE protection: strip DOCTYPE declarations before parsing
-      const sanitized = xml.replace(/<!DOCTYPE[^>]*>/gi, '');
-
-      const parser = new XMLParser({
-        ignoreAttributes: false,
-        attributeNamePrefix: '@_',
-        preserveOrder: true,
-        commentPropName: '#comment',
-        processEntities: false,
-        // Do not parse tag values as number/boolean
-        parseTagValue: false,
-        parseAttributeValue: false,
-      });
-
-      const parsed = parser.parse(sanitized);
-
-      // Patch ports and remove AJP connectors
-      this.patchServerElement(parsed, config);
-
-      const builder = new XMLBuilder({
-        ignoreAttributes: false,
-        attributeNamePrefix: '@_',
-        preserveOrder: true,
-        commentPropName: '#comment',
-        format: true,
-        suppressEmptyNode: false,
-      });
-
-      const output = '<?xml version="1.0" encoding="UTF-8"?>\n' + builder.build(parsed);
-      await fs.writeFile(serverXmlPath, output, 'utf-8');
-
-      return ok(undefined);
-    } catch (cause) {
-      return err(new JsmError({
-        code: ErrorCode.DeployFailed,
-        message: `Failed to patch server.xml at ${serverXmlPath}`,
-        details: cause instanceof Error ? cause.message : String(cause),
-        suggestedFix: ['Check server.xml is valid XML', 'Restore from Tomcat installation'],
-        cause,
-      }));
-    }
-  }
-
-  /**
-   * Walk the parsed XML tree (preserveOrder format) to:
-   * - Set <Server port="..."> to the shutdown port
-   * - Set HTTP Connector port to config.ports.http
-   * - Remove AJP Connectors if disableAjp is true
-   */
-  private patchServerElement(
-    nodes: unknown[],
-    config: ServerConfig,
-  ): void {
-    const pluginConfig = config.pluginConfig as TomcatPluginConfig | undefined;
-    const shutdownPort = pluginConfig?.shutdownPort ?? 8005;
-    const disableAjp = pluginConfig?.disableAjp ?? true;
-
-    for (const node of nodes) {
-      if (!node || typeof node !== 'object') continue;
-      const obj = node as Record<string, unknown>;
-
-      // Patch <Server> element shutdown port
-      if ('Server' in obj && Array.isArray(obj['Server'])) {
-        const attrs = obj[':@'] as Record<string, string> | undefined;
-        if (attrs?.['@_port']) {
-          attrs['@_port'] = String(shutdownPort);
-        }
-        // Recurse into Server children
-        this.patchServerElement(obj['Server'] as unknown[], config);
-      }
-
-      // Patch <Service> — recurse to find Connectors
-      if ('Service' in obj && Array.isArray(obj['Service'])) {
-        const children = obj['Service'] as unknown[];
-        this.patchServiceChildren(children, config, disableAjp);
-      }
-    }
-  }
-
-  private patchServiceChildren(
-    children: unknown[],
-    config: ServerConfig,
-    disableAjp: boolean,
-  ): void {
-    // Collect indices of AJP connectors to remove
-    const removeIndices: number[] = [];
-
-    for (let i = 0; i < children.length; i++) {
-      const child = children[i];
-      if (!child || typeof child !== 'object') continue;
-      const obj = child as Record<string, unknown>;
-
-      if ('Connector' in obj) {
-        const attrs = (obj[':@'] ?? {}) as Record<string, string>;
-        const protocol = (attrs['@_protocol'] ?? '').toLowerCase();
-
-        if (protocol.includes('ajp') && disableAjp) {
-          removeIndices.push(i);
-          this.logger.info('TomcatPlugin: removing AJP connector from server.xml');
-        } else if (!protocol.includes('ajp')) {
-          // HTTP connector — set port
-          attrs['@_port'] = String(config.ports.http);
-        }
-      }
-
-      // Recurse into nested elements (Engine, Host, etc.)
-      for (const key of Object.keys(obj)) {
-        if (key.startsWith(':@') || key.startsWith('#')) continue;
-        if (Array.isArray(obj[key])) {
-          this.patchServiceChildren(obj[key] as unknown[], config, disableAjp);
-        }
-      }
-    }
-
-    // Remove AJP connectors in reverse order to preserve indices
-    for (let i = removeIndices.length - 1; i >= 0; i--) {
-      children.splice(removeIndices[i], 1);
-    }
-  }
-
-  // ── Lifecycle: Start (§12.1, §12.2) ────────────────────────────────
 
   async start(
     ctx: OperationContext,
@@ -398,6 +295,44 @@ export class TomcatPlugin implements IServerPlugin {
       ...config.run.env,
     };
 
+    let shutdownPort: number = (config.pluginConfig as TomcatPluginConfig | undefined)?.shutdownPort ?? DEFAULT_SHUTDOWN_PORT;
+    const free = await this.portScanner.findFreePort(DEFAULT_SHUTDOWN_PORT);
+    if (free !== null) {
+      shutdownPort = free;
+      await this.keyValueStore.set(SHUTDOWN_PORT_KEY_PREFIX + ctx.serverId, free);
+    }
+
+    const catOpts: string[] = tomcatConfigVmArgs(config, shutdownPort);
+    if (config.run.vmArgs.length > 0) {
+      catOpts.push(...config.run.vmArgs);
+    }
+    if (catOpts.length > 0) {
+      env['CATALINA_OPTS'] = ((env['CATALINA_OPTS'] ?? '') + ' ' + catOpts.join(' ')).trim();
+    }
+
+    let startupMonitor: TomcatStartupMonitor | undefined;
+    if (this.startupListenerJarPath) {
+      const prepareResult = await this.prepareStartupListener(config);
+      if (!prepareResult.ok) {
+        return prepareResult;
+      }
+
+      try {
+        startupMonitor = await TomcatStartupMonitor.create({
+          serverKey: config.id,
+          serverName: config.name,
+          logger: this.logger,
+        });
+      } catch (cause) {
+        return err(new JsmError({
+          code: ErrorCode.Unknown,
+          message: `Failed to initialize Tomcat startup callback for ${config.name}`,
+          details: cause instanceof Error ? cause.message : String(cause),
+          cause,
+        }));
+      }
+    }
+
     const args: string[] = [];
 
     if (mode === 'debug') {
@@ -410,10 +345,15 @@ export class TomcatPlugin implements IServerPlugin {
       args.push('run');
     }
 
-    // Add JVM args via JAVA_OPTS
-    if (config.run.vmArgs.length > 0) {
+    if (startupMonitor) {
+      const callbackVmArgs = [
+        `-Djsm.startup.callback.url=${startupMonitor.callbackUrl}`,
+        `-Djsm.startup.callback.token=${startupMonitor.token}`,
+        `-Djsm.startup.callback.startupId=${startupMonitor.startupId}`,
+        `-Djsm.startup.callback.serverKey=${config.id}`,
+      ];
       const existing = env['JAVA_OPTS'] ?? '';
-      env['JAVA_OPTS'] = (existing + ' ' + config.run.vmArgs.join(' ')).trim();
+      env['JAVA_OPTS'] = (existing + ' ' + callbackVmArgs.join(' ')).trim();
     }
 
     ctx.progress.report('Starting Tomcat...');
@@ -427,12 +367,15 @@ export class TomcatPlugin implements IServerPlugin {
     });
 
     if (!child.pid) {
+      await startupMonitor?.dispose();
       return err(new JsmError({
         code: ErrorCode.ProcessSpawnFailed,
         message: 'Failed to spawn Tomcat process',
         suggestedFix: ['Check JAVA_HOME is valid', 'Check Tomcat scripts have execute permission'],
       }));
     }
+
+    startupMonitor?.bindProcess(child);
 
     this.childProcesses.set(config.id, child);
 
@@ -447,6 +390,7 @@ export class TomcatPlugin implements IServerPlugin {
       pid: child.pid,
       httpUrl: `http://${config.host}:${config.ports.http}`,
       hints,
+      startupMonitor,
     };
 
     if (mode === 'debug') {
@@ -473,6 +417,13 @@ export class TomcatPlugin implements IServerPlugin {
       CATALINA_BASE: config.instancePath,
       JAVA_HOME: config.javaHome,
     };
+    let shutdownPort: number = (config.pluginConfig as TomcatPluginConfig | undefined)?.shutdownPort ?? DEFAULT_SHUTDOWN_PORT;
+    const saved = this.keyValueStore.get<number>(SHUTDOWN_PORT_KEY_PREFIX + ctx.serverId);
+    if (saved !== undefined) shutdownPort = saved;
+    const stopOpts = tomcatConfigVmArgs(config, shutdownPort);
+    if (stopOpts.length > 0) {
+      env['CATALINA_OPTS'] = stopOpts.join(' ');
+    }
 
     const exitCode = await new Promise<number | null>((resolve) => {
       const child = this.spawner.spawn({
@@ -503,6 +454,7 @@ export class TomcatPlugin implements IServerPlugin {
     if (exitCode !== 0 && exitCode !== null) {
       this.logger.warn(`TomcatPlugin: stop script exited with code ${exitCode}`);
     }
+    await this.keyValueStore.delete(SHUTDOWN_PORT_KEY_PREFIX + ctx.serverId);
 
     this.logger.info(`TomcatPlugin: stopped ${config.name}`);
     return ok(undefined);
@@ -894,5 +846,46 @@ export class TomcatPlugin implements IServerPlugin {
     } catch {
       // dir listing failed — skip pruning
     }
+  }
+
+  private async prepareStartupListener(config: ServerConfig): Promise<Result<void, JsmError>> {
+    if (!this.startupListenerJarPath) {
+      return ok(undefined);
+    }
+
+    if (!(await exists(this.startupListenerJarPath))) {
+      return err(new JsmError({
+        code: ErrorCode.SourceNotFound,
+        message: `Tomcat startup listener asset not found: ${this.startupListenerJarPath}`,
+      }));
+    }
+
+    const libDir = path.join(config.instancePath, 'lib');
+    const serverXmlPath = path.join(config.instancePath, 'conf', 'server.xml');
+
+    if (!(await exists(serverXmlPath))) {
+      return err(new JsmError({
+        code: ErrorCode.InvalidConfig,
+        message: `Tomcat instance server.xml not found at ${serverXmlPath}`,
+        suggestedFix: ['Initialize the Tomcat instance path before starting the server'],
+      }));
+    }
+
+    try {
+      await ensureDir(libDir);
+      await fs.copyFile(
+        this.startupListenerJarPath,
+        path.join(libDir, TOMCAT_STARTUP_LISTENER_FILENAME),
+      );
+    } catch (cause) {
+      return err(new JsmError({
+        code: ErrorCode.ConfigWriteFailed,
+        message: `Failed to stage Tomcat startup listener for ${config.name}`,
+        details: cause instanceof Error ? cause.message : String(cause),
+        cause,
+      }));
+    }
+
+    return ok(undefined);
   }
 }

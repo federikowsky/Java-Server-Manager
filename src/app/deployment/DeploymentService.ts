@@ -16,9 +16,12 @@ import { ok, err } from '@core/result';
 import { JsmError } from '@core/errors/JsmError';
 import { ErrorCode } from '@core/errors/codes';
 import type { EventBus } from '@core/events/EventBus';
+import type { HealthReport } from '@plugins/interfaces/IServerPlugin';
 import type { IServerPlugin } from '@plugins/interfaces/IServerPlugin';
 import type { PluginRegistry } from '@plugins/registry/PluginRegistry';
 import type { HookRunner } from '@app/hooks';
+
+const DEPLOYMENT_HEALTH_TIMEOUT_MS = 5000;
 
 
 // ── Deployment Runtime State ────────────────────────────────────────────────
@@ -69,6 +72,7 @@ export class DeploymentService {
   private readonly trustGate?: TrustGate;
   private readonly hookRunner?: Pick<HookRunner, 'runHooks'>;
   private readonly states = new Map<string, DeploymentEntry>();
+  private readonly healthCache = new Map<string, HealthReport>();
 
   constructor(deps: {
     pluginRegistry: PluginRegistry;
@@ -92,6 +96,44 @@ export class DeploymentService {
 
   getDeploymentState(serverId: ServerId, deploymentId: DeploymentId): DeploymentState {
     return this.states.get(this.stateKey(serverId, deploymentId))?.state ?? 'undeployed';
+  }
+
+  /** Last deployment health result (for tree tooltip). */
+  getDeploymentHealth(serverId: ServerId, deploymentId: DeploymentId): HealthReport | undefined {
+    return this.healthCache.get(this.stateKey(serverId, deploymentId));
+  }
+
+  /** Run health GET for all synced deployments with healthCheckPath; results stored for tooltip. */
+  async runHealthChecksForServer(serverKey: ServerId, config: ServerConfig): Promise<void> {
+    const { host, ports } = config;
+    for (const dep of config.deployments) {
+      if (!dep.healthCheckPath?.trim()) continue;
+      if (this.getDeploymentState(serverKey, dep.id) !== 'synced') continue;
+      const path = dep.healthCheckPath.trim().startsWith('/') ? dep.healthCheckPath.trim() : `/${dep.healthCheckPath.trim()}`;
+      const url = `http://${host}:${ports.http}${path}`;
+      const timeoutMs = dep.healthCheckTimeoutMs ?? DEPLOYMENT_HEALTH_TIMEOUT_MS;
+      const result = await this.fetchHealth(url, timeoutMs);
+      this.healthCache.set(this.stateKey(serverKey, dep.id), result.ok ? result.value : { ok: false });
+    }
+  }
+
+  private async fetchHealth(url: string, timeoutMs: number): Promise<Result<HealthReport, JsmError>> {
+    const startedAt = Date.now();
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, { method: 'GET', signal: controller.signal });
+      const latencyMs = Date.now() - startedAt;
+      clearTimeout(timeoutId);
+      const healthy = response.ok && response.status >= 200 && response.status < 300;
+      return ok({ ok: healthy, latencyMs });
+    } catch (cause) {
+      clearTimeout(timeoutId);
+      if (cause instanceof Error && cause.name === 'AbortError') {
+        return err(new JsmError({ code: ErrorCode.Timeout, message: 'Health check timed out', details: url, cause }));
+      }
+      return err(JsmError.fromUnknown(cause, ErrorCode.ValidationFailed));
+    }
   }
 
   private transitionDeploy(
@@ -241,6 +283,28 @@ export class DeploymentService {
   ): Promise<void> {
     for (const dep of config.deployments) {
       await this.fullRedeploy(ctx, config, dep);
+    }
+  }
+
+  /**
+   * Deploys only deployments that are in 'undeployed' state (e.g. before first start).
+   * Skips those already synced or in error. Throws on first deploy failure.
+   */
+  async deployUndeployed(
+    ctx: OperationContext,
+    config: ServerConfig,
+  ): Promise<void> {
+    const undeployed = config.deployments.filter(
+      dep => this.getDeploymentState(ctx.serverId, dep.id) === 'undeployed',
+    );
+    for (const dep of undeployed) {
+      const deployCtx: OperationContext = {
+        ...ctx,
+        kind: 'DeployFull',
+        targetDeploymentId: dep.id,
+      };
+      const result = await this.fullRedeploy(deployCtx, config, dep);
+      if (!result.ok) throw result.error;
     }
   }
 

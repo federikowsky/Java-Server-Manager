@@ -31,11 +31,23 @@ export interface DetectReport {
   warnings: string[];
 }
 
+export interface StartupOutcome {
+  state: 'started' | 'failed';
+  message?: string;
+  error?: JsmError;
+}
+
+export interface StartupMonitor {
+  waitForOutcome(timeoutMs: number): Promise<StartupOutcome>;
+  dispose(): Promise<void> | void;
+}
+
 export interface StartResult {
   pid: number;
   httpUrl?: string;
   debugPort?: number;
   hints: string[];
+  startupMonitor?: StartupMonitor;
 }
 
 export interface StatusReport {

@@ -92,6 +92,13 @@ function deploymentFormSchema(mode: 'create' | 'edit', hookTaskOptions: HookTask
         collapsible: true,
         fields: [
           {
+            name: 'healthCheckPath',
+            label: 'Health Check Path',
+            type: 'text',
+            placeholder: '/myapp/health',
+            helpText: 'Optional GET path for deployment health (e.g. /myapp/health). Left empty to skip deployment health check.',
+          },
+          {
             name: 'ignoreGlobs',
             label: 'Ignore Patterns',
             type: 'tags',
@@ -165,6 +172,8 @@ export class DeploymentFormPanel extends BaseFormPanel {
         syncMode: dep.syncMode,
         ignoreGlobs: dep.ignoreGlobs,
         hooks: dep.hooks,
+        healthCheckPath: dep.healthCheckPath,
+        healthCheckTimeoutMs: dep.healthCheckTimeoutMs,
       };
     }
 
@@ -236,6 +245,8 @@ export class DeploymentFormPanel extends BaseFormPanel {
                 syncMode: dep.syncMode,
                 ignoreGlobs: dep.ignoreGlobs,
                 hooks: dep.hooks,
+                healthCheckPath: dep.healthCheckPath,
+                healthCheckTimeoutMs: dep.healthCheckTimeoutMs,
               },
             });
           }
@@ -438,6 +449,12 @@ function formDataToDeploymentConfig(
       ? (data['ignoreGlobs'] as string[])
       : [],
     hooks: normalizeHookList(data['hooks']),
+    healthCheckPath: typeof data['healthCheckPath'] === 'string' && data['healthCheckPath'].trim() !== ''
+      ? data['healthCheckPath'].trim()
+      : undefined,
+    healthCheckTimeoutMs: typeof data['healthCheckTimeoutMs'] === 'number' && data['healthCheckTimeoutMs'] > 0
+      ? data['healthCheckTimeoutMs']
+      : undefined,
   };
 }
 

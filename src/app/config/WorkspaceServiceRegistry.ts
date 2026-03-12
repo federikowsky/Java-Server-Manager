@@ -119,6 +119,18 @@ export class WorkspaceServiceRegistry {
     return entry.configService.updateServer(config);
   }
 
+  async addServer(
+    workspaceFolderUri: string,
+    config: ServerConfig,
+  ): Promise<Result<void, JsmError>> {
+    const entry = this.entriesByUri.get(workspaceFolderUri);
+    if (!entry) {
+      return this.workspaceNotFound(workspaceFolderUri);
+    }
+
+    return entry.configService.addServer(config);
+  }
+
   async addDeployment(
     locator: WorkspaceServerLocator,
     deployment: DeploymentConfig,

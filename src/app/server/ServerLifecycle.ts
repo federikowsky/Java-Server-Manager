@@ -1,6 +1,7 @@
 import type {
   ServerConfig,
   ServerId,
+  ServerState,
   StartMode,
   OperationContext,
   OperationKind,
@@ -22,8 +23,13 @@ import type { PluginRegistry } from '@plugins/registry/PluginRegistry';
 import { PidManager } from '@infra/pid';
 import { PortScanner } from '@infra/ports';
 import type { HookRunner } from '@app/hooks';
+import type { DeploymentService } from '@app/deployment/DeploymentService';
 import { ServerRuntime } from './ServerRuntime';
-import { READINESS_PROBE_INTERVAL_MS, RECONCILIATION_BUDGET_MS } from '../../constants';
+import {
+  READINESS_PROBE_INTERVAL_MS,
+  RECONCILIATION_BUDGET_MS,
+  STARTUP_CALLBACK_DEBOUNCE_MS,
+} from '../../constants';
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -37,6 +43,7 @@ export interface ServerLifecycleDeps {
   trustGate?: TrustGate;
   hookRunner?: Pick<HookRunner, 'runHooks'>;
   getOutputSink?: (serverKey: ServerId, serverName: string) => OutputSink;
+  deployService?: DeploymentService;
 }
 
 interface ServerEntry {
@@ -50,6 +57,51 @@ interface ServerEntry {
 
 function sleep(ms: number): Promise<void> {
   return new Promise(r => setTimeout(r, ms));
+}
+
+/**
+ * When startup monitor reported 'started' (AFTER_START_EVENT), do one port probe after a short
+ * debounce instead of polling. No loop.
+ */
+async function probeAfterStartupEvent(
+  portScanner: PortScanner,
+  config: ServerConfig,
+  debounceMs: number,
+): Promise<boolean> {
+  await sleep(debounceMs);
+  const portOpen = await portScanner.probe(config.ports.http, config.host);
+  return portOpen;
+}
+
+async function waitForHttpReadiness(
+  portScanner: PortScanner,
+  config: ServerConfig,
+  timeoutMs: number,
+  startedAt: number,
+): Promise<boolean> {
+  let ready = false;
+
+  while (!ready && (Date.now() - startedAt) < timeoutMs) {
+    const portOpen = await portScanner.probe(config.ports.http, config.host);
+    const decision = decideReadiness({
+      portOpen,
+      elapsed: Date.now() - startedAt,
+      timeoutMs,
+    });
+
+    if (decision === 'ready') {
+      ready = true;
+      break;
+    }
+
+    if (decision === 'timeout') {
+      break;
+    }
+
+    await sleep(READINESS_PROBE_INTERVAL_MS);
+  }
+
+  return ready;
 }
 
 function makeCtx(
@@ -190,6 +242,14 @@ export class ServerLifecycle {
     return ok(undefined);
   }
 
+  /** Return server keys whose runtime state is one of the given states (e.g. for status refresh). */
+  getServerKeysInState(...states: ServerState[]): ServerId[] {
+    const set = new Set(states);
+    return [...this.servers.entries()]
+      .filter(([, e]) => set.has(e.runtime.state))
+      .map(([k]) => k);
+  }
+
   // ── Reconciliation (§9.9) ─────────────────────────────────────────
 
   /**
@@ -275,6 +335,7 @@ export class ServerLifecycle {
   private async doStartInternal(server: ServerEntry, mode: StartMode, hookEvent?: HookEvent): Promise<void> {
     const { config, runtime } = server;
     const plugin = this.getPlugin(config);
+    const startedAt = Date.now();
 
     if (hookEvent) {
       await this.runServerHooks(server, 'pre', hookEvent);
@@ -302,28 +363,30 @@ export class ServerLifecycle {
         throw startResult.error;
       }
 
-      const { pid } = startResult.value;
+      const { pid, startupMonitor } = startResult.value;
       await this.deps.pidManager.writePid(server.serverKey, pid);
 
-      // Readiness probe loop
-      const startedAt = Date.now();
       let ready = false;
 
-      while (!ready && (Date.now() - startedAt) < timeoutMs) {
-        await sleep(READINESS_PROBE_INTERVAL_MS);
-
-        const portOpen = await this.deps.portScanner.probe(config.ports.http, config.host);
-        const decision = decideReadiness({
-          portOpen,
-          elapsed: Date.now() - startedAt,
-          timeoutMs,
-        });
-
-        if (decision === 'ready') {
-          ready = true;
-        } else if (decision === 'timeout') {
-          break;
+      try {
+        if (startupMonitor) {
+          const outcome = await startupMonitor.waitForOutcome(timeoutMs);
+          if (outcome.state === 'failed') {
+            throw outcome.error ?? new JsmError({
+              code: ErrorCode.ProcessSpawnFailed,
+              message: outcome.message ?? `Server '${config.name}' reported a startup failure`,
+            });
+          }
+          ready = await probeAfterStartupEvent(
+            this.deps.portScanner,
+            config,
+            STARTUP_CALLBACK_DEBOUNCE_MS,
+          );
+        } else {
+          ready = await waitForHttpReadiness(this.deps.portScanner, config, timeoutMs, startedAt);
         }
+      } finally {
+        await startupMonitor?.dispose();
       }
 
       if (!ready) {
@@ -340,6 +403,27 @@ export class ServerLifecycle {
       }
 
       runtime.transition('running', { pid });
+
+      if (plugin.healthCheck) {
+        const healthResult = await plugin.healthCheck(ctx, config);
+        if (!healthResult.ok) {
+          runtime.transition('error', { error: healthResult.error });
+          throw healthResult.error;
+        }
+        if (!healthResult.value.ok) {
+          const err = new JsmError({
+            code: ErrorCode.ValidationFailed,
+            message: 'Health check failed: server not responding',
+            details: `HTTP probe to ${config.host}:${config.ports.http} failed`,
+          });
+          runtime.transition('error', { error: err });
+          throw err;
+        }
+      }
+
+      if (this.deps.deployService) {
+        await this.deps.deployService.runHealthChecksForServer(server.serverKey, config);
+      }
 
       if (mode === 'debug' && config.debug.enabled) {
         await sleep(config.debug.attachDelayMs);
@@ -458,6 +542,23 @@ export class ServerLifecycle {
     if (status.state !== runtime.state) {
       runtime.forceState(status.state, { pid: status.pid });
     }
+
+    if (status.state === 'running' && plugin.healthCheck) {
+      const healthResult = await plugin.healthCheck(ctx, config);
+      if (!healthResult.ok) {
+        runtime.transition('error', { error: healthResult.error });
+        return;
+      }
+      if (!healthResult.value.ok) {
+        runtime.transition('error', {
+          error: new JsmError({
+            code: ErrorCode.ValidationFailed,
+            message: 'Health check failed: server not responding',
+            details: `HTTP probe to ${config.host}:${config.ports.http} failed`,
+          }),
+        });
+      }
+    }
   }
 
   // ── Reconcile One Server (§9.9) ───────────────────────────────────
@@ -533,7 +634,7 @@ export class ServerLifecycle {
     if (!result.ok) {
       this.deps.logger.warn(`ServerLifecycle: onError hook failed for '${server.config.name}'`, result.error);
     }
-    if (cause instanceof JsmError) {
+    if (cause instanceof JsmError && server.runtime.state !== 'error') {
       server.runtime.transition('error', { error: cause });
     }
   }

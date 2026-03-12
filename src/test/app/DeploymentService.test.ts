@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { DeploymentService } from '@app/deployment/DeploymentService';
 import { EventBus } from '@core/events/EventBus';
 import type { Logger } from '@core/types/logger';
@@ -50,6 +50,10 @@ function makeDep(id = 'd1'): DeploymentConfig {
     ignoreGlobs: [],
     hooks: [],
   };
+}
+
+function makeDepWithHealthPath(id = 'd1', healthCheckPath = '/app/health'): DeploymentConfig {
+  return { ...makeDep(id), healthCheckPath };
 }
 
 function makeHook(event: HookConfig['event'], phase: HookConfig['phase'] = 'pre', id = `${event}-${phase}`): HookConfig {
@@ -273,6 +277,52 @@ describe('DeploymentService', () => {
       const result = await untrustedService.undeploy(makeCtx('s1', 'd1', 'Undeploy'), makeConfig(), makeDep());
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error.code).toBe(ErrorCode.WorkspaceUntrusted);
+    });
+  });
+
+  describe('deployment health check', () => {
+    beforeEach(() => {
+      vi.stubGlobal('fetch', vi.fn());
+    });
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it('getDeploymentHealth returns undefined when no check run yet', () => {
+      expect(service.getDeploymentHealth('s1', 'd1')).toBeUndefined();
+    });
+
+    it('runHealthChecksForServer runs GET for synced deployments with healthCheckPath and stores result', async () => {
+      (fetch as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true, status: 200 });
+      const config = { ...makeConfig(), deployments: [makeDepWithHealthPath()] };
+      await service.fullRedeploy(makeCtx(), config, config.deployments[0]);
+      expect(service.getDeploymentState('s1', 'd1')).toBe('synced');
+
+      await service.runHealthChecksForServer('s1', config);
+
+      const health = service.getDeploymentHealth('s1', 'd1');
+      expect(health).toBeDefined();
+      expect(health!.ok).toBe(true);
+      expect(typeof health!.latencyMs).toBe('number');
+      expect(fetch).toHaveBeenCalledWith(
+        'http://127.0.0.1:8080/app/health',
+        expect.objectContaining({ method: 'GET' }),
+      );
+    });
+
+    it('runHealthChecksForServer skips deployments without healthCheckPath', async () => {
+      const config = makeConfig();
+      config.deployments = [makeDep()];
+      await service.fullRedeploy(makeCtx(), config, config.deployments[0]);
+      await service.runHealthChecksForServer('s1', config);
+      expect(fetch).not.toHaveBeenCalled();
+      expect(service.getDeploymentHealth('s1', 'd1')).toBeUndefined();
+    });
+
+    it('runHealthChecksForServer skips deployments not synced', async () => {
+      const config = { ...makeConfig(), deployments: [makeDepWithHealthPath()] };
+      await service.runHealthChecksForServer('s1', config);
+      expect(fetch).not.toHaveBeenCalled();
     });
   });
 });

@@ -3,6 +3,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
 import { ConfigService } from '@app/config/ConfigService';
+import { WorkspaceServiceRegistry } from '@app/config/WorkspaceServiceRegistry';
 import { ConfigRepo } from '@infra/fs/ConfigRepo';
 import { SchemaValidator } from '@core/validation/SchemaValidator';
 import { EventBus } from '@core/events/EventBus';
@@ -168,5 +169,74 @@ describe('Config → Repo → EventBus integration', () => {
 
     const dirty = await service.checkForExternalChanges();
     expect(dirty).toBe(true);
+  });
+});
+
+describe('WorkspaceServiceRegistry.addServer', () => {
+  let tmpDir: string;
+  let configService: ConfigService;
+  let registry: WorkspaceServiceRegistry;
+  const workspaceUri = 'file:///test-ws';
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'jsm-registry-'));
+    await fs.mkdir(path.join(tmpDir, '.vscode'), { recursive: true });
+
+    const logger = mockLogger();
+    const repo = new ConfigRepo(tmpDir, logger);
+    const bus = new EventBus(logger);
+    const validator = new SchemaValidator();
+    validator.addSchema('server-config', { type: 'object' });
+
+    configService = new ConfigService({
+      repo,
+      validator,
+      bus,
+      logger,
+      workspaceFolderUri: workspaceUri,
+    });
+
+    registry = new WorkspaceServiceRegistry(
+      [
+        {
+          scope: { uri: workspaceUri, name: 'test-ws', fsPath: tmpDir },
+          configService,
+          provisioningService: {} as any,
+          configFilePath: path.join(tmpDir, '.vscode', 'jsm.servers.json'),
+        },
+      ],
+      logger,
+    );
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('delegates to configService.addServer and persists server', async () => {
+    const config = makeServer('srv-new', 'New Server');
+    const result = await registry.addServer(workspaceUri, config);
+
+    expect(result.ok).toBe(true);
+    expect(configService.getServer('srv-new')).toBeDefined();
+    expect(configService.getServer('srv-new')?.name).toBe('New Server');
+  });
+
+  it('propagates addServer errors (e.g. duplicate id)', async () => {
+    const config = makeServer('srv-dup', 'First');
+    const first = await registry.addServer(workspaceUri, config);
+    expect(first.ok).toBe(true);
+
+    const second = await registry.addServer(workspaceUri, config);
+    expect(second.ok).toBe(false);
+    expect(second.error?.message).toContain('already exists');
+  });
+
+  it('returns error when workspace is not registered', async () => {
+    const config = makeServer();
+    const result = await registry.addServer('file:///unknown-workspace', config);
+
+    expect(result.ok).toBe(false);
+    expect(result.error?.message).toContain('not registered');
   });
 });

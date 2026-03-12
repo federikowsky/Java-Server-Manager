@@ -210,12 +210,17 @@
           "group": "manage@1"
         },
         {
-          "command": "jsm.server.remove",
+          "command": "jsm.server.duplicate",
+          "when": "view == javaServerManagerView && viewItem =~ /jsm\\.server\\..*/",
+          "group": "manage@1.5"
+        },
+        {
+          "command": "jsm.server.openFolder",
           "when": "view == javaServerManagerView && viewItem =~ /jsm\\.server\\..*/",
           "group": "manage@2"
         },
         {
-          "command": "jsm.server.openFolder",
+          "command": "jsm.server.remove",
           "when": "view == javaServerManagerView && viewItem =~ /jsm\\.server\\..*/",
           "group": "manage@2.5"
         },
@@ -248,6 +253,11 @@
           "command": "jsm.deployment.remove",
           "when": "view == javaServerManagerView && viewItem =~ /jsm\\.deployment\\..*/",
           "group": "manage@2"
+        },
+        {
+          "command": "jsm.deployment.openLogs",
+          "when": "view == javaServerManagerView && viewItem =~ /jsm\\.deployment\\..*/",
+          "group": "troubleshooting@1"
         }
       ]
     },
@@ -278,11 +288,12 @@
     }
   },
   "scripts": {
-    "compile": "npm run check-types && npm run lint && node esbuild.js",
+    "build:tomcat-listener": "node tools/tomcat-startup-listener/build.mjs",
+    "compile": "npm run build:tomcat-listener && npm run check-types && npm run lint && node esbuild.js",
     "watch": "npm-run-all -p watch:*",
     "watch:esbuild": "node esbuild.js --watch",
     "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
-    "package": "npm run check-types && npm run lint && node esbuild.js --production",
+    "package": "npm run build:tomcat-listener && npm run check-types && npm run lint && node esbuild.js --production",
     "check-types": "tsc --noEmit --skipLibCheck",
     "lint": "eslint src --ignore-pattern 'src-legacy'",
     "test": "vitest run",
@@ -314,7 +325,6 @@
     "vitest": "^3.2.1"
   },
   "dependencies": {
-    "fast-xml-parser": "^5.4.2",
     "lodash.debounce": "^4.0.8",
     "uuid": "^11.1.0"
   }

@@ -34,10 +34,11 @@ export class ServerLogChannel {
 
   /**
    * Append a line to a server's output channel.
+   * Trims trailing newlines from text to avoid double newlines (process often sends lines ending with \n).
    */
   appendLine(serverId: ServerId, serverName: string, text: string): void {
     const channel = this.getChannel(serverId, serverName);
-    channel.appendLine(text);
+    channel.appendLine(text.replace(/\n+$/, ''));
   }
 
   /**

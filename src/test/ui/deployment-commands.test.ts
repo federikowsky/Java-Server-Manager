@@ -18,6 +18,8 @@ import { ok, err } from '@core/result';
 const mockShowErrorMessage = vi.fn();
 const mockShowInfoMessage = vi.fn();
 const mockShowWarningMessage = vi.fn();
+const mockOpenTextDocument = vi.fn();
+const mockShowTextDocument = vi.fn();
 const registeredHandlers: Record<string, (...args: unknown[]) => unknown> = {};
 
 vi.mock('vscode', () => ({
@@ -25,7 +27,11 @@ vi.mock('vscode', () => ({
     showErrorMessage: mockShowErrorMessage,
     showInformationMessage: mockShowInfoMessage,
     showWarningMessage: mockShowWarningMessage,
+    showTextDocument: mockShowTextDocument,
     createTreeView: vi.fn(() => ({ dispose: vi.fn() })),
+  },
+  workspace: {
+    openTextDocument: mockOpenTextDocument,
   },
   commands: {
     registerCommand: vi.fn((_id: string, handler: (...args: unknown[]) => unknown) => {
@@ -95,11 +101,15 @@ function createDeploymentNode(
 }
 
 function mockDeps() {
+  const getLogSources = vi.fn(async () => ok<{ primary?: { id: string; title: string; kind: 'file'; path: string }; others: unknown[] }>({ others: [] }));
   return {
     configService: {
       getServer: vi.fn((_id: string) => makeServer(_id)),
       removeDeployment: vi.fn(async () => ok(undefined)),
       updateServer: vi.fn(async () => ok(undefined)),
+    },
+    pluginRegistry: {
+      get: vi.fn(() => ({ getLogSources })),
     },
     deployService: {
       fullRedeploy: vi.fn(async () => ok(undefined)),
@@ -379,11 +389,45 @@ describe('Deployment Commands', () => {
       );
     });
 
-    it('jsm.deployment.openLogs should show deferred message', () => {
-      invoke('jsm.deployment.openLogs');
-      expect(mockShowInfoMessage).toHaveBeenCalledWith(
-        expect.stringContaining('v1.1'),
-      );
+    describe('jsm.deployment.openLogs', () => {
+      it('should do nothing when arg is not a DeploymentNode', async () => {
+        await invoke('jsm.deployment.openLogs', undefined);
+        expect(mockShowInfoMessage).not.toHaveBeenCalledWith(expect.stringContaining('v1.1'));
+        expect(mockShowErrorMessage).not.toHaveBeenCalled();
+      });
+
+      it('should show information message when no file log sources are available', async () => {
+        deps.pluginRegistry.get.mockReturnValue({
+          getLogSources: vi.fn(async () => ok({ others: [] })),
+        });
+        const node = createDeploymentNode();
+        await invoke('jsm.deployment.openLogs', node);
+        expect(mockShowInfoMessage).toHaveBeenCalledWith(
+          expect.stringContaining('No file log sources'),
+        );
+      });
+
+      it('should open single log file when one source is returned', async () => {
+        mockOpenTextDocument.mockResolvedValue({});
+        mockShowTextDocument.mockResolvedValue(undefined);
+        deps.pluginRegistry.get.mockReturnValue({
+          getLogSources: vi.fn(async () => ok({
+            primary: { id: 'catalina-out', title: 'Catalina Log', kind: 'file' as const, path: '/tmp/logs/catalina.out' },
+            others: [],
+          })),
+        });
+        const node = createDeploymentNode();
+        await invoke('jsm.deployment.openLogs', node);
+        expect(mockOpenTextDocument).toHaveBeenCalled();
+        expect(mockShowTextDocument).toHaveBeenCalled();
+      });
+
+      it('should show error when server config is not found', async () => {
+        deps.configService.getServer.mockReturnValue(undefined);
+        const node = createDeploymentNode();
+        await invoke('jsm.deployment.openLogs', node);
+        expect(mockShowErrorMessage).toHaveBeenCalled();
+      });
     });
   });
 });

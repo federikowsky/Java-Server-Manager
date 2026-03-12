@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ServerConfig } from '@core/types/domain';
-import { ok } from '@core/result';
+import { ok, err } from '@core/result';
+import { JsmError } from '@core/errors/JsmError';
+import { ErrorCode } from '@core/errors/codes';
 
 const mockShowErrorMessage = vi.fn();
 const mockShowInfoMessage = vi.fn();
@@ -73,6 +75,24 @@ function createServerNode(server = makeServer()): InstanceType<typeof ServerNode
   return new ServerNode(server, 'stopped');
 }
 
+/** ServerNode with workspace folder set (for duplicate command tests). */
+function createServerNodeWithWorkspace(
+  workspaceFolderUri: string,
+  server = makeServer(),
+): InstanceType<typeof ServerNode> {
+  return new ServerNode(
+    {
+      workspaceFolderUri,
+      workspaceFolderName: 'test-ws',
+      workspaceFolderFsPath: '/test-ws',
+      serverId: server.id,
+      serverKey: server.id,
+      config: server,
+    },
+    'stopped',
+  );
+}
+
 function mockDeps() {
   return {
     lifecycle: {
@@ -85,6 +105,11 @@ function mockDeps() {
       get: vi.fn(() => ({
         getConfigSources: vi.fn(async () => ok([])),
       })),
+    },
+    workspaceRegistry: {
+      addServer: vi.fn(async () => ok(undefined)),
+      getServer: vi.fn(),
+      getEntry: vi.fn(),
     },
     configService: {
       getServer: vi.fn((_id: string) => makeServer(_id)),
@@ -204,5 +229,54 @@ describe('Server Commands', () => {
       expect.stringContaining('No editable configuration files were found'),
     );
     expect(mockOpenTextDocument).not.toHaveBeenCalled();
+  });
+
+  describe('jsm.server.duplicate', () => {
+    const workspaceUri = 'file:///test-ws';
+
+    it('calls workspaceRegistry.addServer with cloned config (new id, name with " (Copy)", new runtime.id)', async () => {
+      const server = makeServer('srv-1', 'My Server');
+      const node = createServerNodeWithWorkspace(workspaceUri, server);
+      await invoke('jsm.server.duplicate', node);
+
+      expect(deps.workspaceRegistry.addServer).toHaveBeenCalledTimes(1);
+      const [, config] = (deps.workspaceRegistry.addServer as ReturnType<typeof vi.fn>).mock.calls[0];
+      expect(config.id).not.toBe(server.id);
+      expect(config.name).toBe('My Server (Copy)');
+      expect(config.runtime.id).not.toBe(server.runtime.id);
+      expect(config.instancePath).toBe(server.instancePath);
+      expect(mockShowInfoMessage).toHaveBeenCalledWith(expect.stringContaining('added'));
+      expect(deps.treeProvider.requestRefresh).toHaveBeenCalled();
+    });
+
+    it('shows error and does not refresh when addServer fails', async () => {
+      deps.workspaceRegistry.addServer.mockResolvedValue(
+        err(new JsmError({ code: ErrorCode.InvalidConfig, message: 'Duplicate ID' })),
+      );
+      const node = createServerNodeWithWorkspace(workspaceUri);
+      await invoke('jsm.server.duplicate', node);
+
+      expect(mockShowErrorMessage).toHaveBeenCalled();
+      expect(deps.treeProvider.requestRefresh).not.toHaveBeenCalled();
+    });
+
+    it('does nothing when arg is not a ServerNode', async () => {
+      await invoke('jsm.server.duplicate', undefined);
+      expect(deps.workspaceRegistry.addServer).not.toHaveBeenCalled();
+    });
+
+    it('shows error when workspaceRegistry is not available', async () => {
+      const depsWithoutRegistry = mockDeps();
+      delete (depsWithoutRegistry as any).workspaceRegistry;
+      Object.keys(registeredHandlers).forEach(key => delete registeredHandlers[key]);
+      registerServerCommands(depsWithoutRegistry as any);
+
+      const node = createServerNodeWithWorkspace(workspaceUri);
+      await invoke('jsm.server.duplicate', node);
+
+      expect(mockShowErrorMessage).toHaveBeenCalledWith(
+        expect.stringContaining('workspace registry'),
+      );
+    });
   });
 });

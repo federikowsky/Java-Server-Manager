@@ -90,7 +90,11 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
   // ── 3. Plugins layer ──────────────────────────────────────────────────
 
   const pluginRegistry = new PluginRegistry(logger);
-  pluginRegistry.register('tomcat', (l: ILogger) => new TomcatPlugin(l));
+  pluginRegistry.register('tomcat', (l: ILogger) => new TomcatPlugin(l, {
+    startupListenerJarPath: path.join(ctx.extensionUri.fsPath, 'assets', 'tomcat', 'jsm-tomcat-startup-listener.jar'),
+    serverXmlTemplatePath: path.join(ctx.extensionUri.fsPath, 'assets', 'tomcat', 'server.xml.template'),
+    keyValueStore: workspaceStore,
+  }));
 
   // ── 4. UI adapters (needed by app layer) ──────────────────────────────
 
@@ -230,6 +234,14 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
     logger,
   );
 
+  const deployService = new DeploymentService({
+    pluginRegistry,
+    bus: eventBus,
+    logger,
+    trustGate,
+    hookRunner,
+  });
+
   const lifecycle = new ServerLifecycle({
     pluginRegistry,
     bus: eventBus,
@@ -250,14 +262,7 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
         logChannel.getChannel(serverId, serverName).clear();
       },
     }),
-  });
-
-  const deployService = new DeploymentService({
-    pluginRegistry,
-    bus: eventBus,
-    logger,
-    trustGate,
-    hookRunner,
+    deployService,
   });
 
   const autoSyncService = new AutoSyncService({
@@ -312,6 +317,8 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
     getRuntimeState: (sid: ServerId) => lifecycle.getRuntime(sid)?.getState(),
     getDeploymentState: (sid: ServerId, did: DeploymentId) =>
       deployService.getDeploymentState(sid, did),
+    getDeploymentHealth: (sid: ServerId, did: DeploymentId) =>
+      deployService.getDeploymentHealth(sid, did),
   });
 
   const treeView = vscode.window.createTreeView(VIEW_ID, {
@@ -356,6 +363,7 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
     }),
     ...registerDeploymentCommands({
       workspaceRegistry: workspaceServiceRegistry,
+      pluginRegistry,
       deployService,
       treeProvider,
       deploymentFormPanel,

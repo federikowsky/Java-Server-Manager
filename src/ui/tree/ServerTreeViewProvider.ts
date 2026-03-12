@@ -8,6 +8,7 @@ import type {
   DeploymentState,
 } from '@core/types';
 import type { ServerRuntimeState } from '@core/types/runtime';
+import type { HealthReport } from '@plugins/interfaces/IServerPlugin';
 import type { WorkspaceServerRecord } from '@app/config';
 import {
   SERVER_CONTEXT,
@@ -27,6 +28,7 @@ export interface TreeDataSource {
   getServers(workspaceFolderUri: string): WorkspaceServerRecord[];
   getRuntimeState(serverKey: ServerId): ServerRuntimeState | undefined;
   getDeploymentState(serverKey: ServerId, deploymentId: DeploymentId): DeploymentState;
+  getDeploymentHealth?(serverKey: ServerId, deploymentId: DeploymentId): HealthReport | undefined;
 }
 
 // ── Tree Nodes ──────────────────────────────────────────────────────────────
@@ -114,11 +116,13 @@ export class DeploymentNode extends vscode.TreeItem {
   readonly serverId: ServerId;
   readonly deploymentId: DeploymentId;
   readonly deploymentConfig: DeploymentConfig;
+  readonly healthReport: HealthReport | undefined;
 
   constructor(
     serverNode: ServerNode | ServerId,
     dep: DeploymentConfig,
     state: DeploymentState,
+    healthReport?: HealthReport,
   ) {
     super(dep.deployName, vscode.TreeItemCollapsibleState.None);
 
@@ -137,18 +141,22 @@ export class DeploymentNode extends vscode.TreeItem {
     this.serverId = normalizedServerNode.serverId;
     this.deploymentId = dep.id;
     this.deploymentConfig = dep;
+    this.healthReport = healthReport;
     this.contextValue = deploymentContextValue(dep.type, state);
     this.description = `${dep.type} • ${state}`;
     this.iconPath = new vscode.ThemeIcon(DEPLOYMENT_ICON[state]);
-    this.tooltip = DeploymentNode.buildTooltip(dep, state);
+    this.tooltip = DeploymentNode.buildTooltip(dep, state, healthReport);
   }
 
-  private static buildTooltip(dep: DeploymentConfig, state: DeploymentState): vscode.MarkdownString {
+  private static buildTooltip(dep: DeploymentConfig, state: DeploymentState, health?: HealthReport): vscode.MarkdownString {
     const md = new vscode.MarkdownString();
     md.isTrusted = true;
     md.appendMarkdown(`**${dep.deployName}**\n\n`);
     md.appendMarkdown(`- **Type:** ${dep.type}\n`);
     md.appendMarkdown(`- **State:** ${state}\n`);
+    if (health !== undefined) {
+      md.appendMarkdown(`- **Health:** ${health.ok ? 'OK' : 'Unhealthy'}${health.latencyMs != null ? ` (${health.latencyMs} ms)` : ''}\n`);
+    }
     md.appendMarkdown(`- **Source:** ${dep.sourcePath}\n`);
     md.appendMarkdown(`- **Auto-Sync:** ${dep.syncMode}\n`);
     return md;
@@ -248,12 +256,14 @@ export class ServerTreeViewProvider
   }
 
   private getDeploymentNodes(serverNode: ServerNode): DeploymentNode[] {
+    const dataSource = this.dataSource;
     return serverNode.serverConfig.deployments.map(dep => {
-      const state = this.dataSource.getDeploymentState(
+      const state = dataSource.getDeploymentState(
         serverNode.serverKey,
         dep.id,
       );
-      return new DeploymentNode(serverNode, dep, state);
+      const health = dataSource.getDeploymentHealth?.(serverNode.serverKey, dep.id);
+      return new DeploymentNode(serverNode, dep, state, health);
     });
   }
 

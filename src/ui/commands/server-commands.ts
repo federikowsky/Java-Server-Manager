@@ -14,7 +14,6 @@ import { exists } from '@infra/fs';
 import type { ServerTreeViewProvider } from '@ui/tree/ServerTreeViewProvider';
 import type { ServerFormPanel } from '@ui/webviews/panels/ServerFormPanel';
 import {
-  deferredStub,
   isServerNode,
   registerMany,
   showErr,
@@ -80,6 +79,24 @@ async function openConfigFile(targetPath: string): Promise<void> {
   await vscode.window.showTextDocument(document, { preview: false });
 }
 
+/** Clone server config for duplicate command: new id, name (Copy), runtime.id; instancePath unchanged. */
+function cloneServerConfigForDuplicate(source: ServerConfig): ServerConfig {
+  const newId = crypto.randomUUID();
+  return {
+    ...source,
+    id: newId,
+    name: `${source.name} (Copy)`,
+    runtime: {
+      ...source.runtime,
+      id: crypto.randomUUID(),
+    },
+    deployments: source.deployments.map(d => ({ ...d })),
+    hooks: source.hooks.map(h => ({ ...h })),
+    autosync: { ...source.autosync },
+    pluginConfig: source.pluginConfig ? { ...source.pluginConfig } : undefined,
+  };
+}
+
 async function resolveConfigSources(
   pluginRegistry: PluginRegistry,
   config: ServerConfig,
@@ -133,14 +150,34 @@ export function registerServerCommands(
       serverFormPanel.open?.('create');
     }],
 
-    ['jsm.server.startRun', (arg: unknown) => {
+    ['jsm.server.startRun', async (arg: unknown) => {
       if (!isServerNode(arg)) return;
+      const config = resolveServer(arg.workspaceFolderUri, arg.serverId);
+      if (config?.deployments?.length) {
+        try {
+          const ctx = makeOpCtx(arg.serverKey, 'RedeployAll');
+          await deployService.deployUndeployed(ctx, config);
+        } catch (e) {
+          showErr(JsmError.fromUnknown(e));
+          return;
+        }
+      }
       const result = lifecycle.start(arg.serverKey, 'run');
       if (!result.ok) showErr(result.error);
     }],
 
-    ['jsm.server.startDebug', (arg: unknown) => {
+    ['jsm.server.startDebug', async (arg: unknown) => {
       if (!isServerNode(arg)) return;
+      const config = resolveServer(arg.workspaceFolderUri, arg.serverId);
+      if (config?.deployments?.length) {
+        try {
+          const ctx = makeOpCtx(arg.serverKey, 'RedeployAll');
+          await deployService.deployUndeployed(ctx, config);
+        } catch (e) {
+          showErr(JsmError.fromUnknown(e));
+          return;
+        }
+      }
       const result = lifecycle.start(arg.serverKey, 'debug');
       if (!result.ok) showErr(result.error);
     }],
@@ -180,7 +217,26 @@ export function registerServerCommands(
       serverFormPanel.open?.('edit', arg.serverId);
     }],
 
-    ['jsm.server.duplicate', deferredStub('Duplicate Server')],
+    ['jsm.server.duplicate', async (arg: unknown) => {
+      if (!isServerNode(arg)) return;
+
+      if (!workspaceRegistry) {
+        showErr(new JsmError({
+          code: ErrorCode.InvalidConfig,
+          message: 'Duplicate server is only available when using workspace registry.',
+        }));
+        return;
+      }
+
+      const cloned = cloneServerConfigForDuplicate(arg.serverConfig);
+      const result = await workspaceRegistry.addServer(arg.workspaceFolderUri, cloned);
+      if (!result.ok) {
+        showErr(result.error);
+        return;
+      }
+      showSuccess(`Server "${cloned.name}" added.`);
+      treeProvider.requestRefresh();
+    }],
 
     ['jsm.server.remove', async (arg: unknown) => {
       if (!isServerNode(arg)) return;
@@ -289,6 +345,17 @@ export function registerServerCommands(
         : await configService?.reload();
       if (!result) return;
       if (!result.ok) { showErr(result.error); return; }
+      for (const serverKey of lifecycle.getServerKeysInState('running', 'starting')) {
+        lifecycle.refreshStatus(serverKey);
+      }
+      if (workspaceRegistry) {
+        for (const serverKey of lifecycle.getServerKeysInState('running', 'starting')) {
+          const record = workspaceRegistry.getServerRecordByKey(serverKey);
+          if (record?.config) {
+            await deployService.runHealthChecksForServer(serverKey, record.config);
+          }
+        }
+      }
       treeProvider.forceRefresh();
     }],
   ]);

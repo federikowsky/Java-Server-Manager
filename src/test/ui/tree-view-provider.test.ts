@@ -86,8 +86,19 @@ function makeDep(id = 'dep-1', deployName = 'myapp'): DeploymentConfig {
 }
 
 function mockDataSource(servers: ServerConfig[] = []): TreeDataSource {
+  const workspaceFolderUri = 'file:///test-ws';
+  const workspaceFolderName = 'test-ws';
+  const records = servers.map(config => ({
+    workspaceFolderUri,
+    workspaceFolderName,
+    workspaceFolderFsPath: '/test-ws',
+    serverId: config.id,
+    serverKey: config.id,
+    config,
+  }));
   return {
-    getAllServers: vi.fn(() => servers),
+    getWorkspaceFolders: vi.fn(() => [{ workspaceFolderUri, workspaceFolderName }]),
+    getServers: vi.fn((_uri: string) => records),
     getRuntimeState: vi.fn((_sid: ServerId) => undefined),
     getDeploymentState: vi.fn((_sid: ServerId, _did: DeploymentId) => 'undeployed' as DeploymentState),
   };
@@ -219,7 +230,7 @@ describe('ServerTreeViewProvider', () => {
 
         const [serverNode] = provider.getChildren();
         const [depNode] = provider.getChildren(serverNode as any) as InstanceType<typeof DeploymentNode>[];
-        expect(depNode.contextValue).toBe(`jsm.deployment.${state}`);
+        expect(depNode.contextValue).toBe(`jsm.deployment.exploded.${state}`);
       });
     }
   });

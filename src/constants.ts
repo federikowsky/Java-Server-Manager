@@ -23,6 +23,7 @@ export const AUTOSYNC_FAILURE_WINDOW_MS = 10 * 60 * 1000; // 10 min
 export const AUTOSYNC_FAILURE_THRESHOLD = 2;
 export const WATCHER_GLOBAL_CAP = 30;
 export const READINESS_PROBE_INTERVAL_MS = 250;
+export const STARTUP_CALLBACK_DEBOUNCE_MS = 150;
 
 // ── Reconciliation ──────────────────────────────────────────────────────────
 export const RECONCILIATION_BUDGET_MS = 2000;

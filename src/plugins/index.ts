@@ -2,6 +2,8 @@ export type {
   IServerPlugin,
   PluginCapabilities,
   DetectReport,
+  StartupOutcome,
+  StartupMonitor,
   StartResult,
   StatusReport,
   HealthReport,

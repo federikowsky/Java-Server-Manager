@@ -10,6 +10,7 @@ import type { DeploymentService } from '@app/deployment/DeploymentService';
 import type { WorkspaceServiceRegistry, WorkspaceScope } from '@app/config';
 import type { PluginRegistry } from '@plugins/registry/PluginRegistry';
 import type { ConfigSource } from '@plugins/interfaces/IServerPlugin';
+import type { SchemaValidator } from '@core/validation/SchemaValidator';
 import { exists } from '@infra/fs';
 import type { ServerTreeViewProvider } from '@ui/tree/ServerTreeViewProvider';
 import type { ServerFormPanel } from '@ui/webviews/panels/ServerFormPanel';
@@ -19,6 +20,7 @@ import {
   showErr,
   showSuccess,
 } from './shared';
+import * as fs from 'fs/promises';
 
 export interface ServerCommandsDeps {
   lifecycle: ServerLifecycle;
@@ -33,6 +35,7 @@ export interface ServerCommandsDeps {
   };
   deployService: DeploymentService;
   treeProvider: ServerTreeViewProvider;
+  schemaValidator?: SchemaValidator;
   serverFormPanel: ServerFormPanel | {
     open?(mode: 'create' | 'edit', serverId?: string): void;
     openCreate?(workspaceFolderUri: string, template?: import('@core/types').ServerTemplate): void;
@@ -109,6 +112,7 @@ export function registerServerCommands(
     provisioningService,
     deployService,
     treeProvider,
+    schemaValidator,
     serverFormPanel,
   } = deps;
 
@@ -348,6 +352,119 @@ export function registerServerCommands(
         }
       }
       treeProvider.forceRefresh();
+    }],
+
+    ['jsm.server.export', async () => {
+      if (!workspaceRegistry) {
+        showErr(new JsmError({
+          code: ErrorCode.InvalidConfig,
+          message: 'Export is only available when using workspace registry.',
+        }));
+        return;
+      }
+      const scope = await pickWorkspaceScope(workspaceRegistry.getWorkspaceScopes());
+      if (!scope) return;
+      const records = workspaceRegistry.getServers(scope.uri);
+      const configs = records.map(r => r.config);
+      if (configs.length === 0) {
+        void vscode.window.showInformationMessage('JSM: No servers to export in this workspace.');
+        return;
+      }
+      const defaultUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+      const saveUri = await vscode.window.showSaveDialog({
+        filters: { JSON: ['json'] },
+        defaultUri: defaultUri ? vscode.Uri.joinPath(defaultUri, 'jsm.servers.export.json') : undefined,
+      });
+      if (!saveUri) return;
+      try {
+        await fs.writeFile(saveUri.fsPath, JSON.stringify({ servers: configs }, null, 2), 'utf8');
+        showSuccess(`Config exported to ${saveUri.fsPath}.`);
+      } catch (e) {
+        showErr(JsmError.fromUnknown(e));
+      }
+    }],
+
+    ['jsm.server.import', async () => {
+      if (!workspaceRegistry) {
+        showErr(new JsmError({
+          code: ErrorCode.InvalidConfig,
+          message: 'Import is only available when using workspace registry.',
+        }));
+        return;
+      }
+      if (!schemaValidator) {
+        showErr(new JsmError({
+          code: ErrorCode.InvalidConfig,
+          message: 'Import requires schema validator.',
+        }));
+        return;
+      }
+      const defaultUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+      const uris = await vscode.window.showOpenDialog({
+        canSelectFiles: true,
+        canSelectMany: false,
+        filters: { JSON: ['json'] },
+        defaultUri: defaultUri ?? undefined,
+      });
+      if (!uris?.length) return;
+      const fileUri = uris[0];
+      let content: string;
+      try {
+        content = await fs.readFile(fileUri.fsPath, 'utf8');
+      } catch (e) {
+        showErr(JsmError.fromUnknown(e));
+        return;
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(content);
+      } catch {
+        showErr(new JsmError({
+          code: ErrorCode.InvalidConfig,
+          message: 'Invalid JSON.',
+        }));
+        return;
+      }
+      if (typeof parsed !== 'object' || parsed === null || !Array.isArray((parsed as { servers?: unknown }).servers)) {
+        showErr(new JsmError({
+          code: ErrorCode.InvalidConfig,
+          message: 'Invalid format: expected { servers: [...] }.',
+        }));
+        return;
+      }
+      const validationResult = schemaValidator.validate(parsed, 'workspace');
+      if (!validationResult.ok) {
+        showErr(validationResult.error);
+        return;
+      }
+      const { servers: serverConfigs } = parsed as { servers: ServerConfig[] };
+      if (serverConfigs.length === 0) {
+        void vscode.window.showInformationMessage('JSM: No servers in file.');
+        return;
+      }
+      const scope = await pickWorkspaceScope(workspaceRegistry.getWorkspaceScopes());
+      if (!scope) return;
+      const entry = workspaceRegistry.getEntry(scope.uri);
+      if (!entry) {
+        showErr(new JsmError({
+          code: ErrorCode.InvalidConfig,
+          message: 'Workspace not found.',
+        }));
+        return;
+      }
+      let imported = 0;
+      for (const serverConfig of serverConfigs) {
+        const result = await entry.provisioningService.duplicateServer(serverConfig, { keepName: true });
+        if (!result.ok) {
+          showErr(result.error);
+          break;
+        }
+        imported += 1;
+      }
+      if (imported > 0) {
+        showSuccess(`Imported ${imported} server(s) into workspace "${scope.name}".`);
+        treeProvider.requestRefresh();
+      }
     }],
   ]);
 }

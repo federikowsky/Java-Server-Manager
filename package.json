@@ -57,7 +57,7 @@
       {
         "command": "jsm.server.redeployAll",
         "title": "Redeploy All",
-        "icon": "$(cloud-upload)"
+        "icon": "$(repo-push)"
       },
       {
         "command": "jsm.server.remove",
@@ -92,7 +92,7 @@
       {
         "command": "jsm.deployment.redeploy",
         "title": "Redeploy",
-        "icon": "$(cloud-upload)"
+        "icon": "$(repo-push)"
       },
       {
         "command": "jsm.deployment.undeploy",
@@ -125,6 +125,16 @@
         "icon": "$(exclude)"
       },
       {
+        "command": "jsm.server.export",
+        "title": "Export Server Configs",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "jsm.server.import",
+        "title": "Import Server Configs",
+        "icon": "$(cloud-download)"
+      },
+      {
         "command": "jsm.deployment.openLogs",
         "title": "Deployment Logs",
         "icon": "$(output)"
@@ -143,9 +153,19 @@
           "group": "navigation@2"
         },
         {
-          "command": "jsm.templates.manage",
+          "command": "jsm.server.export",
           "when": "view == javaServerManagerView",
           "group": "navigation@3"
+        },
+        {
+          "command": "jsm.server.import",
+          "when": "view == javaServerManagerView",
+          "group": "navigation@4"
+        },
+        {
+          "command": "jsm.templates.manage",
+          "when": "view == javaServerManagerView",
+          "group": "navigation@5"
         }
       ],
       "view/item/context": [

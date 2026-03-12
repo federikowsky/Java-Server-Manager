@@ -8,7 +8,16 @@ const mockShowErrorMessage = vi.fn();
 const mockShowInfoMessage = vi.fn();
 const mockShowWarningMessage = vi.fn();
 const mockShowQuickPick = vi.fn();
+const mockShowSaveDialog = vi.fn();
+const mockShowOpenDialog = vi.fn();
 const mockShowTextDocument = vi.fn();
+const mockWriteFile = vi.fn();
+const mockReadFile = vi.fn();
+
+vi.mock('fs/promises', () => ({
+  writeFile: (...args: unknown[]) => mockWriteFile(...args),
+  readFile: (...args: unknown[]) => mockReadFile(...args),
+}));
 const mockOpenTextDocument = vi.fn(async (uri: { fsPath: string; path: string }) => ({ uri }));
 const mockExecuteCommand = vi.fn();
 const registeredHandlers: Record<string, (...args: unknown[]) => unknown> = {};
@@ -19,11 +28,14 @@ vi.mock('vscode', () => ({
     showInformationMessage: mockShowInfoMessage,
     showWarningMessage: mockShowWarningMessage,
     showQuickPick: mockShowQuickPick,
+    showSaveDialog: mockShowSaveDialog,
+    showOpenDialog: mockShowOpenDialog,
     showTextDocument: mockShowTextDocument,
     createTreeView: vi.fn(() => ({ dispose: vi.fn() })),
   },
   workspace: {
     openTextDocument: mockOpenTextDocument,
+    workspaceFolders: [{ uri: { fsPath: '/ws', path: '/ws' } }],
   },
   commands: {
     registerCommand: vi.fn((id: string, handler: (...args: unknown[]) => unknown) => {
@@ -34,6 +46,8 @@ vi.mock('vscode', () => ({
   },
   Uri: {
     file: (p: string) => ({ fsPath: p, path: p }),
+    joinPath: vi.fn((base: { fsPath: string }, ...segments: string[]) =>
+      ({ fsPath: [base.fsPath, ...segments].join('/'), path: [base.path, ...segments].join('/') })),
   },
   ViewColumn: { One: 1 },
   TreeItemCollapsibleState: { None: 0, Collapsed: 1, Expanded: 2 },
@@ -110,6 +124,8 @@ function mockDeps() {
       addServer: vi.fn(async () => ok(undefined)),
       getServer: vi.fn(),
       getEntry: vi.fn(),
+      getWorkspaceScopes: vi.fn(() => [{ uri: 'file:///ws', name: 'ws', fsPath: '/ws' }]),
+      getServers: vi.fn(() => []),
     },
     configService: {
       getServer: vi.fn((_id: string) => makeServer(_id)),
@@ -130,6 +146,9 @@ function mockDeps() {
     treeProvider: {
       requestRefresh: vi.fn(),
       forceRefresh: vi.fn(),
+    },
+    schemaValidator: {
+      validate: vi.fn(() => ok(undefined)),
     },
     serverFormPanel: {
       open: vi.fn(),
@@ -293,6 +312,127 @@ describe('Server Commands', () => {
       expect(mockShowErrorMessage).toHaveBeenCalledWith(
         expect.stringContaining('workspace registry'),
       );
+    });
+  });
+
+  describe('jsm.server.export', () => {
+    it('shows error when workspaceRegistry is not available', async () => {
+      const depsWithoutRegistry = mockDeps();
+      delete (depsWithoutRegistry as any).workspaceRegistry;
+      Object.keys(registeredHandlers).forEach(key => delete registeredHandlers[key]);
+      registerServerCommands(depsWithoutRegistry as any);
+      await invoke('jsm.server.export');
+      expect(mockShowErrorMessage).toHaveBeenCalledWith(expect.stringContaining('Export is only available'));
+    });
+
+    it('shows info and does not write when workspace has no servers', async () => {
+      deps.workspaceRegistry.getWorkspaceScopes.mockReturnValue([{ uri: 'file:///ws', name: 'ws', fsPath: '/ws' }]);
+      deps.workspaceRegistry.getServers.mockReturnValue([]);
+      await invoke('jsm.server.export');
+      expect(mockShowInfoMessage).toHaveBeenCalledWith(expect.stringContaining('No servers to export'));
+      expect(mockShowSaveDialog).not.toHaveBeenCalled();
+      expect(mockWriteFile).not.toHaveBeenCalled();
+    });
+
+    it('does not write when user cancels save dialog', async () => {
+      const server = makeServer();
+      deps.workspaceRegistry.getWorkspaceScopes.mockReturnValue([{ uri: 'file:///ws', name: 'ws', fsPath: '/ws' }]);
+      deps.workspaceRegistry.getServers.mockReturnValue([{ config: server }]);
+      mockShowSaveDialog.mockResolvedValue(undefined);
+      await invoke('jsm.server.export');
+      expect(mockShowSaveDialog).toHaveBeenCalled();
+      expect(mockWriteFile).not.toHaveBeenCalled();
+    });
+
+    it('writes JSON and shows success when user selects path', async () => {
+      const server = makeServer('srv-1', 'My Tomcat');
+      deps.workspaceRegistry.getWorkspaceScopes.mockReturnValue([{ uri: 'file:///ws', name: 'ws', fsPath: '/ws' }]);
+      deps.workspaceRegistry.getServers.mockReturnValue([{ config: server }]);
+      const saveUri = { fsPath: '/out/export.json' };
+      mockShowSaveDialog.mockResolvedValue(saveUri);
+      mockWriteFile.mockResolvedValue(undefined);
+      await invoke('jsm.server.export');
+      expect(mockWriteFile).toHaveBeenCalledWith(
+        '/out/export.json',
+        JSON.stringify({ servers: [server] }, null, 2),
+        'utf8',
+      );
+      expect(mockShowInfoMessage).toHaveBeenCalledWith(expect.stringContaining('exported to'));
+    });
+  });
+
+  describe('jsm.server.import', () => {
+    it('shows error when workspaceRegistry is not available', async () => {
+      const depsWithoutRegistry = mockDeps();
+      delete (depsWithoutRegistry as any).workspaceRegistry;
+      Object.keys(registeredHandlers).forEach(key => delete registeredHandlers[key]);
+      registerServerCommands(depsWithoutRegistry as any);
+      await invoke('jsm.server.import');
+      expect(mockShowErrorMessage).toHaveBeenCalledWith(expect.stringContaining('Import is only available'));
+    });
+
+    it('shows error when schemaValidator is not available', async () => {
+      const depsWithoutValidator = mockDeps();
+      delete (depsWithoutValidator as any).schemaValidator;
+      Object.keys(registeredHandlers).forEach(key => delete registeredHandlers[key]);
+      registerServerCommands(depsWithoutValidator as any);
+      await invoke('jsm.server.import');
+      expect(mockShowErrorMessage).toHaveBeenCalledWith(expect.stringContaining('schema validator'));
+    });
+
+    it('does nothing when user cancels open dialog', async () => {
+      mockShowOpenDialog.mockResolvedValue(undefined);
+      await invoke('jsm.server.import');
+      expect(mockReadFile).not.toHaveBeenCalled();
+    });
+
+    it('shows error for invalid JSON', async () => {
+      mockShowOpenDialog.mockResolvedValue([{ fsPath: '/f.json' }]);
+      mockReadFile.mockResolvedValue('not json');
+      await invoke('jsm.server.import');
+      expect(mockShowErrorMessage).toHaveBeenCalledWith(expect.stringContaining('Invalid JSON'));
+      expect(deps.workspaceRegistry.getEntry).not.toHaveBeenCalled();
+    });
+
+    it('shows error for invalid format (no servers array)', async () => {
+      mockShowOpenDialog.mockResolvedValue([{ fsPath: '/f.json' }]);
+      mockReadFile.mockResolvedValue('{"other": true}');
+      await invoke('jsm.server.import');
+      expect(mockShowErrorMessage).toHaveBeenCalledWith(expect.stringContaining('Invalid format'));
+      expect(deps.workspaceRegistry.getEntry).not.toHaveBeenCalled();
+    });
+
+    it('shows error when schema validation fails', async () => {
+      mockShowOpenDialog.mockResolvedValue([{ fsPath: '/f.json' }]);
+      mockReadFile.mockResolvedValue(JSON.stringify({ servers: [makeServer()] }));
+      deps.schemaValidator.validate.mockReturnValue(err(new JsmError({ code: ErrorCode.InvalidConfig, message: 'Schema error' })));
+      await invoke('jsm.server.import');
+      expect(mockShowErrorMessage).toHaveBeenCalledWith(expect.stringContaining('JSM:'));
+      expect(deps.workspaceRegistry.getEntry).not.toHaveBeenCalled();
+    });
+
+    it('shows info when file has no servers', async () => {
+      mockShowOpenDialog.mockResolvedValue([{ fsPath: '/f.json' }]);
+      mockReadFile.mockResolvedValue(JSON.stringify({ servers: [] }));
+      deps.schemaValidator.validate.mockReturnValue(ok(undefined));
+      await invoke('jsm.server.import');
+      expect(mockShowInfoMessage).toHaveBeenCalledWith(expect.stringContaining('No servers in file'));
+      expect(deps.workspaceRegistry.getEntry).not.toHaveBeenCalled();
+    });
+
+    it('calls duplicateServer for each server and refreshes', async () => {
+      const server = makeServer('srv-1', 'My Tomcat');
+      mockShowOpenDialog.mockResolvedValue([{ fsPath: '/f.json' }]);
+      mockReadFile.mockResolvedValue(JSON.stringify({ servers: [server] }));
+      deps.schemaValidator.validate.mockReturnValue(ok(undefined));
+      mockShowQuickPick.mockResolvedValue({ scope: { uri: 'file:///ws', name: 'ws', fsPath: '/ws' } });
+      const mockDuplicate = vi.fn(async () => ok({ ...server, id: 'srv-2', instancePath: '/new' }));
+      deps.workspaceRegistry.getEntry.mockReturnValue({ provisioningService: { duplicateServer: mockDuplicate } });
+      await invoke('jsm.server.import');
+      expect(mockDuplicate).toHaveBeenCalledTimes(1);
+      expect(mockDuplicate).toHaveBeenCalledWith(server, { keepName: true });
+      expect(mockShowInfoMessage).toHaveBeenCalledWith(expect.stringContaining('Imported 1 server(s)'));
+      expect(deps.treeProvider.requestRefresh).toHaveBeenCalled();
     });
   });
 });

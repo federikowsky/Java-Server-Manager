@@ -120,8 +120,13 @@ export class ServerProvisioningService {
   /**
    * Duplicate a server: clone config with new id, new instancePath (own instance), init dir, save.
    * After duplicate, the two servers are independent (fork).
+   * @param options.keepName - if true, keep the source name (used for import from file); default false adds " (Copy)".
    */
-  async duplicateServer(source: ServerConfig): Promise<Result<ServerConfig, JsmError>> {
+  async duplicateServer(
+    source: ServerConfig,
+    options?: { keepName?: boolean },
+  ): Promise<Result<ServerConfig, JsmError>> {
+    const keepName = options?.keepName ?? false;
     const plugin = this.pluginRegistry.get(source.type);
     if (!plugin) {
       return err(new JsmError({
@@ -141,7 +146,7 @@ export class ServerProvisioningService {
     const cloned: ServerConfig = {
       ...source,
       id: newId,
-      name: `${source.name} (Copy)`,
+      name: keepName ? source.name : `${source.name} (Copy)`,
       runtime: {
         ...source.runtime,
         id: uuid(),

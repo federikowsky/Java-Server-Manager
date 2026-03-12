@@ -155,7 +155,7 @@ export class DeploymentNode extends vscode.TreeItem {
     md.appendMarkdown(`- **Type:** ${dep.type}\n`);
     md.appendMarkdown(`- **State:** ${state}\n`);
     if (health !== undefined) {
-      md.appendMarkdown(`- **Health:** ${health.ok ? 'OK' : 'Unhealthy'}${health.latencyMs != null ? ` (${health.latencyMs} ms)` : ''}\n`);
+      md.appendMarkdown(`- **Health:** ${health.ok ? 'OK' : 'Unhealthy'}${health.latencyMs !== null ? ` (${health.latencyMs} ms)` : ''}\n`);
     }
     md.appendMarkdown(`- **Source:** ${dep.sourcePath}\n`);
     md.appendMarkdown(`- **Auto-Sync:** ${dep.syncMode}\n`);

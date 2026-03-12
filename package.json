@@ -210,12 +210,17 @@
           "group": "manage@1"
         },
         {
-          "command": "jsm.server.remove",
+          "command": "jsm.server.duplicate",
+          "when": "view == javaServerManagerView && viewItem =~ /jsm\\.server\\..*/",
+          "group": "manage@1.5"
+        },
+        {
+          "command": "jsm.server.openFolder",
           "when": "view == javaServerManagerView && viewItem =~ /jsm\\.server\\..*/",
           "group": "manage@2"
         },
         {
-          "command": "jsm.server.openFolder",
+          "command": "jsm.server.remove",
           "when": "view == javaServerManagerView && viewItem =~ /jsm\\.server\\..*/",
           "group": "manage@2.5"
         },
@@ -248,6 +253,11 @@
           "command": "jsm.deployment.remove",
           "when": "view == javaServerManagerView && viewItem =~ /jsm\\.deployment\\..*/",
           "group": "manage@2"
+        },
+        {
+          "command": "jsm.deployment.openLogs",
+          "when": "view == javaServerManagerView && viewItem =~ /jsm\\.deployment\\..*/",
+          "group": "troubleshooting@1"
         }
       ]
     },

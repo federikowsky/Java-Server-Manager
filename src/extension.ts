@@ -360,6 +360,7 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
     }),
     ...registerDeploymentCommands({
       workspaceRegistry: workspaceServiceRegistry,
+      pluginRegistry,
       deployService,
       treeProvider,
       deploymentFormPanel,

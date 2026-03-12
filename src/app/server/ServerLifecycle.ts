@@ -1,6 +1,7 @@
 import type {
   ServerConfig,
   ServerId,
+  ServerState,
   StartMode,
   OperationContext,
   OperationKind,
@@ -239,6 +240,14 @@ export class ServerLifecycle {
     return ok(undefined);
   }
 
+  /** Return server keys whose runtime state is one of the given states (e.g. for status refresh). */
+  getServerKeysInState(...states: ServerState[]): ServerId[] {
+    const set = new Set(states);
+    return [...this.servers.entries()]
+      .filter(([, e]) => set.has(e.runtime.state))
+      .map(([k]) => k);
+  }
+
   // ── Reconciliation (§9.9) ─────────────────────────────────────────
 
   /**
@@ -393,6 +402,23 @@ export class ServerLifecycle {
 
       runtime.transition('running', { pid });
 
+      if (plugin.healthCheck) {
+        const healthResult = await plugin.healthCheck(ctx, config);
+        if (!healthResult.ok) {
+          runtime.transition('error', { error: healthResult.error });
+          throw healthResult.error;
+        }
+        if (!healthResult.value.ok) {
+          const err = new JsmError({
+            code: ErrorCode.ValidationFailed,
+            message: 'Health check failed: server not responding',
+            details: `HTTP probe to ${config.host}:${config.ports.http} failed`,
+          });
+          runtime.transition('error', { error: err });
+          throw err;
+        }
+      }
+
       if (mode === 'debug' && config.debug.enabled) {
         await sleep(config.debug.attachDelayMs);
         await this.deps.debugAttacher.attach({
@@ -509,6 +535,23 @@ export class ServerLifecycle {
     const status = result.value;
     if (status.state !== runtime.state) {
       runtime.forceState(status.state, { pid: status.pid });
+    }
+
+    if (status.state === 'running' && plugin.healthCheck) {
+      const healthResult = await plugin.healthCheck(ctx, config);
+      if (!healthResult.ok) {
+        runtime.transition('error', { error: healthResult.error });
+        return;
+      }
+      if (!healthResult.value.ok) {
+        runtime.transition('error', {
+          error: new JsmError({
+            code: ErrorCode.ValidationFailed,
+            message: 'Health check failed: server not responding',
+            details: `HTTP probe to ${config.host}:${config.ports.http} failed`,
+          }),
+        });
+      }
     }
   }
 

@@ -1,11 +1,14 @@
 import * as vscode from 'vscode';
 import type { SyncMode, OperationContext, ServerConfig, DeploymentConfig } from '@core/types';
 import type { Result } from '@core/result';
-import type { JsmError } from '@core/errors/JsmError';
+import { JsmError } from '@core/errors/JsmError';
+import { ErrorCode } from '@core/errors/codes';
 import type { WorkspaceServiceRegistry } from '@app/config';
 import type { DeploymentService } from '@app/deployment/DeploymentService';
 import type { ServerTreeViewProvider } from '@ui/tree/ServerTreeViewProvider';
 import type { DeploymentFormPanel } from '@ui/webviews/panels/DeploymentFormPanel';
+import type { PluginRegistry } from '@plugins/registry/PluginRegistry';
+import type { LogSources } from '@plugins/interfaces/IServerPlugin';
 import {
   showErr,
   showSuccess,
@@ -24,6 +27,7 @@ export interface DeploymentCommandsDeps {
     updateServer(config: ServerConfig): Promise<Result<void, JsmError>>;
     removeDeployment(serverId: string, deploymentId: string): Promise<Result<void, JsmError>>;
   };
+  pluginRegistry: PluginRegistry;
   deployService: DeploymentService;
   treeProvider: ServerTreeViewProvider;
   deploymentFormPanel: DeploymentFormPanel | {
@@ -34,6 +38,22 @@ export interface DeploymentCommandsDeps {
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
+
+/** Collect file log sources from LogSources (only kind === 'file' with path). */
+function collectFileLogPaths(sources: LogSources): { path: string; title: string }[] {
+  const add = (out: { path: string; title: string }[], s?: { kind: string; path?: string; title?: string; id: string }) => {
+    if (s?.kind === 'file' && s.path) out.push({ path: s.path, title: s.title ?? s.id });
+  };
+  const out: { path: string; title: string }[] = [];
+  add(out, sources.primary);
+  sources.others.forEach(o => add(out, o));
+  return out;
+}
+
+async function openLogFile(filePath: string): Promise<void> {
+  const document = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
+  await vscode.window.showTextDocument(document, { preview: false });
+}
 
 function nextSyncMode(current: SyncMode): SyncMode {
   const cycle: SyncMode[] = ['manual', 'auto'];
@@ -59,7 +79,7 @@ function makeOpCtx(serverId: string, kind: OperationContext['kind'], deploymentI
 export function registerDeploymentCommands(
   deps: DeploymentCommandsDeps,
 ): vscode.Disposable[] {
-  const { workspaceRegistry, configService, deployService, treeProvider, deploymentFormPanel } = deps;
+  const { workspaceRegistry, configService, pluginRegistry, deployService, treeProvider, deploymentFormPanel } = deps;
   const resolveServer = (workspaceFolderUri: string, serverId: string) => workspaceRegistry
     ? workspaceRegistry.getServer({ workspaceFolderUri, serverId })
     : configService?.getServer(serverId);
@@ -175,6 +195,61 @@ export function registerDeploymentCommands(
     }],
 
     // §8.2 — jsm.deployment.openLogs (deferred-v1.1)
-    ['jsm.deployment.openLogs', deferredStub('Deployment Logs')],
+    ['jsm.deployment.openLogs', async (arg: unknown) => {
+      if (!isDeploymentNode(arg)) return;
+
+      const config = resolveServer(arg.workspaceFolderUri, arg.serverId);
+      if (!config) {
+        showErr(new JsmError({
+          code: ErrorCode.InvalidConfig,
+          message: `Server not found for deployment.`,
+          details: `workspaceFolderUri=${arg.workspaceFolderUri}, serverId=${arg.serverId}`,
+        }));
+        return;
+      }
+
+      const plugin = pluginRegistry.get(config.type);
+      if (!plugin) {
+        showErr(new JsmError({
+          code: ErrorCode.InvalidConfig,
+          message: `No plugin registered for server type '${config.type}'.`,
+        }));
+        return;
+      }
+
+      const sourcesResult = await plugin.getLogSources(config);
+      if (!sourcesResult.ok) {
+        showErr(sourcesResult.error);
+        return;
+      }
+
+      const files = collectFileLogPaths(sourcesResult.value);
+      if (files.length === 0) {
+        await vscode.window.showInformationMessage(
+          `No file log sources are available for server "${config.name}".`,
+        );
+        return;
+      }
+
+      const openOne = async (filePath: string): Promise<void> => {
+        try {
+          await openLogFile(filePath);
+        } catch (e) {
+          showErr(JsmError.fromUnknown(e, ErrorCode.InvalidConfig));
+        }
+      };
+
+      if (files.length === 1) {
+        await openOne(files[0].path);
+        return;
+      }
+
+      const picked = await vscode.window.showQuickPick(
+        files.map(f => ({ label: f.title, description: f.path, path: f.path })),
+        { placeHolder: 'Select a log file to open', ignoreFocusOut: true },
+      );
+      if (!picked) return;
+      await openOne(picked.path);
+    }],
   ]);
 }

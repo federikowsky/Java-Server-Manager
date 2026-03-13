@@ -52,7 +52,8 @@ export interface TemplateManagerPanelDeps {
   templateService: TemplateService;
   workspaceRegistry: WorkspaceServiceRegistry;
   serverFormPanel: ServerFormPanel | {
-    openCreate?(workspaceFolderUri: string, template?: ServerTemplate): void;
+    openCreate?(workspaceFolderUri: string, initialData?: Record<string, unknown>): void;
+    openCreateWithTemplate?(workspaceFolderUri: string, template?: ServerTemplate): void;
   };
   logger: Logger;
 }
@@ -214,7 +215,11 @@ export class TemplateManagerPanel implements vscode.Disposable {
       return;
     }
 
-    this.serverFormPanel.openCreate?.(scope.uri, entry.template);
+    if (this.serverFormPanel.openCreateWithTemplate) {
+      this.serverFormPanel.openCreateWithTemplate(scope.uri, entry.template);
+    } else {
+      this.serverFormPanel.openCreate?.(scope.uri, entry.template as unknown as Record<string, unknown>);
+    }
     this.panel?.dispose();
   }
 

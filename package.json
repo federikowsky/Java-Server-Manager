@@ -20,6 +20,11 @@
         "icon": "$(add)"
       },
       {
+        "command": "jsm.server.autodiscover",
+        "title": "Autodiscover Servers",
+        "icon": "$(search)"
+      },
+      {
         "command": "jsm.templates.manage",
         "title": "Manage Templates",
         "icon": "$(settings-gear)"
@@ -158,24 +163,29 @@
           "group": "navigation@1"
         },
         {
-          "command": "jsm.view.refresh",
+          "command": "jsm.server.autodiscover",
           "when": "view == javaServerManagerView",
           "group": "navigation@2"
         },
         {
-          "command": "jsm.server.export",
+          "command": "jsm.view.refresh",
           "when": "view == javaServerManagerView",
           "group": "navigation@3"
         },
         {
-          "command": "jsm.server.import",
+          "command": "jsm.server.export",
           "when": "view == javaServerManagerView",
           "group": "navigation@4"
         },
         {
-          "command": "jsm.templates.manage",
+          "command": "jsm.server.import",
           "when": "view == javaServerManagerView",
           "group": "navigation@5"
+        },
+        {
+          "command": "jsm.templates.manage",
+          "when": "view == javaServerManagerView",
+          "group": "navigation@6"
         }
       ],
       "view/item/context": [

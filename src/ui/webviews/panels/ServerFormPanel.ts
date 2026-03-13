@@ -262,15 +262,15 @@ export class ServerFormPanel extends BaseFormPanel {
     return serverFormSchema(mode, this.hookTaskOptions);
   }
 
-  openCreate(workspaceFolderUri: string): void {
-    this.openCreateWithTemplate(workspaceFolderUri);
+  openCreate(workspaceFolderUri: string, initialData?: Record<string, unknown>): void {
+    this.editServerLocator = undefined;
+    this.createWorkspaceFolderUri = workspaceFolderUri;
+    this.show('create', initialData);
+    void this.refreshHookTaskOptions();
   }
 
   openCreateWithTemplate(workspaceFolderUri: string, template?: ServerTemplate): void {
-    this.editServerLocator = undefined;
-    this.createWorkspaceFolderUri = workspaceFolderUri;
-    this.show('create', template ? templateToServerFormData(template) : undefined);
-    void this.refreshHookTaskOptions();
+    this.openCreate(workspaceFolderUri, template ? templateToServerFormData(template) : undefined);
   }
 
   openEdit(locator: WorkspaceServerLocator): void {

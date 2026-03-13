@@ -6,6 +6,7 @@ import { ok, err } from '@core/result';
 import { JsmError } from '@core/errors/JsmError';
 import { ErrorCode } from '@core/errors/codes';
 import type { ServerLifecycle } from '@app/server/ServerLifecycle';
+import type { ServerDiscoveryService } from '@app/server/ServerDiscoveryService';
 import type { DeploymentService } from '@app/deployment/DeploymentService';
 import type { WorkspaceServiceRegistry, WorkspaceScope } from '@app/config';
 import type { PluginRegistry } from '@plugins/registry/PluginRegistry';
@@ -34,11 +35,12 @@ export interface ServerCommandsDeps {
     removeServer(serverId: string): Promise<Result<void, JsmError>>;
   };
   deployService: DeploymentService;
+  discoveryService?: ServerDiscoveryService;
   treeProvider: ServerTreeViewProvider;
   schemaValidator?: SchemaValidator;
   serverFormPanel: ServerFormPanel | {
     open?(mode: 'create' | 'edit', serverId?: string): void;
-    openCreate?(workspaceFolderUri: string, template?: import('@core/types').ServerTemplate): void;
+    openCreate?(workspaceFolderUri: string, initialData?: Record<string, unknown>): void;
     openEdit?(locator: { workspaceFolderUri: string; serverId: string }): void;
   };
 }
@@ -111,6 +113,7 @@ export function registerServerCommands(
     configService,
     provisioningService,
     deployService,
+    discoveryService,
     treeProvider,
     schemaValidator,
     serverFormPanel,
@@ -134,6 +137,73 @@ export function registerServerCommands(
         return;
       }
       serverFormPanel.open?.('create');
+    }],
+
+    ['jsm.server.autodiscover', async () => {
+      if (!discoveryService) {
+        showErr(new JsmError({
+          code: ErrorCode.Unsupported,
+          message: 'Autodiscovery is not available in this environment.',
+        }));
+        return;
+      }
+
+      vscode.window.withProgress({
+        location: vscode.ProgressLocation.Notification,
+        title: 'Discovering Java servers...',
+        cancellable: false,
+      }, async () => {
+        const folders = workspaceRegistry?.getWorkspaceScopes().map(s => s.fsPath) ?? [];
+        const results = await discoveryService.discover(folders);
+
+        // Filter out already registered servers
+        const registeredHomes = new Set<string>();
+        if (workspaceRegistry) {
+          for (const server of workspaceRegistry.getAllServers()) {
+            registeredHomes.add(server.config.runtime.homePath);
+          }
+        }
+        
+        const newServers = results.filter(r => !registeredHomes.has(r.path));
+
+        if (newServers.length === 0) {
+          vscode.window.showInformationMessage('No unmanaged Java servers found in common locations.');
+          return;
+        }
+
+        const items: vscode.QuickPickItem[] = newServers.map(s => ({
+          label: `$(server) ${s.type.charAt(0).toUpperCase() + s.type.slice(1)} ${s.version ?? ''}`,
+          description: s.path,
+          detail: `Found in ${s.source === 'env' ? 'environment variables' : s.source === 'workspace' ? 'workspace' : 'OS common paths'}`,
+        }));
+
+        const selection = await vscode.window.showQuickPick(items, {
+          placeHolder: 'Select a discovered server to register',
+        });
+
+        if (!selection) return;
+
+        const selectedPath = selection.description!;
+        const selectedType = newServers.find(s => s.path === selectedPath)?.type;
+
+        // Same flow as add: pick workspace scope, then open panel
+        if (!workspaceRegistry) {
+          serverFormPanel.open?.('create');
+          return;
+        }
+
+        const scope = await pickWorkspaceScope(workspaceRegistry.getWorkspaceScopes());
+        if (!scope) return;
+
+        if (serverFormPanel.openCreate) {
+          // Pre-fill the form using initial data (flat paths like 'runtime.homePath')
+          serverFormPanel.openCreate(scope.uri, {
+            name: `${selection.label.replace('$(server) ', '')}`,
+            type: selectedType,
+            'runtime.homePath': selectedPath,
+          });
+        }
+      });
     }],
 
     ['jsm.server.startRun', async (arg: unknown) => {

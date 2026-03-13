@@ -19,7 +19,7 @@ import { PluginRegistry } from '@plugins/registry/PluginRegistry';
 import { TomcatPlugin } from '@plugins/tomcat/TomcatPlugin';
 import { ConfigService, WorkspaceServiceRegistry, makeWorkspaceServerKey } from '@app/config';
 import { ServerLifecycle } from '@app/server';
-import { ManagedInstancePathResolver, ServerProvisioningService } from '@app/server';
+import { ManagedInstancePathResolver, ServerProvisioningService, ServerDiscoveryService } from '@app/server';
 import { DeploymentService } from '@app/deployment';
 import { AutoSyncService } from '@app/sync';
 import { TemplateService } from '@app/templates';
@@ -310,6 +310,8 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
     logger,
   });
 
+  const discoveryService = new ServerDiscoveryService(pluginRegistry, logger);
+
   // ── 6. UI presentation ────────────────────────────────────────────────
 
   const treeProvider = new ServerTreeViewProvider({
@@ -362,6 +364,7 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
       pluginRegistry,
       workspaceRegistry: workspaceServiceRegistry,
       deployService,
+      discoveryService,
       treeProvider,
       serverFormPanel,
       schemaValidator: validator,

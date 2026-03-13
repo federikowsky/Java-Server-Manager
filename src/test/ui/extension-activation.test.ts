@@ -192,6 +192,9 @@ vi.mock('@app/server', () => ({
   },
   ManagedInstancePathResolver: class {},
   ServerProvisioningService: class {},
+  ServerDiscoveryService: class {
+    discover = vi.fn(async () => []);
+  },
 }));
 
 // DeploymentService

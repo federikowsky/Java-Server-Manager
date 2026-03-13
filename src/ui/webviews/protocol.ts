@@ -22,6 +22,7 @@ export interface FormFieldDef {
   readOnly?: boolean;
   options?: { value: string; label: string }[];
   browse?: { kind: 'file' | 'directory'; filters?: Record<string, string[]> };
+  actionButtons?: Array<{ id: string; icon: string; title: string }>;
   validation?: {
     min?: number;
     max?: number;
@@ -62,18 +63,49 @@ export type WebviewToHost =
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'validate'; data: Record<string, unknown> }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'validateField'; field: string; value: unknown }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'browse'; field: string; kind: 'file' | 'directory'; filters?: Record<string, string[]> }
+  | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'invokeFieldAction'; field: string; actionId: string }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'cancel' }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'loadData'; id?: string }
-  | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'requestDefaults'; pluginType: string };
+  | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'requestDefaults'; pluginType: string }
+  // SPA Commands
+  | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'executeCommand'; id: string; args?: unknown[] }
+  | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'updateServer'; serverId: string; config: unknown; workspaceFolderUri: string }
+  | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'createServer'; config: unknown; workspaceFolderUri: string }
+  | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'deleteServer'; serverId: string; workspaceFolderUri: string }
+  | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'saveTemplate'; template: unknown; scope: 'global' | 'workspace' }
+  | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'deleteTemplate'; templateId: string; scope: 'global' | 'workspace' }
+  | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'requestWorkspaceFolders' };
 
 // ── Messages: Host → Webview ────────────────────────────────────────────────
 
 export type HostToWebview =
-  | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'init'; formId: string; mode: 'create' | 'edit'; data?: Record<string, unknown>; schema: FormSchema }
+  | { 
+      v: typeof WEBVIEW_PROTOCOL_VERSION; 
+      command: 'init'; 
+      formId: string; 
+      mode: 'create' | 'edit'; 
+      data?: Record<string, unknown>; 
+      schema: FormSchema;
+      templates?: Array<{ id: string; name: string; defaults: Record<string, unknown> }>;
+    }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'loaded'; data: Record<string, unknown> }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'validationErrors'; errors: FieldError[] }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'fieldValidationResult'; field: string; error?: string }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'browsed'; field: string; path: string }
+  | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'fieldActionResult'; field: string; value: unknown }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'defaults'; data: Record<string, unknown> }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'hookOptions'; fields: string[]; taskOptions: { value: string; label: string }[] }
-  | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'error'; message: string; details?: string };
+  | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'error'; message: string; details?: string }
+  // SPA Events
+  | { 
+      v: typeof WEBVIEW_PROTOCOL_VERSION; 
+      command: 'syncState'; 
+      servers: Array<{ config: unknown; workspaceFolderUri: string; workspaceFolderName: string }>;
+      runtimeStates: Record<string, unknown>;
+      templates: Array<{ template: unknown; scope: 'global' | 'workspace' }>;
+      capabilities: Record<string, unknown>;
+      workspaceFolders: Array<{ uri: string; name: string }>;
+    }
+  | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'serverStateChanged'; serverId: string; state: unknown }
+  | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'configChanged' }
+  | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'workspaceFoldersResult'; folders: Array<{ uri: string; name: string }> };

@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { FormFieldDef } from '../../protocol';
   import { formData, fieldErrors } from '../stores';
-  import { sendValidateField, sendBrowse } from '../bridge';
+  import { sendValidateField, sendBrowse, postToHost } from '../bridge';
   import TextInput from './inputs/TextInput.svelte';
   import NumberInput from './inputs/NumberInput.svelte';
   import PortInput from './inputs/PortInput.svelte';
@@ -50,6 +50,15 @@
     sendBrowse(def.name, kind, filters);
   }
 
+  function handleActionClick(actionId: string): void {
+    postToHost({
+      v: 1, // WEBVIEW_PROTOCOL_VERSION
+      command: 'invokeFieldAction',
+      field: def.name,
+      actionId,
+    });
+  }
+
   const hasError = $derived(error.length > 0);
   let fieldId = $derived(`field-${def.name}`);
   let helpId = $derived(`${def.name}-help`);
@@ -64,7 +73,7 @@
     </label>
 
     {#if def.type === 'path'}
-      <PathPicker {def} value={value as string | undefined} onChange={handleChange} onBrowse={handleBrowse} id={fieldId} />
+      <PathPicker {def} value={value as string | undefined} onChange={handleChange} onBrowse={handleBrowse} onAction={handleActionClick} id={fieldId} />
     {:else if def.type === 'port'}
       <PortInput {def} value={value as number | undefined} onChange={handleChange} id={fieldId} />
     {:else if def.type === 'tags'}

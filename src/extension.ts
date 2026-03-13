@@ -336,6 +336,8 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
   const serverFormPanel = new ServerFormPanel({
     extensionUri: ctx.extensionUri,
     workspaceRegistry: workspaceServiceRegistry,
+    templateService,
+    discoveryService,
     logger,
   });
   disposables.push(serverFormPanel);

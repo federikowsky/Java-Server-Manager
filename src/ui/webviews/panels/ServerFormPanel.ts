@@ -14,6 +14,9 @@ import { normalizeHookList, validateHookList } from '../hookForm';
 import { areHookTaskOptionsEqual, fetchHookTaskOptions, type HookTaskOption } from '../hookTaskOptions';
 import { BaseFormPanel } from './BaseFormPanel';
 
+import type { TemplateService } from '@app/templates/TemplateService';
+import type { ServerDiscoveryService } from '@app/server/ServerDiscoveryService';
+
 // ── Dependency contract ─────────────────────────────────────────────────────
 
 export interface ServerFormPanelDeps {
@@ -26,6 +29,8 @@ export interface ServerFormPanelDeps {
   provisioningService?: {
     createServer(request: CreateServerRequest): Promise<any>;
   };
+  templateService?: TemplateService;
+  discoveryService?: ServerDiscoveryService;
   logger: Logger;
 }
 
@@ -66,6 +71,9 @@ function serverFormSchema(mode: 'create' | 'edit', hookTaskOptions: HookTaskOpti
             type: 'path',
             required: true,
             browse: { kind: 'directory' },
+            actionButtons: [
+              { id: 'autodiscover', icon: 'search', title: 'Autodiscover Server Installation' },
+            ],
             helpText: 'Absolute path to the Tomcat installation directory.',
           },
         ],
@@ -233,6 +241,8 @@ export class ServerFormPanel extends BaseFormPanel {
   static readonly viewType = 'jsm.serverForm';
 
   private readonly workspaceRegistry: WorkspaceServiceRegistry;
+  private readonly templateService?: TemplateService;
+  private readonly discoveryService?: ServerDiscoveryService;
   private readonly logger: Logger;
   private editServerLocator: WorkspaceServerLocator | undefined;
   private createWorkspaceFolderUri: string | undefined;
@@ -254,6 +264,8 @@ export class ServerFormPanel extends BaseFormPanel {
       updateServer: (_locator: WorkspaceServerLocator, config: any) => deps.configService?.updateServer(config),
       getAllServers: () => [],
     } as unknown as WorkspaceServiceRegistry;
+    this.templateService = deps.templateService;
+    this.discoveryService = deps.discoveryService;
     this.logger = deps.logger;
     void this.refreshHookTaskOptions();
   }
@@ -265,7 +277,15 @@ export class ServerFormPanel extends BaseFormPanel {
   openCreate(workspaceFolderUri: string, initialData?: Record<string, unknown>): void {
     this.editServerLocator = undefined;
     this.createWorkspaceFolderUri = workspaceFolderUri;
-    this.show('create', initialData);
+    
+    // Add templates to the init payload for create mode
+    const templates = this.templateService?.listScoped().map(t => ({
+      id: t.template.id,
+      name: t.template.name,
+      defaults: templateToServerFormData(t.template),
+    }));
+
+    this.show('create', initialData, templates);
     void this.refreshHookTaskOptions();
   }
 
@@ -317,10 +337,18 @@ export class ServerFormPanel extends BaseFormPanel {
     }
   }
 
+  // ── Form Handling ─────────────────────────────────────────────────────────
+
   async handleMessage(msg: WebviewToHost): Promise<void> {
     switch (msg.command) {
       case 'ready':
         this.pushHookTaskOptions();
+        break;
+
+      case 'invokeFieldAction':
+        if (msg.actionId === 'autodiscover' && msg.field === 'runtime.homePath') {
+          await this.handleAutodiscover();
+        }
         break;
 
       case 'submit':
@@ -363,12 +391,59 @@ export class ServerFormPanel extends BaseFormPanel {
           data: {
             host: '127.0.0.1',
             'ports.http': DEFAULT_HTTP_PORT,
-            'ports.debug': DEFAULT_DEBUG_PORT,
             'debug.bind': '127.0.0.1',
           },
         });
         break;
     }
+  }
+
+  private async handleAutodiscover(): Promise<void> {
+    if (!this.discoveryService) {
+      vscode.window.showErrorMessage('Autodiscovery service is not available.');
+      return;
+    }
+
+    vscode.window.withProgress({
+      location: vscode.ProgressLocation.Notification,
+      title: 'Discovering Java servers...',
+      cancellable: false,
+    }, async () => {
+      const folders = this.workspaceRegistry.getWorkspaceScopes().map(s => s.fsPath);
+      const results = await this.discoveryService!.discover(folders);
+
+      // Filter out already registered servers
+      const registeredHomes = new Set<string>();
+      for (const server of this.workspaceRegistry.getAllServers()) {
+        registeredHomes.add(server.config.runtime.homePath);
+      }
+      
+      const newServers = results.filter(r => !registeredHomes.has(r.path));
+
+      if (newServers.length === 0) {
+        vscode.window.showInformationMessage('No unmanaged Java servers found in common locations.');
+        return;
+      }
+
+      const items: vscode.QuickPickItem[] = newServers.map(s => ({
+        label: `$(server) ${s.type.charAt(0).toUpperCase() + s.type.slice(1)} ${s.version ?? ''}`,
+        description: s.path,
+        detail: `Found in ${s.source === 'env' ? 'environment variables' : s.source === 'workspace' ? 'workspace' : 'OS common paths'}`,
+      }));
+
+      const selection = await vscode.window.showQuickPick(items, {
+        placeHolder: 'Select a discovered server',
+      });
+
+      if (selection) {
+        this.postMessage({
+          v: WEBVIEW_PROTOCOL_VERSION,
+          command: 'fieldActionResult',
+          field: 'runtime.homePath',
+          value: selection.description,
+        });
+      }
+    });
   }
 
   // ── Handlers ──────────────────────────────────────────────────────
@@ -542,15 +617,41 @@ export class ServerFormPanel extends BaseFormPanel {
 import type { ServerConfig } from '@core/types';
 
 function templateToServerFormData(template: ServerTemplate): Record<string, unknown> {
-  return {
-    'runtime.homePath': template.serverDefaults.runtime?.homePath,
-    javaHome: template.serverDefaults.javaHome,
-    host: template.serverDefaults.host,
-    'ports.http': template.serverDefaults.ports?.http,
-    'ports.debug': template.serverDefaults.ports?.debug,
-    'run.vmArgs': template.serverDefaults.run?.vmArgs,
-    'debug.bind': template.serverDefaults.debug?.bind,
-  };
+  const defaults = template.serverDefaults;
+  
+  // Convert nested structure to flat paths for formData
+  const flatData: Record<string, unknown> = {};
+  
+  if (defaults.runtime?.homePath) flatData['runtime.homePath'] = defaults.runtime.homePath;
+  if (defaults.javaHome) flatData['javaHome'] = defaults.javaHome;
+  if (defaults.host) flatData['host'] = defaults.host;
+  
+  if (defaults.ports?.http !== undefined) flatData['ports.http'] = defaults.ports.http;
+  if (defaults.ports?.debug !== undefined) flatData['ports.debug'] = defaults.ports.debug;
+  
+  if (defaults.run?.vmArgs) flatData['run.vmArgs'] = defaults.run.vmArgs;
+  if (defaults.debug?.bind) flatData['debug.bind'] = defaults.debug.bind;
+  
+  if (defaults.hooks) flatData['hooks'] = defaults.hooks;
+  
+  if (defaults.pluginConfig) {
+    const pluginConfig = defaults.pluginConfig as Record<string, any>;
+    if (pluginConfig.ssl) {
+      flatData['pluginConfig.ssl.enabled'] = pluginConfig.ssl.enabled;
+      if (pluginConfig.ssl.port !== undefined) flatData['pluginConfig.ssl.port'] = pluginConfig.ssl.port;
+      if (pluginConfig.ssl.keystorePath) flatData['pluginConfig.ssl.keystorePath'] = pluginConfig.ssl.keystorePath;
+      if (pluginConfig.ssl.keystorePassword) flatData['pluginConfig.ssl.keystorePassword'] = pluginConfig.ssl.keystorePassword;
+      if (pluginConfig.ssl.keystoreType) flatData['pluginConfig.ssl.keystoreType'] = pluginConfig.ssl.keystoreType;
+      if (pluginConfig.ssl.keyAlias) flatData['pluginConfig.ssl.keyAlias'] = pluginConfig.ssl.keyAlias;
+      
+      if (pluginConfig.ssl.clientAuth !== undefined) flatData['pluginConfig.ssl.clientAuth'] = pluginConfig.ssl.clientAuth;
+      if (pluginConfig.ssl.truststorePath) flatData['pluginConfig.ssl.truststorePath'] = pluginConfig.ssl.truststorePath;
+      if (pluginConfig.ssl.truststorePassword) flatData['pluginConfig.ssl.truststorePassword'] = pluginConfig.ssl.truststorePassword;
+      if (pluginConfig.ssl.truststoreType) flatData['pluginConfig.ssl.truststoreType'] = pluginConfig.ssl.truststoreType;
+    }
+  }
+  
+  return flatData;
 }
 
 function serverConfigToFormData(config: ServerConfig): Record<string, unknown> {

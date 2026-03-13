@@ -199,22 +199,7 @@ export interface ServerTemplate {
   id: TemplateId;
   name: string;
   pluginType: ServerType;
-  serverDefaults: {
-    runtime?: {
-      homePath?: string;
-    };
-    javaHome?: string;
-    host?: string;
-    ports?: {
-      http?: number;
-      debug?: number;
-    };
-    run?: {
-      vmArgs?: string[];
-    };
-    debug?: {
-      bind?: string;
-    };
-  };
+  /** Deep partial of ServerConfig, omitting instance-specific identity fields. */
+  serverDefaults: Partial<Omit<ServerConfig, 'id' | 'name' | 'instancePath'>>;
   description?: string;
 }

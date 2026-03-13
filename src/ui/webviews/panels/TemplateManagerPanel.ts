@@ -144,19 +144,19 @@ export class TemplateManagerPanel implements vscode.Disposable {
       description: message.description?.trim() || undefined,
       pluginType: 'tomcat',
       serverDefaults: {
-        runtime: message.runtimeHomePath?.trim() ? { homePath: message.runtimeHomePath.trim() } : undefined,
+        runtime: message.runtimeHomePath?.trim() ? { id: '', homePath: message.runtimeHomePath.trim() } : undefined,
         javaHome: message.javaHome?.trim() || undefined,
         host: message.host?.trim() || undefined,
         ports: message.httpPort || message.debugPort
           ? {
-            http: message.httpPort || undefined,
+            http: message.httpPort ?? 8080,
             debug: message.debugPort || undefined,
           }
           : undefined,
         run: message.vmArgsText?.trim()
-          ? { vmArgs: message.vmArgsText.split('\n').map(item => item.trim()).filter(Boolean) }
+          ? { env: {}, vmArgs: message.vmArgsText.split('\n').map(item => item.trim()).filter(Boolean) }
           : undefined,
-        debug: message.debugBind?.trim() ? { bind: message.debugBind.trim() } : undefined,
+        debug: message.debugBind?.trim() ? { enabled: true, attachDelayMs: 1000, bind: message.debugBind.trim() } : undefined,
       },
     };
 

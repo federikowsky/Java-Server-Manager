@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
-  import { schema, mode, formId, formData, fieldErrors, submitting, globalError } from './stores';
+  import { schema, mode, formId, formData, fieldErrors, submitting, globalError, templates } from './stores';
   import { sendReady, onHostMessage } from './bridge';
   import type { HostToWebview, FormSchema } from '../protocol';
   import FormHeader from './components/FormHeader.svelte';
@@ -70,6 +70,9 @@
           ...collectSchemaDefaults(msg.schema),
           ...(msg.data ?? {}),
         });
+        if (msg.templates) {
+          templates.set(msg.templates);
+        }
         void tick().then(() => {
           requestAnimationFrame(() => {
             performance.mark('jsm:fcp');
@@ -102,7 +105,8 @@
         });
         break;
       case 'browsed':
-        formData.update(d => ({ ...d, [msg.field]: msg.path }));
+      case 'fieldActionResult':
+        formData.update(d => ({ ...d, [msg.field]: msg.path || msg.value }));
         break;
       case 'defaults':
         formData.update(d => ({ ...d, ...msg.data }));
@@ -124,9 +128,17 @@
   });
 </script>
 
-{#if currentSchema}
-  <GlobalError message={currentGlobalError} />
-  <FormHeader title={currentSchema.title} formId={currentFormId} />
-  <FormBody sections={currentSchema.sections} />
-  <FormActions mode={currentMode} submitting={currentSubmitting} formId={currentFormId} />
+{#if (window as any).__JSM_SPA_MODE__}
+  <!-- Placeholder for new SPA Router -->
+  <div style="padding: 20px; color: var(--vscode-foreground);">
+    <h1>Java Server Manager Dashboard</h1>
+    <p>SPA routing and views will be implemented here.</p>
+  </div>
+{:else}
+  {#if currentSchema}
+    <GlobalError message={currentGlobalError} />
+    <FormHeader title={currentSchema.title} formId={currentFormId} />
+    <FormBody sections={currentSchema.sections} />
+    <FormActions mode={currentMode} submitting={currentSubmitting} formId={currentFormId} />
+  {/if}
 {/if}

@@ -49,7 +49,7 @@ export abstract class BaseFormPanel implements vscode.Disposable {
    * On first create, defers the init message until the webview signals 'ready'
    * to avoid losing it before the script loads.
    */
-  show(mode: 'create' | 'edit', data?: Record<string, unknown>): void {
+  show(mode: 'create' | 'edit', data?: Record<string, unknown>, templates?: Array<{ id: string; name: string; defaults: Record<string, unknown> }>): void {
     const schema = this.getFormSchema(mode);
     const initMsg: HostToWebview = {
       v: WEBVIEW_PROTOCOL_VERSION,
@@ -58,6 +58,7 @@ export abstract class BaseFormPanel implements vscode.Disposable {
       mode,
       data,
       schema,
+      templates,
     };
 
     if (this.panel) {

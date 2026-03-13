@@ -13,6 +13,7 @@ export interface ServerRuntimeState {
   lastTransitionAt: number;  // Epoch ms
   lastError?: JsmError;
   lastStartMode?: StartMode;
+  debugAttached: boolean;    // true when debugger is attached
 }
 
 export interface DeploymentRuntimeState {

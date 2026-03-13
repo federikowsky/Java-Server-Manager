@@ -185,6 +185,146 @@ describe('TomcatPlugin — validateConfig', () => {
       expect(result.error.message).toContain('validation failed');
     }
   });
+
+  it('fails when SSL port equals HTTP port', async () => {
+    const homePath = path.join(tmpDir, 'tomcat-home');
+    await createFakeTomcatHome(homePath);
+    const javaHome = path.join(tmpDir, 'java');
+    const javaExe = os.platform() === 'win32' ? 'java.exe' : 'java';
+    await fs.mkdir(path.join(javaHome, 'bin'), { recursive: true });
+    await fs.writeFile(path.join(javaHome, 'bin', javaExe), 'fake', { mode: 0o755 });
+
+    const config = fakeConfig(homePath, path.join(tmpDir, 'instance'), {
+      javaHome,
+      ports: { http: 8443, debug: 5005 },
+      pluginConfig: {
+        type: 'tomcat',
+        shutdownPort: 8005,
+        disableAjp: true,
+        ssl: {
+          enabled: true,
+          port: 8443,
+          keystorePath: '/fake/keystore.p12',
+          keystorePassword: 'changeit',
+          keystoreType: 'PKCS12',
+          clientAuth: false,
+        },
+      },
+    });
+
+    const result = await plugin.validateConfig(config);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.details).toContain('SSL port must differ from HTTP port');
+    }
+  });
+
+  it('fails when SSL enabled but keystorePath is empty', async () => {
+    const homePath = path.join(tmpDir, 'tomcat-home');
+    await createFakeTomcatHome(homePath);
+    const javaHome = path.join(tmpDir, 'java');
+    const javaExe = os.platform() === 'win32' ? 'java.exe' : 'java';
+    await fs.mkdir(path.join(javaHome, 'bin'), { recursive: true });
+    await fs.writeFile(path.join(javaHome, 'bin', javaExe), 'fake', { mode: 0o755 });
+
+    const config = fakeConfig(homePath, path.join(tmpDir, 'instance'), {
+      javaHome,
+      pluginConfig: {
+        type: 'tomcat',
+        shutdownPort: 8005,
+        disableAjp: true,
+        ssl: {
+          enabled: true,
+          port: 8443,
+          keystorePath: '',
+          keystorePassword: 'changeit',
+          keystoreType: 'PKCS12',
+          clientAuth: false,
+        },
+      },
+    });
+
+    const result = await plugin.validateConfig(config);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.details).toContain('Keystore path is required');
+    }
+  });
+
+  it('fails when clientAuth enabled but truststorePath is empty', async () => {
+    const homePath = path.join(tmpDir, 'tomcat-home');
+    await createFakeTomcatHome(homePath);
+    const javaHome = path.join(tmpDir, 'java');
+    const javaExe = os.platform() === 'win32' ? 'java.exe' : 'java';
+    await fs.mkdir(path.join(javaHome, 'bin'), { recursive: true });
+    await fs.writeFile(path.join(javaHome, 'bin', javaExe), 'fake', { mode: 0o755 });
+
+    // Create a fake keystore file
+    const keystorePath = path.join(tmpDir, 'keystore.p12');
+    await fs.writeFile(keystorePath, 'fake-keystore');
+
+    const config = fakeConfig(homePath, path.join(tmpDir, 'instance'), {
+      javaHome,
+      pluginConfig: {
+        type: 'tomcat',
+        shutdownPort: 8005,
+        disableAjp: true,
+        ssl: {
+          enabled: true,
+          port: 8443,
+          keystorePath,
+          keystorePassword: 'changeit',
+          keystoreType: 'PKCS12',
+          clientAuth: true,
+          truststorePath: '',
+        },
+      },
+    });
+
+    const result = await plugin.validateConfig(config);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.details).toContain('Truststore path is required');
+    }
+  });
+
+  it('passes validation with valid SSL config', async () => {
+    const homePath = path.join(tmpDir, 'tomcat-home');
+    await createFakeTomcatHome(homePath);
+    const javaHome = path.join(tmpDir, 'java');
+    const javaExe = os.platform() === 'win32' ? 'java.exe' : 'java';
+    await fs.mkdir(path.join(javaHome, 'bin'), { recursive: true });
+    await fs.writeFile(path.join(javaHome, 'bin', javaExe), 'fake', { mode: 0o755 });
+
+    // Create fake keystore file
+    const keystorePath = path.join(tmpDir, 'keystore.p12');
+    await fs.writeFile(keystorePath, 'fake-keystore');
+
+    const config = fakeConfig(homePath, path.join(tmpDir, 'instance'), {
+      javaHome,
+      pluginConfig: {
+        type: 'tomcat',
+        shutdownPort: 8005,
+        disableAjp: true,
+        ssl: {
+          enabled: true,
+          port: 8443,
+          keystorePath,
+          keystorePassword: 'changeit',
+          keystoreType: 'PKCS12',
+          clientAuth: false,
+        },
+      },
+    });
+
+    const result = await plugin.validateConfig(config);
+    expect(result.ok).toBe(true);
+  });
+
+  it('reports supportsSsl capability', () => {
+    const caps = plugin.getCapabilities();
+    expect(caps.supportsSsl).toBe(true);
+  });
 });
 
 describe('TomcatPlugin — getConfigSources', () => {

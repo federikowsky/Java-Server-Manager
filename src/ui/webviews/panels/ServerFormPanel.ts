@@ -51,14 +51,6 @@ function serverFormSchema(mode: 'create' | 'edit', hookTaskOptions: HookTaskOpti
       defaultValue: DEFAULT_HTTP_PORT,
       validation: { min: 1, max: 65535 },
     },
-    {
-      name: 'ports.debug',
-      label: 'Debug Port',
-      type: 'port',
-      required: true,
-      defaultValue: DEFAULT_DEBUG_PORT,
-      validation: { min: 1, max: 65535 },
-    },
   ];
 
   return {
@@ -126,6 +118,13 @@ function serverFormSchema(mode: 'create' | 'edit', hookTaskOptions: HookTaskOpti
             ],
           },
           {
+            name: 'ports.debug',
+            label: 'Debug Port',
+            type: 'port',
+            helpText: 'Optional. Leave empty to auto-assign a free port.',
+            validation: { min: 1, max: 65535 },
+          },
+          {
             name: 'hooks',
             label: 'Hooks',
             type: 'hooks',
@@ -134,6 +133,93 @@ function serverFormSchema(mode: 'create' | 'edit', hookTaskOptions: HookTaskOpti
             hookOptions: {
               taskOptions: hookTaskOptions,
             },
+          },
+        ],
+      },
+      {
+        id: 'ssl',
+        title: 'SSL/TLS',
+        collapsible: true,
+        fields: [
+          {
+            name: 'pluginConfig.ssl.enabled',
+            label: 'Enable SSL/HTTPS',
+            type: 'checkbox',
+            defaultValue: false,
+          },
+          {
+            name: 'pluginConfig.ssl.port',
+            label: 'HTTPS Port',
+            type: 'port',
+            defaultValue: 8443,
+            required: true,
+            validation: { min: 1, max: 65535 },
+            visibleWhen: { field: 'pluginConfig.ssl.enabled', equals: true },
+          },
+          {
+            name: 'pluginConfig.ssl.keystorePath',
+            label: 'Keystore File',
+            type: 'path',
+            required: true,
+            browse: { kind: 'file', filters: { 'Keystore': ['p12', 'pfx', 'jks'] } },
+            visibleWhen: { field: 'pluginConfig.ssl.enabled', equals: true },
+          },
+          {
+            name: 'pluginConfig.ssl.keystorePassword',
+            label: 'Keystore Password',
+            type: 'password',
+            required: true,
+            visibleWhen: { field: 'pluginConfig.ssl.enabled', equals: true },
+          },
+          {
+            name: 'pluginConfig.ssl.keystoreType',
+            label: 'Keystore Type',
+            type: 'select',
+            defaultValue: 'PKCS12',
+            options: [
+              { value: 'PKCS12', label: 'PKCS12 (recommended)' },
+              { value: 'JKS', label: 'JKS' },
+            ],
+            visibleWhen: { field: 'pluginConfig.ssl.enabled', equals: true },
+          },
+          {
+            name: 'pluginConfig.ssl.keyAlias',
+            label: 'Key Alias',
+            type: 'text',
+            visibleWhen: { field: 'pluginConfig.ssl.enabled', equals: true },
+          },
+          {
+            name: 'pluginConfig.ssl.clientAuth',
+            label: 'Client Certificate Authentication (mTLS)',
+            type: 'checkbox',
+            defaultValue: false,
+            visibleWhen: { field: 'pluginConfig.ssl.enabled', equals: true },
+          },
+          {
+            name: 'pluginConfig.ssl.truststorePath',
+            label: 'Truststore File',
+            type: 'path',
+            required: true,
+            browse: { kind: 'file', filters: { 'Truststore': ['p12', 'pfx', 'jks'] } },
+            visibleWhen: { field: 'pluginConfig.ssl.clientAuth', equals: true },
+          },
+          {
+            name: 'pluginConfig.ssl.truststorePassword',
+            label: 'Truststore Password',
+            type: 'password',
+            required: true,
+            visibleWhen: { field: 'pluginConfig.ssl.clientAuth', equals: true },
+          },
+          {
+            name: 'pluginConfig.ssl.truststoreType',
+            label: 'Truststore Type',
+            type: 'select',
+            defaultValue: 'PKCS12',
+            options: [
+              { value: 'PKCS12', label: 'PKCS12 (recommended)' },
+              { value: 'JKS', label: 'JKS' },
+            ],
+            visibleWhen: { field: 'pluginConfig.ssl.clientAuth', equals: true },
           },
         ],
       },

@@ -6,6 +6,7 @@ import type {
   DeploymentId,
   ServerState,
   DeploymentState,
+  TomcatPluginConfig,
 } from '@core/types';
 import type { ServerRuntimeState } from '@core/types/runtime';
 import type { HealthReport } from '@plugins/interfaces/IServerPlugin';
@@ -57,6 +58,7 @@ export class ServerNode extends vscode.TreeItem {
     record: WorkspaceServerRecord | ServerConfig,
     state: ServerState,
     showWorkspaceLabel = false,
+    debugAttached = false,
   ) {
     const normalizedRecord = 'config' in record
       ? record
@@ -84,10 +86,14 @@ export class ServerNode extends vscode.TreeItem {
     this.serverKey = normalizedRecord.serverKey;
     this.serverId = config.id;
     this.serverConfig = config;
-    this.contextValue = SERVER_CONTEXT[state];
+    // Include debugAttached suffix for menu visibility
+    const debugSuffix = debugAttached ? '.debugAttached' : '';
+    this.contextValue = `${SERVER_CONTEXT[state]}${debugSuffix}`;
+    const ssl = (config.pluginConfig as TomcatPluginConfig | undefined)?.ssl;
+    const sslLabel = ssl?.enabled ? ` • HTTPS:${ssl.port}` : '';
     this.description = showWorkspaceLabel && normalizedRecord.workspaceFolderName
-      ? `${state} • ${normalizedRecord.workspaceFolderName}`
-      : state;
+      ? `${state}${sslLabel} • ${normalizedRecord.workspaceFolderName}`
+      : `${state}${sslLabel}`;
     this.iconPath = new vscode.ThemeIcon(SERVER_ICON[state]);
     this.tooltip = ServerNode.buildTooltip(normalizedRecord, state);
   }
@@ -100,6 +106,11 @@ export class ServerNode extends vscode.TreeItem {
     md.appendMarkdown(`- **Workspace:** ${record.workspaceFolderName}\n`);
     md.appendMarkdown(`- **State:** ${state}\n`);
     md.appendMarkdown(`- **HTTP:** http://${config.host}:${config.ports.http}\n`);
+    const ssl = (config.pluginConfig as TomcatPluginConfig | undefined)?.ssl;
+    if (ssl?.enabled) {
+      md.appendMarkdown(`- **HTTPS:** https://${config.host}:${ssl.port}\n`);
+      md.appendMarkdown(`- **Keystore:** ${ssl.keystoreType}${ssl.clientAuth ? ' (mTLS)' : ''}\n`);
+    }
     if (config.runtime.version) {
       md.appendMarkdown(`- **Version:** ${config.runtime.version}\n`);
     }
@@ -254,7 +265,7 @@ export class ServerTreeViewProvider
     return records.map(record => {
       const runtimeState = this.dataSource.getRuntimeState(record.serverKey);
       const state: ServerState = runtimeState?.state ?? 'stopped';
-      return new ServerNode(record, state, showWorkspaceLabel);
+      return new ServerNode(record, state, showWorkspaceLabel, runtimeState?.debugAttached ?? false);
     });
   }
 

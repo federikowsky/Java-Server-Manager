@@ -242,6 +242,61 @@ export class ServerLifecycle {
     return ok(undefined);
   }
 
+  /** Attach debugger to an already-running server. */
+  async attachDebug(serverId: ServerId): Promise<Result<void, JsmError>> {
+    if (!this.checkTrust()) return this.untrustedErr();
+
+    const entry = this.servers.get(serverId);
+    if (!entry) return this.notFound(serverId);
+
+    if (entry.runtime.state !== 'running') {
+      return err(new JsmError({
+        code: ErrorCode.NotRunning,
+        message: `Cannot attach debugger: server is in '${entry.runtime.state}' state, must be 'running'`,
+      }));
+    }
+
+    if (entry.runtime.debugAttached) {
+      return err(new JsmError({
+        code: ErrorCode.AlreadyRunning,
+        message: 'Debugger is already attached to this server',
+      }));
+    }
+
+    const { config } = entry;
+    const result = await this.deps.debugAttacher.attach({
+      serverId,
+      port: config.ports.debug ?? 5005,
+      name: `Debug: ${config.name}`,
+      bind: config.debug.bind,
+    });
+
+    if (result.ok) {
+      entry.runtime.setDebugAttached(true);
+    }
+
+    return result;
+  }
+
+  /** Detach debugger from a running server without stopping it. */
+  async detachDebug(serverId: ServerId): Promise<Result<void, JsmError>> {
+    if (!this.checkTrust()) return this.untrustedErr();
+
+    const entry = this.servers.get(serverId);
+    if (!entry) return this.notFound(serverId);
+
+    if (!entry.runtime.debugAttached) {
+      return err(new JsmError({
+        code: ErrorCode.InvalidConfig,
+        message: 'Debugger is not attached to this server',
+      }));
+    }
+
+    await this.deps.debugAttacher.detach(serverId);
+    entry.runtime.setDebugAttached(false);
+    return ok(undefined);
+  }
+
   /** Return server keys whose runtime state is one of the given states (e.g. for status refresh). */
   getServerKeysInState(...states: ServerState[]): ServerId[] {
     const set = new Set(states);
@@ -427,12 +482,15 @@ export class ServerLifecycle {
 
       if (mode === 'debug' && config.debug.enabled) {
         await sleep(config.debug.attachDelayMs);
-        await this.deps.debugAttacher.attach({
+        const attachResult = await this.deps.debugAttacher.attach({
           serverId: server.serverKey,
-          port: config.ports.debug,
+          port: config.ports.debug ?? 5005,
           name: `Debug: ${config.name}`,
           bind: config.debug.bind,
         });
+        if (attachResult.ok) {
+          runtime.setDebugAttached(true);
+        }
       }
 
       if (hookEvent) {
@@ -497,6 +555,7 @@ export class ServerLifecycle {
 
       await this.deps.pidManager.clearPid(server.serverKey);
       await this.deps.debugAttacher.detach(server.serverKey);
+      runtime.setDebugAttached(false);
       runtime.transition('stopped');
 
       if (hookEvent) {

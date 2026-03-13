@@ -19,6 +19,8 @@ export type {
   DeploymentConfig,
   ServerConfig,
   ServerTemplate,
+  SslConfig,
+  KeystoreType,
 } from './domain';
 export type {
   ServerRuntimeState,

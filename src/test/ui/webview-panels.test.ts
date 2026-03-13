@@ -285,7 +285,8 @@ describe('ServerFormPanel', () => {
       expect(init.schema.title).toBe('Add Server');
       expect(init.formId).toBe('jsm.serverForm');
       expect(init.schema.sections[1].fields[1].required).toBe(true);
-      expect(init.schema.sections[1].fields[2].required).toBe(true);
+      // Debug port moved to Advanced section, no longer required
+      expect(init.schema.sections[1].fields.some((field: any) => field.name === 'ports.debug')).toBe(false);
       expect(init.schema.sections[1].fields.some((field: any) => field.name === 'instancePath')).toBe(false);
       expect(init.schema.sections[3].id).toBe('advanced');
       expect(init.schema.sections[3].fields.some((field: any) => field.name === 'hooks')).toBe(true);

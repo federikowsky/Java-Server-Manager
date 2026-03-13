@@ -235,7 +235,9 @@ vi.mock('@ui/adapters', () => ({
   MementoAdapter: class {
     get = vi.fn(); set = vi.fn(); 'delete' = vi.fn();
   },
-  DebugAdapter: class {},
+  DebugAdapter: class {
+    onDidChangeSession = vi.fn(() => ({ dispose: vi.fn() }));
+  },
   FileWatcherAdapter: class {},
 }));
 

@@ -16,7 +16,7 @@ import type {
   Logger,
   KeyValueStore,
 } from '@core/types';
-import { DEPLOY_BACKUP_MAX_KEPT, DEPLOY_NAME_PATTERN } from '../../constants';
+import { DEPLOY_BACKUP_MAX_KEPT, DEPLOY_NAME_PATTERN, DEFAULT_TRUSTSTORE_TYPE } from '../../constants';
 import { ProcessSpawner } from '@infra/process';
 import { PortScanner } from '@infra/ports';
 import { copyDir, ensureDir, exists } from '@infra/fs';
@@ -34,6 +34,7 @@ import type {
   LogSources,
 } from '../interfaces/IServerPlugin';
 import { TomcatStartupMonitor } from './TomcatStartupMonitor';
+import { TomcatServerXmlService } from './TomcatServerXmlService';
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
@@ -45,6 +46,7 @@ const TOMCAT_CAPABILITIES: PluginCapabilities = {
   supportsHotReload: true,
   supportsLogFollow: true,
   supportsAutoDetect: true,
+  supportsSsl: true,
   supportsMultipleInstances: true,
 };
 
@@ -96,11 +98,17 @@ async function existingConfigSources(candidates: ConfigSource[]): Promise<Config
 function tomcatConfigVmArgs(config: ServerConfig, shutdownPortOverride?: number): string[] {
   const pluginConfig = config.pluginConfig as TomcatPluginConfig | undefined;
   const shutdownPort = shutdownPortOverride ?? pluginConfig?.shutdownPort ?? DEFAULT_SHUTDOWN_PORT;
-  return [
+  const args = [
     `-Dhttp.port=${config.ports.http}`,
     `-Dshutdown.port=${shutdownPort}`,
     `-Dshutdown.command=${DEFAULT_SHUTDOWN_COMMAND}`,
   ];
+
+  if (pluginConfig?.ssl?.enabled) {
+    args.push(`-Dhttps.port=${pluginConfig.ssl.port}`);
+  }
+
+  return args;
 }
 
 // ── TomcatPlugin ────────────────────────────────────────────────────────────
@@ -115,6 +123,7 @@ export class TomcatPlugin implements IServerPlugin {
   private readonly startupListenerJarPath?: string;
   private readonly serverXmlTemplatePath?: string;
   private readonly keyValueStore: KeyValueStore;
+  private readonly serverXmlService: TomcatServerXmlService;
   /** Track running child processes by serverId for stop(). */
   private readonly childProcesses = new Map<string, ChildProcess>();
 
@@ -125,6 +134,7 @@ export class TomcatPlugin implements IServerPlugin {
     this.startupListenerJarPath = options.startupListenerJarPath;
     this.serverXmlTemplatePath = options.serverXmlTemplatePath;
     this.keyValueStore = options.keyValueStore;
+    this.serverXmlService = new TomcatServerXmlService(logger);
   }
 
   getCapabilities(): PluginCapabilities {
@@ -194,7 +204,7 @@ export class TomcatPlugin implements IServerPlugin {
     if (!config.ports.http || config.ports.http < 1 || config.ports.http > 65535) {
       errors.push('ports.http must be 1–65535');
     }
-    if (!config.ports.debug || config.ports.debug < 1 || config.ports.debug > 65535) {
+    if (config.ports.debug !== undefined && (config.ports.debug < 1 || config.ports.debug > 65535)) {
       errors.push('ports.debug must be 1–65535');
     }
 
@@ -215,6 +225,34 @@ export class TomcatPlugin implements IServerPlugin {
     for (const dep of config.deployments) {
       if (!DEPLOY_NAME_PATTERN.test(dep.deployName)) {
         errors.push(`Deployment '${dep.deployName}' has invalid characters`);
+      }
+    }
+
+    // Validate SSL configuration
+    const ssl = (config.pluginConfig as TomcatPluginConfig | undefined)?.ssl;
+    if (ssl?.enabled) {
+      if (ssl.port === config.ports.http) {
+        errors.push('SSL port must differ from HTTP port');
+      }
+      if (!ssl.keystorePath) {
+        errors.push('Keystore path is required when SSL is enabled');
+      }
+      if (!ssl.keystorePassword) {
+        errors.push('Keystore password is required when SSL is enabled');
+      }
+      if (ssl.clientAuth && !ssl.truststorePath) {
+        errors.push('Truststore path is required when client authentication is enabled');
+      }
+      if (ssl.truststorePath && !ssl.truststorePassword) {
+        errors.push('Truststore password is required when truststore path is provided');
+      }
+      // Check keystore file exists
+      if (ssl.keystorePath && !(await exists(ssl.keystorePath))) {
+        errors.push(`Keystore file not found: ${ssl.keystorePath}`);
+      }
+      // Check truststore file exists
+      if (ssl.truststorePath && !(await exists(ssl.truststorePath))) {
+        errors.push(`Truststore file not found: ${ssl.truststorePath}`);
       }
     }
 
@@ -240,7 +278,7 @@ export class TomcatPlugin implements IServerPlugin {
   async initializeInstancePath(
     homePath: string,
     instancePath: string,
-    _config: ServerConfig,
+    config: ServerConfig,
   ): Promise<Result<void, JsmError>> {
     try {
       for (const dir of INSTANCE_SEED_DIRS) {
@@ -257,7 +295,27 @@ export class TomcatPlugin implements IServerPlugin {
 
       const serverXmlDest = path.join(instancePath, 'conf', 'server.xml');
       if (this.serverXmlTemplatePath && await exists(this.serverXmlTemplatePath)) {
-        await fs.copyFile(this.serverXmlTemplatePath, serverXmlDest);
+        const serverXml = await fs.readFile(this.serverXmlTemplatePath, 'utf-8');
+        const ssl = (config.pluginConfig as TomcatPluginConfig | undefined)?.ssl;
+
+        // Copy keystore/truststore files if SSL enabled
+        if (ssl?.enabled) {
+          const keystoreExt = ssl.keystoreType === 'JKS' ? 'jks' : 'p12';
+          const keystoreDest = path.join(instancePath, 'conf', `keystore.${keystoreExt}`);
+          await fs.copyFile(ssl.keystorePath, keystoreDest);
+          this.logger.info(`TomcatPlugin: copied keystore to ${keystoreDest}`);
+
+          if (ssl.clientAuth && ssl.truststorePath) {
+            const truststoreExt = (ssl.truststoreType ?? DEFAULT_TRUSTSTORE_TYPE) === 'JKS' ? 'jks' : 'p12';
+            const truststoreDest = path.join(instancePath, 'conf', `truststore.${truststoreExt}`);
+            await fs.copyFile(ssl.truststorePath, truststoreDest);
+            this.logger.info(`TomcatPlugin: copied truststore to ${truststoreDest}`);
+          }
+        }
+
+        // Patch server.xml via service (SSL connector injection/removal)
+        const patchedXml = this.serverXmlService.patchSsl(serverXml, ssl);
+        await fs.writeFile(serverXmlDest, patchedXml, 'utf-8');
         this.logger.info('TomcatPlugin: applied server.xml template (ports via JVM args)');
       }
 
@@ -339,7 +397,8 @@ export class TomcatPlugin implements IServerPlugin {
     if (mode === 'debug') {
       // §12.1: Debug MUST bind to localhost. JPDA_ADDRESS = bind:port
       const bind = config.debug.bind || '127.0.0.1';
-      env['JPDA_ADDRESS'] = `${bind}:${config.ports.debug}`;
+      const debugPort = config.ports.debug ?? 5005;
+      env['JPDA_ADDRESS'] = `${bind}:${debugPort}`;
       env['JPDA_TRANSPORT'] = 'dt_socket';
       args.push('jpda', 'run');
     } else {
@@ -395,8 +454,9 @@ export class TomcatPlugin implements IServerPlugin {
     };
 
     if (mode === 'debug') {
-      result.debugPort = config.ports.debug;
-      hints.push(`Debug port: ${config.ports.debug}`);
+      const debugPort = config.ports.debug ?? 5005;
+      result.debugPort = debugPort;
+      hints.push(`Debug port: ${debugPort}`);
     }
 
     this.logger.info(`TomcatPlugin: started ${config.name} (PID ${child.pid}, mode=${mode})`);

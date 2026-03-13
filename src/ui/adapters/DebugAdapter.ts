@@ -7,10 +7,33 @@ import { ErrorCode } from '@core/errors/codes';
 
 /**
  * Implements the core DebugAttacher interface via vscode.debug (§5.5).
+ * Also tracks session state and emits events for debug-attach feature.
  */
 export class DebugAdapter implements DebugAttacher {
   /** Active debug sessions keyed by serverId. */
   private readonly sessions = new Map<ServerId, vscode.DebugSession>();
+
+  /** Event fired when a debug session is attached or detached for a server. */
+  private readonly _onDidChangeSession = new vscode.EventEmitter<{ serverId: ServerId; attached: boolean }>();
+  readonly onDidChangeSession = this._onDidChangeSession.event;
+
+  constructor() {
+    // Detect external session termination (user stops debugger from VS Code)
+    vscode.debug.onDidTerminateDebugSession(session => {
+      for (const [serverId, tracked] of this.sessions) {
+        if (tracked.id === session.id) {
+          this.sessions.delete(serverId);
+          this._onDidChangeSession.fire({ serverId, attached: false });
+          break;
+        }
+      }
+    });
+  }
+
+  /** Check if a debug session is currently attached for a server. */
+  isAttached(serverId: ServerId): boolean {
+    return this.sessions.has(serverId);
+  }
 
   async attach(config: {
     serverId: ServerId;
@@ -39,6 +62,7 @@ export class DebugAdapter implements DebugAttacher {
       const disposable = vscode.debug.onDidStartDebugSession(session => {
         if (session.name === config.name) {
           this.sessions.set(config.serverId, session);
+          this._onDidChangeSession.fire({ serverId: config.serverId, attached: true });
           disposable.dispose();
         }
       });
@@ -57,6 +81,7 @@ export class DebugAdapter implements DebugAttacher {
     if (session) {
       await vscode.debug.stopDebugging(session);
       this.sessions.delete(serverId);
+      this._onDidChangeSession.fire({ serverId, attached: false });
     }
   }
 }

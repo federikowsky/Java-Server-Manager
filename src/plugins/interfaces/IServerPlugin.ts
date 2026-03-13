@@ -21,6 +21,7 @@ export interface PluginCapabilities {
   supportsLogFollow: boolean;
   supportsAutoDetect: boolean;
   supportsMultipleInstances: boolean;
+  supportsSsl: boolean;
 }
 
 // ── Report Types (§6.3) ────────────────────────────────────────────────────

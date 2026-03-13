@@ -138,6 +138,16 @@
         "command": "jsm.deployment.openLogs",
         "title": "Deployment Logs",
         "icon": "$(output)"
+      },
+      {
+        "command": "jsm.server.attachDebug",
+        "title": "Attach Debugger",
+        "icon": "$(debug-alt)"
+      },
+      {
+        "command": "jsm.server.detachDebug",
+        "title": "Detach Debugger",
+        "icon": "$(debug-disconnect)"
       }
     ],
     "menus": {
@@ -193,6 +203,16 @@
           "command": "jsm.server.restartDebug",
           "when": "view == javaServerManagerView && viewItem == jsm.server.running",
           "group": "inline@3"
+        },
+        {
+          "command": "jsm.server.attachDebug",
+          "when": "view == javaServerManagerView && viewItem == jsm.server.running",
+          "group": "inline@4"
+        },
+        {
+          "command": "jsm.server.detachDebug",
+          "when": "view == javaServerManagerView && viewItem == jsm.server.running.debugAttached",
+          "group": "inline@4"
         },
         {
           "command": "jsm.server.cancelOperation",
@@ -345,6 +365,7 @@
     "vitest": "^3.2.1"
   },
   "dependencies": {
+    "fast-xml-parser": "^5.5.3",
     "lodash.debounce": "^4.0.8",
     "uuid": "^11.1.0"
   }

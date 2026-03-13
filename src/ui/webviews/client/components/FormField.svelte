@@ -11,6 +11,7 @@
   import TextareaInput from './inputs/TextareaInput.svelte';
   import TagList from './inputs/TagList.svelte';
   import HookList from './HookList.svelte';
+  import PasswordInput from './inputs/PasswordInput.svelte';
 
   const { def }: { def: FormFieldDef } = $props();
 
@@ -78,6 +79,8 @@
       <NumberInput {def} value={value as number | undefined} onChange={handleChange} id={fieldId} />
     {:else if def.type === 'hooks'}
       <HookList {def} value={value as import('@core/types').HookConfig[] | undefined} onChange={handleChange} id={fieldId} />
+    {:else if def.type === 'password'}
+      <PasswordInput {def} value={value as string | undefined} onChange={handleChange} id={fieldId} />
     {:else}
       <TextInput {def} value={value as string | undefined} onChange={handleChange} id={fieldId} />
     {/if}

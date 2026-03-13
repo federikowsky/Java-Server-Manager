@@ -186,6 +186,20 @@ export function registerServerCommands(
       if (!result.ok) showErr(result.error);
     }],
 
+    ['jsm.server.attachDebug', async (arg: unknown) => {
+      if (!isServerNode(arg)) return;
+      const result = await lifecycle.attachDebug(arg.serverKey);
+      if (!result.ok) showErr(result.error);
+      else showSuccess('Debugger attached.');
+    }],
+
+    ['jsm.server.detachDebug', async (arg: unknown) => {
+      if (!isServerNode(arg)) return;
+      const result = await lifecycle.detachDebug(arg.serverKey);
+      if (!result.ok) showErr(result.error);
+      else showSuccess('Debugger detached.');
+    }],
+
     ['jsm.server.cancelOperation', (arg: unknown) => {
       if (!isServerNode(arg)) return;
       lifecycle.cancel(arg.serverKey);

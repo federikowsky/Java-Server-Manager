@@ -3,6 +3,38 @@ import type { ServerType, DeploymentType, SyncMode } from './enums';
 
 // ── Plugin Config ───────────────────────────────────────────────────────────
 
+// ── SSL Config ───────────────────────────────────────────────────────────────
+
+export type KeystoreType = 'PKCS12' | 'JKS';
+
+export interface SslConfig {
+  enabled: boolean;
+  /** HTTPS port. Default: 8443. */
+  port: number;
+  /** Absolute path to keystore file. */
+  keystorePath: string;
+  /** Keystore password. */
+  keystorePassword: string;
+  /** Keystore format. Default: PKCS12. */
+  keystoreType: KeystoreType;
+  /** Key alias (optional, first entry if omitted). */
+  keyAlias?: string;
+  /** Key password (defaults to keystorePassword). */
+  keyPassword?: string;
+  /** Enable client certificate authentication (mTLS). Default: false. */
+  clientAuth: boolean;
+  /** Path to truststore file (required when clientAuth is true). */
+  truststorePath?: string;
+  /** Truststore password. */
+  truststorePassword?: string;
+  /** Truststore format. */
+  truststoreType?: KeystoreType;
+  /** Enabled TLS versions. Default: ['TLSv1.2', 'TLSv1.3']. */
+  protocols?: string[];
+  /** Cipher suite filter (OpenSSL syntax). Optional, use Tomcat defaults if omitted. */
+  ciphers?: string;
+}
+
 /** Tomcat-specific options. Used when ServerConfig.type === 'tomcat'. */
 export interface TomcatPluginConfig {
   type: 'tomcat';
@@ -10,6 +42,8 @@ export interface TomcatPluginConfig {
   shutdownPort: number;
   /** Default: true — remove AJP connector from server.xml on instancePath init. */
   disableAjp: boolean;
+  /** Optional SSL/TLS configuration. */
+  ssl?: SslConfig;
 }
 
 /**
@@ -104,8 +138,8 @@ export interface ServerConfig {
   ports: {
     /** Default: 8080 */
     http: number;
-    /** Default: 5005 */
-    debug: number;
+    /** Optional. Auto-assigned via findFreePort if not specified. */
+    debug?: number;
   };
 
   run: {

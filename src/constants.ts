@@ -37,6 +37,13 @@ export const ATOMIC_WRITE_BACKOFFS_MS = [100, 500, 1000] as const;
 // ── Deploy ──────────────────────────────────────────────────────────────────
 export const DEPLOY_BACKUP_MAX_KEPT = 3;
 
+// ── SSL/TLS ─────────────────────────────────────────────────────────────────
+export const DEFAULT_SSL_PORT = 8443;
+export const DEFAULT_KEYSTORE_TYPE = 'PKCS12';
+export const DEFAULT_TRUSTSTORE_TYPE = 'PKCS12';
+export const DEFAULT_SSL_PROTOCOLS = ['TLSv1.2', 'TLSv1.3'];
+export const DEFAULT_SSL_CIPHERS = 'HIGH:!aNULL:!eNULL:!EXPORT:!DES:!RC4:!MD5';
+
 // ── Ring Buffer ─────────────────────────────────────────────────────────────
 export const RING_BUFFER_MAX_LINES = 2000;
 export const RING_BUFFER_MAX_BYTES = 1 * 1024 * 1024; // 1 MB

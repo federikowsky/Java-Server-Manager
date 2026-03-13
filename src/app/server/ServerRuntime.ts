@@ -34,6 +34,7 @@ export class ServerRuntime {
       serverId,
       state: 'stopped',
       lastTransitionAt: Date.now(),
+      debugAttached: false,
     };
     this.bus = bus;
     this.logger = logger;
@@ -45,6 +46,7 @@ export class ServerRuntime {
   get lastStartMode(): StartMode | undefined { return this._state.lastStartMode; }
   get lastTransitionAt(): number { return this._state.lastTransitionAt; }
   get lastError(): JsmError | undefined { return this._state.lastError; }
+  get debugAttached(): boolean { return this._state.debugAttached; }
 
   /** Get the full runtime state snapshot. */
   getState(): ServerRuntimeState {
@@ -120,6 +122,18 @@ export class ServerRuntime {
       serverId: this._state.serverId,
       state,
       prevState: prev,
+    });
+  }
+
+  /** Set debug-attached state and emit event for tree refresh. */
+  setDebugAttached(attached: boolean): void {
+    if (this._state.debugAttached === attached) return;
+    this._state = { ...this._state, debugAttached: attached };
+    this.logger.info(`ServerRuntime[${this._state.serverId}]: debugAttached → ${attached}`);
+    this.bus.emit('ServerStateChanged', {
+      serverId: this._state.serverId,
+      state: this._state.state,
+      prevState: this._state.state,
     });
   }
 }

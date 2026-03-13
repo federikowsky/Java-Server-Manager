@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ServerLifecycle } from '@app/server/ServerLifecycle';
 import type { ServerConfig } from '@core/types/domain';
 import type { Logger } from '@core/types/logger';
-import { ok } from '@core/result';
+import { ok, err } from '@core/result';
 import { JsmError } from '@core/errors/JsmError';
 import { ErrorCode } from '@core/errors/codes';
 import type { HookConfig } from '@core/types/domain';
@@ -70,7 +70,7 @@ function mockPidManager() {
 }
 
 function mockPortScanner() {
-  return { probe: vi.fn(async () => false) };
+  return { probe: vi.fn(async () => false), findFreePort: vi.fn(async () => null) };
 }
 
 function mockDebugAttacher() {
@@ -621,6 +621,173 @@ describe('ServerLifecycle', () => {
       trustedLifecycle.register('srv-1', makeServer(), queue as never);
       const result = trustedLifecycle.start('srv-1', 'run');
       expect(result.ok).toBe(true);
+    });
+  });
+
+  /* ── attachDebug / detachDebug ───────────────────────────────────── */
+
+  describe('attachDebug', () => {
+    it('attaches debugger to running server', async () => {
+      const queue = mockQueue();
+      const runtime = lifecycle.register('srv-1', makeServer(), queue as never);
+      runtime.forceState('running', { pid: 123 });
+
+      debugAttacher.attach.mockResolvedValue(ok(undefined));
+
+      const result = await lifecycle.attachDebug('srv-1');
+      expect(result.ok).toBe(true);
+      expect(debugAttacher.attach).toHaveBeenCalledWith({
+        serverId: 'srv-1',
+        port: 5005,
+        name: 'Debug: My Tomcat',
+        bind: '127.0.0.1',
+      });
+      expect(runtime.debugAttached).toBe(true);
+    });
+
+    it('fails when server is stopped', async () => {
+      const queue = mockQueue();
+      lifecycle.register('srv-1', makeServer(), queue as never);
+
+      const result = await lifecycle.attachDebug('srv-1');
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe(ErrorCode.NotRunning);
+    });
+
+    it('fails when already attached', async () => {
+      const queue = mockQueue();
+      const runtime = lifecycle.register('srv-1', makeServer(), queue as never);
+      runtime.forceState('running', { pid: 123 });
+      runtime.setDebugAttached(true);
+
+      const result = await lifecycle.attachDebug('srv-1');
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe(ErrorCode.AlreadyRunning);
+    });
+
+    it('fails for unknown server', async () => {
+      const result = await lifecycle.attachDebug('nope');
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe(ErrorCode.InvalidConfig);
+    });
+
+    it('does not set debugAttached when attach fails', async () => {
+      const queue = mockQueue();
+      const runtime = lifecycle.register('srv-1', makeServer(), queue as never);
+      runtime.forceState('running', { pid: 123 });
+
+      debugAttacher.attach.mockResolvedValue(
+        err(new JsmError({ code: ErrorCode.ProcessSpawnFailed, message: 'attach failed' })),
+      );
+
+      const result = await lifecycle.attachDebug('srv-1');
+      expect(result.ok).toBe(false);
+      expect(runtime.debugAttached).toBe(false);
+    });
+  });
+
+  describe('detachDebug', () => {
+    it('detaches debugger from server with attached debugger', async () => {
+      const queue = mockQueue();
+      const runtime = lifecycle.register('srv-1', makeServer(), queue as never);
+      runtime.forceState('running', { pid: 123 });
+      runtime.setDebugAttached(true);
+
+      const result = await lifecycle.detachDebug('srv-1');
+      expect(result.ok).toBe(true);
+      expect(debugAttacher.detach).toHaveBeenCalledWith('srv-1');
+      expect(runtime.debugAttached).toBe(false);
+    });
+
+    it('fails when debugger not attached', async () => {
+      const queue = mockQueue();
+      const runtime = lifecycle.register('srv-1', makeServer(), queue as never);
+      runtime.forceState('running', { pid: 123 });
+
+      const result = await lifecycle.detachDebug('srv-1');
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe(ErrorCode.InvalidConfig);
+    });
+
+    it('fails for unknown server', async () => {
+      const result = await lifecycle.detachDebug('nope');
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe(ErrorCode.InvalidConfig);
+    });
+  });
+
+  describe('debug state tracking', () => {
+    it('sets debugAttached true after start in debug mode', async () => {
+      const queue = mockQueue();
+      const runtime = lifecycle.register('srv-1', makeServer(), queue as never);
+
+      const pluginStart = vi.fn(async () => ok({
+        pid: 123,
+        httpUrl: 'http://127.0.0.1:8080',
+        hints: [],
+      }));
+
+      pluginRegistry.get.mockReturnValue({
+        start: pluginStart,
+        stop: vi.fn(),
+        getStatus: vi.fn(),
+        detect: vi.fn(),
+      });
+      portScanner.probe.mockResolvedValue(true);
+      debugAttacher.attach.mockResolvedValue(ok(undefined));
+
+      const executor = queue.setExecutor.mock.calls[0][0] as (entry: { kind: string; meta?: Record<string, unknown> }) => Promise<void>;
+      await executor({ kind: 'LifecycleStart', meta: { mode: 'debug' } });
+
+      expect(runtime.state).toBe('running');
+      expect(debugAttacher.attach).toHaveBeenCalled();
+      expect(runtime.debugAttached).toBe(true);
+    });
+
+    it('does not set debugAttached after start in run mode', async () => {
+      const queue = mockQueue();
+      const runtime = lifecycle.register('srv-1', makeServer(), queue as never);
+
+      const pluginStart = vi.fn(async () => ok({
+        pid: 123,
+        httpUrl: 'http://127.0.0.1:8080',
+        hints: [],
+      }));
+
+      pluginRegistry.get.mockReturnValue({
+        start: pluginStart,
+        stop: vi.fn(),
+        getStatus: vi.fn(),
+        detect: vi.fn(),
+      });
+      portScanner.probe.mockResolvedValue(true);
+
+      const executor = queue.setExecutor.mock.calls[0][0] as (entry: { kind: string; meta?: Record<string, unknown> }) => Promise<void>;
+      await executor({ kind: 'LifecycleStart', meta: { mode: 'run' } });
+
+      expect(runtime.state).toBe('running');
+      expect(debugAttacher.attach).not.toHaveBeenCalled();
+      expect(runtime.debugAttached).toBe(false);
+    });
+
+    it('clears debugAttached on stop', async () => {
+      const queue = mockQueue();
+      const runtime = lifecycle.register('srv-1', makeServer(), queue as never);
+      runtime.forceState('running', { pid: 123 });
+      runtime.setDebugAttached(true);
+
+      pluginRegistry.get.mockReturnValue({
+        start: vi.fn(),
+        stop: vi.fn(async () => ok(undefined)),
+        getStatus: vi.fn(),
+        detect: vi.fn(),
+      });
+
+      const executor = queue.setExecutor.mock.calls[0][0] as (entry: { kind: string; meta?: Record<string, unknown> }) => Promise<void>;
+      await executor({ kind: 'LifecycleStop' });
+
+      expect(runtime.state).toBe('stopped');
+      expect(runtime.debugAttached).toBe(false);
     });
   });
 });

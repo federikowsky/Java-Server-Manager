@@ -14,7 +14,7 @@ export const WEBVIEW_PROTOCOL_VERSION = 1 as const;
 export interface FormFieldDef {
   name: string;
   label: string;
-  type: 'text' | 'number' | 'path' | 'select' | 'checkbox' | 'textarea' | 'tags' | 'port' | 'hooks';
+  type: 'text' | 'number' | 'path' | 'select' | 'checkbox' | 'textarea' | 'tags' | 'port' | 'hooks' | 'password';
   required?: boolean;
   defaultValue?: unknown;
   placeholder?: string;

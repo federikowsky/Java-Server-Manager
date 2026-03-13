@@ -99,6 +99,10 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
   // ── 4. UI adapters (needed by app layer) ──────────────────────────────
 
   const debugAdapter = new DebugAdapter();
+  disposables.push(debugAdapter.onDidChangeSession(({ serverId, attached }) => {
+    const runtime = lifecycle.getRuntime(serverId);
+    if (runtime) runtime.setDebugAttached(attached);
+  }));
   const fileWatcherAdapter = new FileWatcherAdapter();
   const logChannel = new ServerLogChannel();
   disposables.push(logChannel);

@@ -100,6 +100,27 @@ export interface LogSources {
   others: LogSource[];
 }
 
+// ── Plugin UI Metadata ─────────────────────────────────────────────────────
+
+export interface PluginUIMetadata {
+  /** Display name for the server type (e.g., "Tomcat", "Jetty") */
+  displayName: string;
+  /** Label for runtime home path (e.g., "CATALINA_HOME", "JETTY_HOME") */
+  runtimeHomeLabel: string;
+  /** Help text for runtime home path field */
+  runtimeHomeHelp: string;
+  /** Default server name placeholder */
+  defaultName: string;
+  /** Environment variables to scan for autodiscovery */
+  discoveryEnvVars: string[];
+  /** Common installation paths for autodiscovery */
+  discoveryPaths: string[];
+  /** Description for autodiscovery setting */
+  discoveryDescription: string;
+  /** Description for hot reload feature (if supported) */
+  hotReloadDescription?: string;
+}
+
 // ── IServerPlugin Contract (§6.2) ──────────────────────────────────────────
 
 export interface IServerPlugin {
@@ -107,6 +128,7 @@ export interface IServerPlugin {
   readonly displayName: string;
 
   getCapabilities(): PluginCapabilities;
+  getUIMetadata(): PluginUIMetadata;
 
   // Detection and validation
   detectInstallation(homePath: string): Promise<Result<DetectReport, JsmError>>;

@@ -25,11 +25,18 @@ export function deferredStub(label: string): () => void {
 // ── Type guards ─────────────────────────────────────────────────────────────
 
 export function isServerNode(arg: unknown): arg is ServerNode {
-  return arg instanceof ServerNode;
+  if (arg instanceof ServerNode) return true;
+  if (arg instanceof DeploymentNode) return false;
+  if (typeof arg !== 'object' || arg === null) return false;
+  const candidate = arg as Record<string, unknown>;
+  return typeof candidate['serverId'] === 'string' && typeof candidate['workspaceFolderUri'] === 'string';
 }
 
 export function isDeploymentNode(arg: unknown): arg is DeploymentNode {
-  return arg instanceof DeploymentNode;
+  if (arg instanceof DeploymentNode) return true;
+  if (typeof arg !== 'object' || arg === null) return false;
+  const candidate = arg as Record<string, unknown>;
+  return typeof candidate['serverId'] === 'string' && typeof candidate['deploymentId'] === 'string';
 }
 
 // ── Bulk registration ───────────────────────────────────────────────────────

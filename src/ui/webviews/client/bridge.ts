@@ -68,6 +68,36 @@ export function sendRequestDefaults(pluginType: string): void {
   postToHost({ v: WEBVIEW_PROTOCOL_VERSION, command: 'requestDefaults', pluginType });
 }
 
+// ── SPA Command Helpers ─────────────────────────────────────────────────────
+
+export function sendExecuteCommand(id: string, args?: unknown[]): void {
+  postToHost({ v: WEBVIEW_PROTOCOL_VERSION, command: 'executeCommand', id, args });
+}
+
+export function sendUpdateServer(serverId: string, config: unknown, workspaceFolderUri: string): void {
+  postToHost({ v: WEBVIEW_PROTOCOL_VERSION, command: 'updateServer', serverId, config, workspaceFolderUri });
+}
+
+export function sendCreateServer(config: unknown, workspaceFolderUri: string): void {
+  postToHost({ v: WEBVIEW_PROTOCOL_VERSION, command: 'createServer', config, workspaceFolderUri });
+}
+
+export function sendDeleteServer(serverId: string, workspaceFolderUri: string): void {
+  postToHost({ v: WEBVIEW_PROTOCOL_VERSION, command: 'deleteServer', serverId, workspaceFolderUri });
+}
+
+export function sendSaveTemplate(template: unknown, scope: 'global' | 'workspace'): void {
+  postToHost({ v: WEBVIEW_PROTOCOL_VERSION, command: 'saveTemplate', template, scope });
+}
+
+export function sendDeleteTemplate(templateId: string, scope: 'global' | 'workspace'): void {
+  postToHost({ v: WEBVIEW_PROTOCOL_VERSION, command: 'deleteTemplate', templateId, scope });
+}
+
+export function sendRequestWorkspaceFolders(): void {
+  postToHost({ v: WEBVIEW_PROTOCOL_VERSION, command: 'requestWorkspaceFolders' });
+}
+
 // ── Listener ────────────────────────────────────────────────────────────────
 
 type HostMessageHandler = (msg: HostToWebview) => void;

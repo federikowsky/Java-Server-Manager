@@ -616,7 +616,7 @@ export class ServerFormPanel extends BaseFormPanel {
 
 import type { ServerConfig } from '@core/types';
 
-function templateToServerFormData(template: ServerTemplate): Record<string, unknown> {
+export function templateToServerFormData(template: ServerTemplate): Record<string, unknown> {
   const defaults = template.serverDefaults;
   
   // Convert nested structure to flat paths for formData
@@ -654,7 +654,7 @@ function templateToServerFormData(template: ServerTemplate): Record<string, unkn
   return flatData;
 }
 
-function serverConfigToFormData(config: ServerConfig): Record<string, unknown> {
+export function serverConfigToFormData(config: ServerConfig): Record<string, unknown> {
   return {
     id: config.id,
     name: config.name,
@@ -668,10 +668,29 @@ function serverConfigToFormData(config: ServerConfig): Record<string, unknown> {
     'run.vmArgs': config.run.vmArgs,
     'debug.bind': config.debug.bind,
     hooks: config.hooks,
+    ...extractPluginConfig(config.pluginConfig),
   };
 }
 
-function formDataToServerConfig(
+function extractPluginConfig(pluginConfig: any): Record<string, unknown> {
+  if (!pluginConfig) return {};
+  const result: Record<string, unknown> = {};
+  if (pluginConfig.ssl) {
+    result['pluginConfig.ssl.enabled'] = pluginConfig.ssl.enabled;
+    result['pluginConfig.ssl.port'] = pluginConfig.ssl.port;
+    result['pluginConfig.ssl.keystorePath'] = pluginConfig.ssl.keystorePath;
+    result['pluginConfig.ssl.keystorePassword'] = pluginConfig.ssl.keystorePassword;
+    result['pluginConfig.ssl.keystoreType'] = pluginConfig.ssl.keystoreType;
+    result['pluginConfig.ssl.keyAlias'] = pluginConfig.ssl.keyAlias;
+    result['pluginConfig.ssl.clientAuth'] = pluginConfig.ssl.clientAuth;
+    result['pluginConfig.ssl.truststorePath'] = pluginConfig.ssl.truststorePath;
+    result['pluginConfig.ssl.truststorePassword'] = pluginConfig.ssl.truststorePassword;
+    result['pluginConfig.ssl.truststoreType'] = pluginConfig.ssl.truststoreType;
+  }
+  return result;
+}
+
+export function formDataToServerConfig(
   data: Record<string, unknown>,
   existing: ServerConfig,
 ): ServerConfig {

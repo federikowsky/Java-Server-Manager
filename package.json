@@ -15,14 +15,14 @@
   "contributes": {
     "commands": [
       {
+        "command": "jsm.dashboard.open",
+        "title": "Open Server Dashboard",
+        "icon": "$(settings-gear)"
+      },
+      {
         "command": "jsm.server.add",
         "title": "Add Server",
         "icon": "$(add)"
-      },
-      {
-        "command": "jsm.templates.manage",
-        "title": "Manage Templates",
-        "icon": "$(settings-gear)"
       },
       {
         "command": "jsm.server.startRun",
@@ -173,7 +173,7 @@
           "group": "navigation@4"
         },
         {
-          "command": "jsm.templates.manage",
+          "command": "jsm.dashboard.open",
           "when": "view == javaServerManagerView",
           "group": "navigation@5"
         }

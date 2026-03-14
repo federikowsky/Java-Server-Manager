@@ -28,10 +28,11 @@ import type { HookExecutor } from '@app/hooks';
 import { OutputSinkAdapter, MementoAdapter, DebugAdapter, FileWatcherAdapter } from '@ui/adapters';
 import { ServerLogChannel } from '@ui/channels';
 import { ServerTreeViewProvider } from '@ui/tree';
+import { DashboardPanel } from '@ui/webviews/panels/DashboardPanel';
 import { ServerFormPanel } from '@ui/webviews/panels/ServerFormPanel';
 import { DeploymentFormPanel } from '@ui/webviews/panels/DeploymentFormPanel';
 import { TemplateManagerPanel } from '@ui/webviews/panels/TemplateManagerPanel';
-import { registerServerCommands, registerDeploymentCommands, registerTemplateCommands } from '@ui/commands';
+import { registerServerCommands, registerDeploymentCommands } from '@ui/commands';
 import {
   MAIN_OUTPUT_CHANNEL,
   VIEW_ID,
@@ -205,8 +206,11 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
 
   const workspaceServiceRegistry = new WorkspaceServiceRegistry(
     workspaceFolders.map(folder => {
+      const scopeUri = typeof (folder.uri as any)?.toString === 'function'
+        ? (folder.uri as any).toString()
+        : (folder.uri as any)?.fsPath ?? '';
       const scope = {
-        uri: folder.uri.toString(),
+        uri: scopeUri,
         name: folder.name,
         fsPath: folder.uri.fsPath,
       };
@@ -358,9 +362,25 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
   });
   disposables.push(templateManagerPanel);
 
+  const dashboardPanel = new DashboardPanel({
+    extensionUri: ctx.extensionUri,
+    workspaceRegistry: workspaceServiceRegistry,
+    lifecycle,
+    templateService,
+    pluginRegistry,
+    discoveryService,
+    logger,
+    bus: eventBus,
+    serverFormPanel,
+  });
+  disposables.push(dashboardPanel);
+
   // ── 7. Commands ───────────────────────────────────────────────────────
 
   disposables.push(
+    vscode.commands.registerCommand('jsm.dashboard.open', () => {
+      dashboardPanel.show();
+    }),
     ...registerServerCommands({
       lifecycle,
       pluginRegistry,
@@ -377,9 +397,6 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
       deployService,
       treeProvider,
       deploymentFormPanel,
-    }),
-    ...registerTemplateCommands({
-      templateManagerPanel,
     }),
   );
 
@@ -440,6 +457,8 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
         channel.clear();
         logChannel.showLogs(serverId, name);
       } else if (state === 'running') {
+        const channel = logChannel.getChannel(serverId, name);
+        channel.clear();
         logChannel.showLogs(serverId, name);
         if (config) autoSyncService.enable(config, serverId);
       } else if (state === 'stopped' || state === 'error') {

@@ -37,9 +37,27 @@ export const templates = writable<Array<{ id: string; name: string; defaults: Re
 
 // ── SPA Mode Stores ─────────────────────────────────────────────────────────
 
-export type EntityType = 'server' | 'template' | 'new-server' | 'new-template' | 'settings';
+export type EntityType = 'server' | 'template' | 'new-server' | 'new-template' | 'settings' | 'deployment';
 
-export const activeEntity = writable<{ type: EntityType; id?: string }>({ type: 'settings' });
+export interface ActiveEntity {
+  type: EntityType;
+  id?: string;
+  /** For deployment entity: the server ID this deployment belongs to */
+  serverId?: string;
+  /** For deployment entity: 'create' or 'edit' mode */
+  mode?: 'create' | 'edit';
+}
+
+export const activeEntity = writable<ActiveEntity>({ type: 'settings' });
+
+export interface SpaSettings {
+  autoDiscovery: boolean;
+  scanEnvVars: boolean;
+  scanCommonPaths: boolean;
+  defaultHttpPort: number;
+  defaultDebugPort: number;
+  defaultJavaHome: string;
+}
 
 export const spaState = writable<{
   servers: Array<{ config: any; workspaceFolderUri: string; workspaceFolderName: string }>;
@@ -47,6 +65,8 @@ export const spaState = writable<{
   templates: Array<{ template: any; scope: 'global' | 'workspace' }>;
   capabilities: Record<string, any>;
   workspaceFolders: Array<{ uri: string; name: string }>;
+  currentFormSchema?: import('../protocol').FormSchema;
+  settings?: SpaSettings;
 }>({
   servers: [],
   runtimeStates: {},
@@ -54,3 +74,9 @@ export const spaState = writable<{
   capabilities: {},
   workspaceFolders: [],
 });
+
+/** Browse dialog result — updated when host sends 'browsed' message */
+export const browseResult = writable<{ field: string; path: string } | null>(null);
+
+/** Host error message — updated when host sends 'error' message */
+export const hostError = writable<string>('');

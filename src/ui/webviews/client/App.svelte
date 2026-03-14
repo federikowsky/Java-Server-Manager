@@ -1,12 +1,13 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
-  import { schema, mode, formId, formData, fieldErrors, submitting, globalError, templates } from './stores';
+  import { schema, mode, formId, formData, fieldErrors, submitting, globalError, templates, spaState, browseResult, hostError } from './stores';
   import { sendReady, onHostMessage } from './bridge';
   import type { HostToWebview, FormSchema } from '../protocol';
   import FormHeader from './components/FormHeader.svelte';
   import FormBody from './components/FormBody.svelte';
   import FormActions from './components/FormActions.svelte';
   import GlobalError from './components/GlobalError.svelte';
+  import Layout from './components/spa/Layout.svelte';
 
   let currentSchema = $state<import('../protocol').FormSchema | null>(null);
   let currentMode = $state<'create' | 'edit'>('create');
@@ -58,29 +59,6 @@
 
   function handleHostMessage(msg: HostToWebview): void {
     switch (msg.command) {
-      case 'init': {
-        performance.mark('jsm:init-received');
-        formId.set(msg.formId);
-        schema.set(msg.schema);
-        mode.set(msg.mode);
-        fieldErrors.set({});
-        globalError.set('');
-        submitting.set(false);
-        formData.set({
-          ...collectSchemaDefaults(msg.schema),
-          ...(msg.data ?? {}),
-        });
-        if (msg.templates) {
-          templates.set(msg.templates);
-        }
-        void tick().then(() => {
-          requestAnimationFrame(() => {
-            performance.mark('jsm:fcp');
-            performance.measure('jsm:init-to-fcp', 'jsm:init-received', 'jsm:fcp');
-          });
-        });
-        break;
-      }
       case 'loaded':
         formData.update(d => ({ ...d, ...msg.data }));
         break;
@@ -105,17 +83,54 @@
         });
         break;
       case 'browsed':
+        formData.update(d => ({ ...d, [msg.field]: msg.path }));
+        browseResult.set({ field: msg.field, path: msg.path });
+        break;
       case 'fieldActionResult':
-        formData.update(d => ({ ...d, [msg.field]: msg.path || msg.value }));
+        formData.update(d => ({ ...d, [msg.field]: msg.value }));
         break;
       case 'defaults':
         formData.update(d => ({ ...d, ...msg.data }));
+        break;
+      case 'syncState':
+        spaState.set({
+          servers: msg.servers,
+          runtimeStates: msg.runtimeStates,
+          templates: msg.templates,
+          capabilities: msg.capabilities,
+          workspaceFolders: msg.workspaceFolders,
+          settings: (msg as any).settings,
+        });
+        break;
+      case 'serverStateChanged':
+        spaState.update(state => ({
+          ...state,
+          runtimeStates: { ...state.runtimeStates, [msg.serverId]: msg.state },
+        }));
+        break;
+      case 'init':
+        // Reuse init message for form schema
+        spaState.update(s => ({ ...s, currentFormSchema: msg.schema }));
+        formId.set(msg.formId);
+        schema.set(msg.schema);
+        mode.set(msg.mode);
+        fieldErrors.set({});
+        globalError.set('');
+        submitting.set(false);
+        formData.set({
+          ...collectSchemaDefaults(msg.schema),
+          ...(msg.data ?? {}),
+        });
+        if (msg.templates) {
+          templates.set(msg.templates);
+        }
         break;
       case 'hookOptions':
         schema.update(current => current ? applyHookTaskOptions(current, msg.fields, msg.taskOptions) : current);
         break;
       case 'error':
         globalError.set(msg.message);
+        hostError.set(msg.message);
         submitting.set(false);
         break;
     }
@@ -129,11 +144,7 @@
 </script>
 
 {#if (window as any).__JSM_SPA_MODE__}
-  <!-- Placeholder for new SPA Router -->
-  <div style="padding: 20px; color: var(--vscode-foreground);">
-    <h1>Java Server Manager Dashboard</h1>
-    <p>SPA routing and views will be implemented here.</p>
-  </div>
+  <Layout />
 {:else}
   {#if currentSchema}
     <GlobalError message={currentGlobalError} />

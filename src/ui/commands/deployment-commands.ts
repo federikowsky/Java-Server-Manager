@@ -87,7 +87,24 @@ export function registerDeploymentCommands(
   return registerMany([
 
     // §8.2 — jsm.deployment.add
-    ['jsm.deployment.add', (arg: unknown) => {
+    ['jsm.deployment.add', async (arg: unknown) => {
+      // Check if this is a SPA form submission (has deployment data)
+      if (arg && typeof arg === 'object' && 'deployment' in arg) {
+        const spaArg = arg as { serverId: string; serverKey: string; workspaceFolderUri: string; deployment: DeploymentConfig };
+        const config = resolveServer(spaArg.workspaceFolderUri, spaArg.serverId);
+        if (!config) { showErr(new JsmError({ code: ErrorCode.InvalidConfig, message: 'Server not found' })); return; }
+        
+        const result = workspaceRegistry
+          ? await workspaceRegistry.addDeployment({ workspaceFolderUri: spaArg.workspaceFolderUri, serverId: spaArg.serverId }, spaArg.deployment)
+          : await configService?.updateServer({ ...config, deployments: [...config.deployments, spaArg.deployment] });
+        if (!result) return;
+        if (!result.ok) { showErr(result.error); return; }
+        showSuccess(`Deployment "${spaArg.deployment.deployName}" added.`);
+        treeProvider.requestRefresh();
+        return;
+      }
+      
+      // Legacy: open form panel
       if (!isServerNode(arg)) return;
       if (deploymentFormPanel.openCreate) {
         deploymentFormPanel.openCreate({
@@ -160,7 +177,31 @@ export function registerDeploymentCommands(
     ['jsm.deployment.configureIgnoreGlobs', deferredStub('Configure Ignore Globs')],
 
     // §8.2 — jsm.deployment.edit
-    ['jsm.deployment.edit', (arg: unknown) => {
+    ['jsm.deployment.edit', async (arg: unknown) => {
+      // Check if this is a SPA form submission (has deployment data)
+      if (arg && typeof arg === 'object' && 'deployment' in arg) {
+        const spaArg = arg as { serverId: string; serverKey: string; workspaceFolderUri: string; deployment: DeploymentConfig };
+        const config = resolveServer(spaArg.workspaceFolderUri, spaArg.serverId);
+        if (!config) { showErr(new JsmError({ code: ErrorCode.InvalidConfig, message: 'Server not found' })); return; }
+        
+        const updatedServer = {
+          ...config,
+          deployments: config.deployments.map((d: DeploymentConfig) =>
+            d.id === spaArg.deployment.id ? spaArg.deployment : d,
+          ),
+        };
+        
+        const result = workspaceRegistry
+          ? await workspaceRegistry.updateServer({ workspaceFolderUri: spaArg.workspaceFolderUri, serverId: spaArg.serverId }, updatedServer)
+          : await configService?.updateServer(updatedServer);
+        if (!result) return;
+        if (!result.ok) { showErr(result.error); return; }
+        showSuccess(`Deployment "${spaArg.deployment.deployName}" updated.`);
+        treeProvider.requestRefresh();
+        return;
+      }
+      
+      // Legacy: open form panel
       if (!isDeploymentNode(arg)) return;
       if (deploymentFormPanel.openEdit) {
         deploymentFormPanel.openEdit({

@@ -156,6 +156,11 @@ const mockConfigServiceGetServer = vi.fn();
 const mockConfigServiceGetAllServers = vi.fn(() => []);
 const mockConfigServiceReload = vi.fn(async () => ({ ok: true, value: [] }));
 
+const mockGetWorkspaceScopes = vi.fn(() => []);
+const mockGetEntry = vi.fn();
+const mockGetServer = vi.fn();
+const mockGetServerRecordByKey = vi.fn();
+
 vi.mock('@app/config', () => ({
   ConfigService: class {
     loadWorkspace = mockConfigServiceLoadWorkspace;
@@ -164,18 +169,18 @@ vi.mock('@app/config', () => ({
     reload = mockConfigServiceReload;
   },
   WorkspaceServiceRegistry: class {
-    getWorkspaceScopes = vi.fn(() => []);
+    getWorkspaceScopes = mockGetWorkspaceScopes;
     getServers = vi.fn(() => []);
-    getServer = vi.fn();
-    getServerRecordByKey = vi.fn();
-    getEntry = vi.fn();
+    getServer = mockGetServer;
+    getServerRecordByKey = mockGetServerRecordByKey;
+    getEntry = mockGetEntry;
     getEntryByFolderUri = vi.fn();
     reloadAll = vi.fn(async () => ({ ok: true, value: undefined }));
     addServer = vi.fn(async () => ({ ok: true, value: undefined }));
     updateServer = vi.fn(async () => ({ ok: true, value: undefined }));
     addDeployment = vi.fn(async () => ({ ok: true, value: undefined }));
   },
-  makeWorkspaceServerKey: (uri: string, serverId: string) => `${uri}::${serverId}`,
+  makeWorkspaceServerKey: (uri: string | undefined, serverId: string) => uri ? `${uri}::${serverId}` : serverId,
 }));
 
 // ServerLifecycle
@@ -375,8 +380,18 @@ describe('Extension Activation', () => {
     expect(mockSchemaValidatorRegisterBuiltInSchemas).toHaveBeenCalledWith(expect.any(Object));
   });
 
+  function setupWorkspaceScope() {
+    mockGetWorkspaceScopes.mockReturnValue([
+      { uri: '/test/workspace', name: 'Test', fsPath: '/test/workspace' },
+    ]);
+    mockGetEntry.mockReturnValue({
+      configService: { loadWorkspace: mockConfigServiceLoadWorkspace },
+    });
+  }
+
   it('should load workspace config on activation', async () => {
     workspaceFolders = [{ uri: { fsPath: '/test/workspace' } }];
+    setupWorkspaceScope();
 
     await activate(ctx);
 
@@ -385,12 +400,14 @@ describe('Extension Activation', () => {
 
   it('should register loaded servers with lifecycle', async () => {
     workspaceFolders = [{ uri: { fsPath: '/test/workspace' } }];
+    setupWorkspaceScope();
+
     const server = { id: 'srv-1', name: 'Test', type: 'tomcat' };
     mockConfigServiceLoadWorkspace.mockResolvedValue({ ok: true, value: [server] });
 
     await activate(ctx);
 
-    expect(mockLifecycleRegister).toHaveBeenCalledWith(server, expect.anything());
+    expect(mockLifecycleRegister).toHaveBeenCalledWith('/test/workspace::srv-1', server, expect.anything());
   });
 
   it('should refresh the tree immediately after loading workspace config', async () => {
@@ -405,6 +422,10 @@ describe('Extension Activation', () => {
 
   it('should trigger reconciliation after loading', async () => {
     workspaceFolders = [{ uri: { fsPath: '/test/workspace' } }];
+    setupWorkspaceScope();
+
+    const server = { id: 'srv-1', name: 'Test', type: 'tomcat' };
+    mockConfigServiceLoadWorkspace.mockResolvedValue({ ok: true, value: [server] });
 
     await activate(ctx);
 
@@ -413,19 +434,21 @@ describe('Extension Activation', () => {
 
   it('should register and refresh when a server is added after activation', async () => {
     workspaceFolders = [{ uri: { fsPath: '/test/workspace' } }];
+    setupWorkspaceScope();
     const server = { id: 'srv-1', name: 'Test', type: 'tomcat' };
-    mockConfigServiceGetServer.mockReturnValue(server);
+    mockGetServer.mockReturnValue(server);
 
     await activate(ctx);
 
     eventHandlers.get('ServerAdded')?.({ serverId: 'srv-1' });
 
-    expect(mockLifecycleRegister).toHaveBeenCalledWith(server, expect.anything());
+    expect(mockLifecycleRegister).toHaveBeenCalledWith('srv-1', server, expect.anything());
     expect(mockTreeProviderRequestRefresh).toHaveBeenCalled();
   });
 
   it('should unregister and refresh when a server is deleted', async () => {
     workspaceFolders = [{ uri: { fsPath: '/test/workspace' } }];
+    setupWorkspaceScope();
 
     await activate(ctx);
 
@@ -439,6 +462,7 @@ describe('Extension Activation', () => {
 
   it('should update lifecycle config and refresh when a deployment changes', async () => {
     workspaceFolders = [{ uri: { fsPath: '/test/workspace' } }];
+    setupWorkspaceScope();
     const server = { id: 'srv-1', name: 'Test', type: 'tomcat' };
     mockConfigServiceGetServer.mockReturnValue(server);
 
@@ -452,6 +476,7 @@ describe('Extension Activation', () => {
 
   it('should keep the server log channel after a server stops', async () => {
     workspaceFolders = [{ uri: { fsPath: '/test/workspace' } }];
+    setupWorkspaceScope();
     const server = { id: 'srv-1', name: 'Test', type: 'tomcat' };
     mockConfigServiceGetServer.mockReturnValue(server);
 
@@ -466,8 +491,10 @@ describe('Extension Activation', () => {
 
   it('should clear and show log channel when a server transitions to running', async () => {
     workspaceFolders = [{ uri: { fsPath: '/test/workspace' } }];
+    setupWorkspaceScope();
     const server = { id: 'srv-1', name: 'Test', type: 'tomcat' };
-    mockConfigServiceGetServer.mockReturnValue(server);
+    mockGetServer.mockReturnValue(server);
+    mockGetServerRecordByKey.mockReturnValue({ config: server });
 
     await activate(ctx);
     // reset any previous spies

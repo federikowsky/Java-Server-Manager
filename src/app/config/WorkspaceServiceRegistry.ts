@@ -32,16 +32,18 @@ export interface WorkspaceServiceEntry {
 }
 
 export function makeWorkspaceServerKey(
-  workspaceFolderUri: string,
+  workspaceFolderUri: string | undefined,
   serverId: ServerId,
 ): ServerId {
+  if (!workspaceFolderUri) return serverId;
   return `${workspaceFolderUri}::${serverId}`;
 }
 
 function parseWorkspaceServerKey(serverKey: ServerId): WorkspaceServerLocator | undefined {
   const separator = serverKey.lastIndexOf('::');
   if (separator <= 0) {
-    return undefined;
+    // If no workspace prefix is supplied, treat the key as a bare serverId.
+    return { workspaceFolderUri: '', serverId: serverKey };
   }
 
   return {
@@ -129,6 +131,17 @@ export class WorkspaceServiceRegistry {
     }
 
     return entry.configService.addServer(config);
+  }
+
+  async removeServer(
+    locator: WorkspaceServerLocator,
+  ): Promise<Result<void, JsmError>> {
+    const entry = this.entriesByUri.get(locator.workspaceFolderUri);
+    if (!entry) {
+      return this.workspaceNotFound(locator.workspaceFolderUri);
+    }
+
+    return entry.configService.removeServer(locator.serverId);
   }
 
   async addDeployment(

@@ -6,7 +6,6 @@ import type {
   DeploymentId,
   ServerState,
   DeploymentState,
-  TomcatPluginConfig,
 } from '@core/types';
 import type { ServerRuntimeState } from '@core/types/runtime';
 import type { HealthReport } from '@plugins/interfaces/IServerPlugin';
@@ -89,7 +88,9 @@ export class ServerNode extends vscode.TreeItem {
     // Include debugAttached suffix for menu visibility
     const debugSuffix = debugAttached ? '.debugAttached' : '';
     this.contextValue = `${SERVER_CONTEXT[state]}${debugSuffix}`;
-    const ssl = (config.pluginConfig as TomcatPluginConfig | undefined)?.ssl;
+    // Generic SSL detection via pluginConfig (works for any plugin that supports SSL)
+    const pluginConfig = config.pluginConfig as Record<string, unknown> | undefined;
+    const ssl = pluginConfig?.ssl as { enabled?: boolean; port?: number } | undefined;
     const sslLabel = ssl?.enabled ? ` • HTTPS:${ssl.port}` : '';
     this.description = showWorkspaceLabel && normalizedRecord.workspaceFolderName
       ? `${state}${sslLabel} • ${normalizedRecord.workspaceFolderName}`
@@ -106,7 +107,9 @@ export class ServerNode extends vscode.TreeItem {
     md.appendMarkdown(`- **Workspace:** ${record.workspaceFolderName}\n`);
     md.appendMarkdown(`- **State:** ${state}\n`);
     md.appendMarkdown(`- **HTTP:** http://${config.host}:${config.ports.http}\n`);
-    const ssl = (config.pluginConfig as TomcatPluginConfig | undefined)?.ssl;
+    // Generic SSL detection via pluginConfig
+    const pluginConfig = config.pluginConfig as Record<string, unknown> | undefined;
+    const ssl = pluginConfig?.ssl as { enabled?: boolean; port?: number; keystoreType?: string; clientAuth?: boolean } | undefined;
     if (ssl?.enabled) {
       md.appendMarkdown(`- **HTTPS:** https://${config.host}:${ssl.port}\n`);
       md.appendMarkdown(`- **Keystore:** ${ssl.keystoreType}${ssl.clientAuth ? ' (mTLS)' : ''}\n`);

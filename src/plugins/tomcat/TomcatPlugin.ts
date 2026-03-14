@@ -24,6 +24,7 @@ import { copyDir, ensureDir, exists } from '@infra/fs';
 import type {
   IServerPlugin,
   PluginCapabilities,
+  PluginUIMetadata,
   ConfigSource,
   DetectReport,
   StartResult,
@@ -139,6 +140,24 @@ export class TomcatPlugin implements IServerPlugin {
 
   getCapabilities(): PluginCapabilities {
     return TOMCAT_CAPABILITIES;
+  }
+
+  getUIMetadata(): PluginUIMetadata {
+    return {
+      displayName: 'Tomcat',
+      runtimeHomeLabel: 'CATALINA_HOME',
+      runtimeHomeHelp: 'Absolute path to the Tomcat installation directory.',
+      defaultName: 'My Tomcat',
+      discoveryEnvVars: ['CATALINA_HOME', 'TOMCAT_HOME'],
+      discoveryPaths: [
+        '/opt/tomcat',
+        '/usr/local/tomcat',
+        '/opt/homebrew/Cellar/tomcat',
+        '~/tomcat',
+      ],
+      discoveryDescription: 'Automatically detect Tomcat installations via environment variables and common paths.',
+      hotReloadDescription: 'Applies file changes and triggers Tomcat context reload without full redeploy. Only affects files outside WEB-INF/ and META-INF/.',
+    };
   }
 
   // ── Detection ───────────────────────────────────────────────────────

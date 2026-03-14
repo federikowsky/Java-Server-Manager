@@ -115,7 +115,6 @@ export function registerServerCommands(
     deployService,
     treeProvider,
     schemaValidator,
-    serverFormPanel,
   } = deps;
 
   const resolveServer = (workspaceFolderUri: string, serverId: string) => workspaceRegistry
@@ -123,19 +122,23 @@ export function registerServerCommands(
     : configService?.getServer(serverId);
 
   return registerMany([
-    ['jsm.server.add', async () => {
-      if (!workspaceRegistry) {
-        serverFormPanel.open?.('create');
+    ['jsm.server.add', async (arg: unknown) => {
+      // Check if this is a SPA form submission (has config data)
+      if (arg && typeof arg === 'object' && 'config' in arg && 'workspaceFolderUri' in arg) {
+        const spaArg = arg as { config: any; workspaceFolderUri: string };
+        if (!workspaceRegistry) {
+          showErr(new JsmError({ code: ErrorCode.InvalidConfig, message: 'Workspace registry not available' }));
+          return;
+        }
+        const result = await workspaceRegistry.addServer(spaArg.workspaceFolderUri, spaArg.config);
+        if (!result.ok) { showErr(result.error); return; }
+        showSuccess(`Server "${spaArg.config.name}" created.`);
+        treeProvider.requestRefresh();
         return;
       }
-
-      const scope = await pickWorkspaceScope(workspaceRegistry.getWorkspaceScopes());
-      if (!scope) return;
-      if (serverFormPanel.openCreate) {
-        serverFormPanel.openCreate(scope.uri);
-        return;
-      }
-      serverFormPanel.open?.('create');
+      
+      // Legacy: open dashboard
+      vscode.commands.executeCommand('jsm.dashboard.open');
     }],
 
     ['jsm.server.startRun', async (arg: unknown) => {
@@ -209,14 +212,7 @@ export function registerServerCommands(
 
     ['jsm.server.edit', (arg: unknown) => {
       if (!isServerNode(arg)) return;
-      if (serverFormPanel.openEdit) {
-        serverFormPanel.openEdit({
-          workspaceFolderUri: arg.workspaceFolderUri,
-          serverId: arg.serverId,
-        });
-        return;
-      }
-      serverFormPanel.open?.('edit', arg.serverId);
+      vscode.commands.executeCommand('jsm.dashboard.open');
     }],
 
     ['jsm.server.duplicate', async (arg: unknown) => {

@@ -5,6 +5,7 @@
  * Compiled by esbuild + esbuild-svelte as IIFE → dist/webview/webview.js.
  */
 
+import './styles/design-tokens.css';
 import { mount } from 'svelte';
 import App from './App.svelte';
 

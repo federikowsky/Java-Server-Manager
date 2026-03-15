@@ -7,6 +7,7 @@
   import AccordionSection from './AccordionSection.svelte';
   import ValidatedInput from './ValidatedInput.svelte';
   import FormPage from '../FormPage.svelte';
+  import HookList from '../../HookList.svelte';
 
   const { templateId }: { templateId?: string } = $props();
 
@@ -38,6 +39,7 @@
   let debugBind = $state('127.0.0.1');
   let selectedWorkspace = $state('');
   let templateHooks = $state<any[]>([]);
+  let userHooks = $state<any[]>([]);
   let templatePluginConfig = $state<Record<string, unknown>>({});
 
   let pluginMeta = $derived(state.capabilities[selectedType] || {});
@@ -264,6 +266,14 @@
     });
   }
 
+  function handleDetectJavaHome() {
+    postToHost({
+      v: WEBVIEW_PROTOCOL_VERSION,
+      command: 'executeCommand',
+      id: 'jsm.java.detect',
+    });
+  }
+
   function addVmArg() {
     const arg = vmArgDraft.trim();
     if (!arg) {
@@ -335,7 +345,7 @@
       'ports.http': httpPort,
       'debug.bind': debugBind,
       'run.vmArgs': [...vmArgs],
-      hooks: cloneValue(templateHooks),
+      hooks: [...cloneValue(templateHooks), ...cloneValue(userHooks)],
       ...templatePluginConfig,
     };
 
@@ -537,6 +547,9 @@
             <button type="button" class="btn btn-secondary" onclick={() => handleBrowse('javaHome')} aria-label="Browse JAVA_HOME">
               <Icon name="folder" size={14} />
             </button>
+            <button type="button" class="btn btn-secondary" onclick={handleDetectJavaHome} title="Detect from $JAVA_HOME" aria-label="Detect JAVA_HOME from environment">
+              <Icon name="search" size={14} />
+            </button>
           </div>
           {#if errors.javaHome && touched.javaHome}
             <p class="field-error">{errors.javaHome}</p>
@@ -576,11 +589,14 @@
 
         <div class="form-field">
           <label class="field-label" for="bind-address">Bind Address</label>
-          <select id="bind-address" class="field-input" bind:value={host}>
-            <option value="127.0.0.1">127.0.0.1 (localhost only)</option>
-            <option value="0.0.0.0">0.0.0.0 (all interfaces)</option>
-            <option value="localhost">localhost</option>
-          </select>
+          <input
+            id="bind-address"
+            type="text"
+            class="field-input"
+            bind:value={host}
+            placeholder="127.0.0.1"
+          />
+          <p class="field-help">IP address or hostname to bind to. Use 0.0.0.0 for all interfaces.</p>
         </div>
       </div>
     </div>
@@ -593,34 +609,37 @@
       onToggle={toggleAdvanced}
     >
       <div class="section-grid">
-        <div class="form-field">
-          <label class="field-label" for="debug-port">Debug Port</label>
-          <input
-            id="debug-port"
-            type="number"
-            class="field-input port-input"
-            class:error={errors.debugPort && touched.debugPort}
-            bind:value={debugPort}
-            oninput={() => handleFieldInput('debugPort', debugPort === undefined ? '' : String(debugPort))}
-            onblur={() => handleFieldBlur('debugPort')}
-            min="1"
-            max="65535"
-            placeholder="Auto-assign"
-          />
-          {#if errors.debugPort && touched.debugPort}
-            <p class="field-error">{errors.debugPort}</p>
-          {:else}
-            <p class="field-help">Leave empty to auto-assign a free port.</p>
-          {/if}
-        </div>
+        <div class="section-grid two-columns">
+          <div class="form-field">
+            <label class="field-label" for="debug-port">Debug Port</label>
+            <input
+              id="debug-port"
+              type="number"
+              class="field-input"
+              class:error={errors.debugPort && touched.debugPort}
+              bind:value={debugPort}
+              oninput={() => handleFieldInput('debugPort', debugPort === undefined ? '' : String(debugPort))}
+              onblur={() => handleFieldBlur('debugPort')}
+              min="1"
+              max="65535"
+              placeholder="Auto-assign"
+            />
+            {#if errors.debugPort && touched.debugPort}
+              <p class="field-error">{errors.debugPort}</p>
+            {:else}
+              <p class="field-help">Leave empty to auto-assign.</p>
+            {/if}
+          </div>
 
-        <div class="form-field">
-          <label class="field-label" for="debug-bind">Debug Bind Address</label>
-          <select id="debug-bind" class="field-input" bind:value={debugBind}>
-            <option value="127.0.0.1">127.0.0.1</option>
-            <option value="localhost">localhost</option>
-            <option value="::1">::1 (IPv6)</option>
-          </select>
+          <div class="form-field">
+            <label class="field-label" for="debug-bind">Debug Bind Address</label>
+            <select id="debug-bind" class="field-input" bind:value={debugBind}>
+              <option value="127.0.0.1">127.0.0.1</option>
+              <option value="localhost">localhost</option>
+              <option value="::1">::1 (IPv6)</option>
+            </select>
+            <p class="field-help">Must be a loopback address for security.</p>
+          </div>
         </div>
 
         <div class="form-field">
@@ -659,6 +678,17 @@
             </button>
           </div>
           <p class="field-help">JVM arguments (e.g., -Xmx512m, -Dmy.property=value)</p>
+        </div>
+
+        <div class="form-field">
+          <label class="field-label">Hooks</label>
+          <HookList
+            def={{ name: 'hooks', label: 'Hooks', type: 'hooks' }}
+            value={userHooks}
+            onChange={(v) => userHooks = v}
+            id="server-hooks"
+          />
+          <p class="field-help">Configure hooks as terminal commands or VS Code tasks for lifecycle events.</p>
         </div>
       </div>
     </AccordionSection>

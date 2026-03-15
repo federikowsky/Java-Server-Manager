@@ -150,6 +150,8 @@ export class DashboardPanel implements vscode.Disposable {
             await this.handleTemplateSchemaRequest(mode, templateId);
           } else if (msg.id === 'jsm.server.autodiscover') {
             await this.handleAutodiscover();
+          } else if (msg.id === 'jsm.java.detect') {
+            await this.handleJavaDetect();
           } else if (msg.id === 'jsm.template.createServer') {
             const [templateId] = msg.args as [string?];
             commandResult = await this.handleTemplateCreateServer(templateId);
@@ -830,6 +832,106 @@ export class DashboardPanel implements vscode.Disposable {
         });
       }
     });
+  }
+
+  private async handleJavaDetect(): Promise<void> {
+    const candidates: Array<{ label: string; description: string; path: string }> = [];
+
+    // 1. Check JAVA_HOME env var
+    const envJavaHome = process.env.JAVA_HOME;
+    if (envJavaHome?.trim()) {
+      const javaExe = process.platform === 'win32' ? 'java.exe' : 'java';
+      const javaPath = require('path').join(envJavaHome.trim(), 'bin', javaExe);
+      try {
+        await require('fs/promises').access(javaPath);
+        candidates.push({
+          label: `$(environment) JAVA_HOME`,
+          description: envJavaHome.trim(),
+          path: envJavaHome.trim(),
+        });
+      } catch {
+        // JAVA_HOME set but invalid
+      }
+    }
+
+    // 2. Check common paths based on platform
+    const fs = require('fs/promises');
+    const pathModule = require('path');
+    const isWindows = process.platform === 'win32';
+    const isMac = process.platform === 'darwin';
+
+    const commonPaths: string[] = [];
+    if (isMac) {
+      commonPaths.push(
+        '/Library/Java/JavaVirtualMachines',
+        '/opt/homebrew/opt',
+        '/usr/local/opt',
+      );
+    } else if (isWindows) {
+      commonPaths.push(
+        'C:\\Program Files\\Java',
+        'C:\\Program Files\\Eclipse Adoptium',
+        'C:\\Program Files\\Microsoft',
+      );
+    } else {
+      commonPaths.push(
+        '/usr/lib/jvm',
+        '/usr/java',
+        '/opt/java',
+        '/snap/java',
+      );
+    }
+
+    for (const basePath of commonPaths) {
+      try {
+        const entries = await fs.readdir(basePath, { withFileTypes: true });
+        for (const entry of entries) {
+          if (!entry.isDirectory()) continue;
+          let javaHome: string;
+          if (isMac && basePath.includes('JavaVirtualMachines')) {
+            javaHome = pathModule.join(basePath, entry.name, 'Contents', 'Home');
+          } else if (basePath.includes('opt') || basePath.includes('local')) {
+            javaHome = pathModule.join(basePath, entry.name, 'libexec', 'openjdk.jdk', 'Contents', 'Home');
+          } else {
+            javaHome = pathModule.join(basePath, entry.name);
+          }
+          const javaExe = isWindows ? 'java.exe' : 'java';
+          const javaPath = pathModule.join(javaHome, 'bin', javaExe);
+          try {
+            await fs.access(javaPath);
+            if (!candidates.some(c => c.path === javaHome)) {
+              candidates.push({
+                label: `$(folder) ${entry.name}`,
+                description: javaHome,
+                path: javaHome,
+              });
+            }
+          } catch {
+            // No java executable in this path
+          }
+        }
+      } catch {
+        // Directory doesn't exist or not readable
+      }
+    }
+
+    if (candidates.length === 0) {
+      vscode.window.showInformationMessage('No Java installations found. Set JAVA_HOME manually.');
+      return;
+    }
+
+    const selection = await vscode.window.showQuickPick(candidates, {
+      placeHolder: 'Select a Java installation',
+    });
+
+    if (selection) {
+      this.postMessage({
+        v: WEBVIEW_PROTOCOL_VERSION,
+        command: 'browsed',
+        field: 'javaHome',
+        path: selection.path,
+      });
+    }
   }
 
   private async handleTemplateCreateServer(templateId?: string): Promise<CommandExecutionResult> {

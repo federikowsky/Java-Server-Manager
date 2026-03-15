@@ -369,17 +369,17 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
     templateService,
     pluginRegistry,
     discoveryService,
+    deployService,
     logger,
     bus: eventBus,
-    serverFormPanel,
   });
   disposables.push(dashboardPanel);
 
   // ── 7. Commands ───────────────────────────────────────────────────────
 
   disposables.push(
-    vscode.commands.registerCommand('jsm.dashboard.open', () => {
-      dashboardPanel.show();
+    vscode.commands.registerCommand('jsm.dashboard.open', (target) => {
+      dashboardPanel.show(target);
     }),
     ...registerServerCommands({
       lifecycle,

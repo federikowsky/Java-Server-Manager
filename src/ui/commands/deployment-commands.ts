@@ -79,10 +79,12 @@ function makeOpCtx(serverId: string, kind: OperationContext['kind'], deploymentI
 export function registerDeploymentCommands(
   deps: DeploymentCommandsDeps,
 ): vscode.Disposable[] {
-  const { workspaceRegistry, configService, pluginRegistry, deployService, treeProvider, deploymentFormPanel } = deps;
+  const { workspaceRegistry, configService, pluginRegistry, deployService, treeProvider } = deps;
   const resolveServer = (workspaceFolderUri: string, serverId: string) => workspaceRegistry
     ? workspaceRegistry.getServer({ workspaceFolderUri, serverId })
     : configService?.getServer(serverId);
+  const resolveDeployment = (workspaceFolderUri: string, serverId: string, deploymentId: string) =>
+    resolveServer(workspaceFolderUri, serverId)?.deployments.find((d: DeploymentConfig) => d.id === deploymentId);
 
   return registerMany([
 
@@ -92,28 +94,33 @@ export function registerDeploymentCommands(
       if (arg && typeof arg === 'object' && 'deployment' in arg) {
         const spaArg = arg as { serverId: string; serverKey: string; workspaceFolderUri: string; deployment: DeploymentConfig };
         const config = resolveServer(spaArg.workspaceFolderUri, spaArg.serverId);
-        if (!config) { showErr(new JsmError({ code: ErrorCode.InvalidConfig, message: 'Server not found' })); return; }
+        if (!config) {
+          return { ok: false, message: 'Server not found' };
+        }
         
         const result = workspaceRegistry
           ? await workspaceRegistry.addDeployment({ workspaceFolderUri: spaArg.workspaceFolderUri, serverId: spaArg.serverId }, spaArg.deployment)
           : await configService?.updateServer({ ...config, deployments: [...config.deployments, spaArg.deployment] });
-        if (!result) return;
-        if (!result.ok) { showErr(result.error); return; }
-        showSuccess(`Deployment "${spaArg.deployment.deployName}" added.`);
+        if (!result) return { ok: false, message: 'Unable to add deployment.' };
+        if (!result.ok) return { ok: false, message: result.error.message };
         treeProvider.requestRefresh();
-        return;
+        return {
+          ok: true,
+          message: `Deployment "${spaArg.deployment.deployName}" added.`,
+          data: {
+            serverId: spaArg.serverId,
+            deploymentId: spaArg.deployment.id,
+          },
+        };
       }
       
-      // Legacy: open form panel
       if (!isServerNode(arg)) return;
-      if (deploymentFormPanel.openCreate) {
-        deploymentFormPanel.openCreate({
-          workspaceFolderUri: arg.workspaceFolderUri,
-          serverId: arg.serverId,
-        });
-        return;
-      }
-      deploymentFormPanel.open?.('create', arg.serverId);
+      void vscode.commands.executeCommand('jsm.dashboard.open', {
+        type: 'deployment',
+        serverId: arg.serverId,
+        mode: 'create',
+      });
+      return undefined;
     }],
 
     // §8.2 — jsm.deployment.redeploy
@@ -182,7 +189,9 @@ export function registerDeploymentCommands(
       if (arg && typeof arg === 'object' && 'deployment' in arg) {
         const spaArg = arg as { serverId: string; serverKey: string; workspaceFolderUri: string; deployment: DeploymentConfig };
         const config = resolveServer(spaArg.workspaceFolderUri, spaArg.serverId);
-        if (!config) { showErr(new JsmError({ code: ErrorCode.InvalidConfig, message: 'Server not found' })); return; }
+        if (!config) {
+          return { ok: false, message: 'Server not found' };
+        }
         
         const updatedServer = {
           ...config,
@@ -194,30 +203,42 @@ export function registerDeploymentCommands(
         const result = workspaceRegistry
           ? await workspaceRegistry.updateServer({ workspaceFolderUri: spaArg.workspaceFolderUri, serverId: spaArg.serverId }, updatedServer)
           : await configService?.updateServer(updatedServer);
-        if (!result) return;
-        if (!result.ok) { showErr(result.error); return; }
-        showSuccess(`Deployment "${spaArg.deployment.deployName}" updated.`);
+        if (!result) return { ok: false, message: 'Unable to update deployment.' };
+        if (!result.ok) return { ok: false, message: result.error.message };
         treeProvider.requestRefresh();
-        return;
+        return {
+          ok: true,
+          message: `Deployment "${spaArg.deployment.deployName}" updated.`,
+          data: {
+            serverId: spaArg.serverId,
+            deploymentId: spaArg.deployment.id,
+          },
+        };
       }
       
-      // Legacy: open form panel
       if (!isDeploymentNode(arg)) return;
-      if (deploymentFormPanel.openEdit) {
-        deploymentFormPanel.openEdit({
-          workspaceFolderUri: arg.workspaceFolderUri,
-          serverId: arg.serverId,
-        }, arg.deploymentId);
-        return;
-      }
-      deploymentFormPanel.open?.('edit', arg.serverId, arg.deploymentId);
+      void vscode.commands.executeCommand('jsm.dashboard.open', {
+        type: 'deployment',
+        id: arg.deploymentId,
+        serverId: arg.serverId,
+        mode: 'edit',
+      });
+      return undefined;
     }],
 
     // §8.2 — jsm.deployment.remove
     ['jsm.deployment.remove', async (arg: unknown) => {
       if (!isDeploymentNode(arg)) return;
+      const dep = arg.deploymentConfig ?? resolveDeployment(arg.workspaceFolderUri, arg.serverId, arg.deploymentId);
+      if (!dep) {
+        showErr(new JsmError({
+          code: ErrorCode.InvalidConfig,
+          message: 'Deployment not found.',
+        }));
+        return;
+      }
       const answer = await vscode.window.showWarningMessage(
-        `Remove deployment "${arg.deploymentConfig.deployName}"? This cannot be undone.`,
+        `Remove deployment "${dep.deployName}"? This cannot be undone.`,
         { modal: true },
         'Remove',
       );
@@ -231,7 +252,7 @@ export function registerDeploymentCommands(
         : await configService?.removeDeployment(arg.serverId, arg.deploymentId);
       if (!result) return;
       if (!result.ok) { showErr(result.error); return; }
-      showSuccess(`Deployment "${arg.deploymentConfig.deployName}" removed.`);
+      showSuccess(`Deployment "${dep.deployName}" removed.`);
       treeProvider.requestRefresh();
     }],
 

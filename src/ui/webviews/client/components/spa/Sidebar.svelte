@@ -1,18 +1,25 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte';
   import { spaState, activeEntity } from '../../stores';
-  import { postToHost } from '../../bridge';
-  import { WEBVIEW_PROTOCOL_VERSION } from '../../../protocol';
   import Icon from '../Icon.svelte';
   import type { IconName } from '../Icon.svelte';
 
   let state = $state($spaState);
-  spaState.subscribe(s => { state = s; });
+  const unsubscribeSpaState = spaState.subscribe(s => { state = s; });
 
   let currentEntity = $state($activeEntity);
-  activeEntity.subscribe(e => { currentEntity = e; });
+  const unsubscribeActiveEntity = activeEntity.subscribe(e => { currentEntity = e; });
 
-  function selectEntity(type: 'server' | 'template' | 'settings' | 'new-server' | 'new-template', id?: string) {
-    activeEntity.set({ type, id });
+  onDestroy(() => {
+    unsubscribeSpaState();
+    unsubscribeActiveEntity();
+  });
+
+  let showStatus = $derived(state.settings?.showStatusInSidebar ?? true);
+  let showWorkspaceNames = $derived(state.workspaceFolders.length > 1);
+
+  function selectEntity(target: { type: 'welcome' | 'server' | 'template' | 'settings' | 'new-server' | 'new-template'; id?: string }) {
+    activeEntity.set(target);
   }
 
   function getStatusIcon(state: string): IconName {
@@ -28,28 +35,47 @@
   function getStatusColor(state: string): string {
     switch (state) {
       case 'running': return 'var(--jsm-status-running)';
-      case 'starting': case 'stopping': return 'var(--jsm-status-starting)';
-      case 'error': return 'var(--jsm-status-error)';
-      default: return 'var(--jsm-status-stopped)';
+      case 'starting':
+      case 'stopping':
+        return 'var(--jsm-status-starting)';
+      case 'error':
+        return 'var(--jsm-status-error)';
+      default:
+        return 'var(--jsm-status-stopped)';
     }
-  }
-
-  function handleAutodiscover() {
-    postToHost({ v: WEBVIEW_PROTOCOL_VERSION, command: 'executeCommand', id: 'jsm.server.autodiscover' });
   }
 </script>
 
 <div class="sidebar">
   <div class="sidebar-header">
     <div class="global-actions">
-      <button class="action-btn" title="Autodiscover Servers" onclick={handleAutodiscover}>
-        <Icon name="search" size={14} />
-        <span>Autodiscover</span>
+      <button type="button" class="action-btn" title="Add Server" onclick={() => selectEntity({ type: 'new-server' })}>
+        <Icon name="add" size={14} />
+        <span>Add Server</span>
       </button>
     </div>
   </div>
 
   <div class="sidebar-content">
+    <div class="section">
+      <div class="section-title">
+        <span class="section-label">
+          <Icon name="layout" size={14} />
+          <span>WORKSPACE</span>
+        </span>
+      </div>
+      <div class="section-list">
+        <button
+          type="button"
+          class="list-item"
+          class:active={currentEntity.type === 'welcome'}
+          onclick={() => selectEntity({ type: 'welcome' })}
+        >
+          <span class="item-name">Overview</span>
+        </button>
+      </div>
+    </div>
+
     <!-- SERVERS -->
     <div class="section">
       <div class="section-title">
@@ -57,30 +83,38 @@
           <Icon name="server" size={14} />
           <span>SERVERS</span>
         </span>
-        <button class="icon-button" title="Add Server" onclick={() => selectEntity('new-server')}>
-          <Icon name="add" size={14} />
-        </button>
       </div>
       <div class="section-list">
         {#each state.servers as server}
-          <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <div 
-            class="list-item" 
+          <button
+            type="button"
+            class="list-item"
             class:active={currentEntity.type === 'server' && currentEntity.id === server.config.id}
-            onclick={() => selectEntity('server', server.config.id)}
-            role="button"
-            tabindex="0"
-            onkeydown={(e) => e.key === 'Enter' && selectEntity('server', server.config.id)}
+            onclick={() => selectEntity({ type: 'server', id: server.config.id })}
           >
-            <span class="status-icon" style="color: {getStatusColor(state.runtimeStates[server.config.id]?.state)}">
-              <Icon name={getStatusIcon(state.runtimeStates[server.config.id]?.state)} size={12} />
+            {#if showStatus}
+              <span class="status-icon" style="color: {getStatusColor(state.runtimeStates[server.serverKey]?.state)}">
+                <Icon name={getStatusIcon(state.runtimeStates[server.serverKey]?.state)} size={12} />
+              </span>
+            {/if}
+            <span class="item-content">
+              <span class="item-name" title={server.config.name}>{server.config.name}</span>
+              {#if showWorkspaceNames}
+                <span class="item-meta">{server.workspaceFolderName}</span>
+              {/if}
             </span>
-            <span class="item-name" title={server.config.name}>{server.config.name}</span>
-          </div>
+          </button>
         {/each}
         {#if state.servers.length === 0}
-          <div class="empty-text">No servers configured</div>
+          <div class="empty-state-cta">
+            <p>No servers configured</p>
+            <div class="empty-actions">
+              <button type="button" class="btn btn-sm btn-primary" onclick={() => selectEntity({ type: 'new-server' })}>
+                <Icon name="add" size={12} />
+                <span>Add Server</span>
+              </button>
+            </div>
+          </div>
         {/if}
       </div>
     </div>
@@ -92,27 +126,34 @@
           <Icon name="file-code" size={14} />
           <span>TEMPLATES</span>
         </span>
-        <button class="icon-button" title="Create Template" onclick={() => selectEntity('new-template')}>
+        <button type="button" class="icon-button" aria-label="Create template" title="Create Template" onclick={() => selectEntity({ type: 'new-template' })}>
           <Icon name="add" size={14} />
         </button>
       </div>
       <div class="section-list">
         {#each state.templates as tpl}
-          <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <div 
-            class="list-item" 
+          <button
+            type="button"
+            class="list-item"
             class:active={currentEntity.type === 'template' && currentEntity.id === tpl.template.id}
-            onclick={() => selectEntity('template', tpl.template.id)}
-            role="button"
-            tabindex="0"
-            onkeydown={(e) => e.key === 'Enter' && selectEntity('template', tpl.template.id)}
+            onclick={() => selectEntity({ type: 'template', id: tpl.template.id })}
           >
-            <span class="item-name" title={tpl.template.name}>{tpl.template.name}</span>
-          </div>
+            <span class="item-content">
+              <span class="item-name" title={tpl.template.name}>{tpl.template.name}</span>
+              <span class="item-meta">{tpl.scope}</span>
+            </span>
+          </button>
         {/each}
         {#if state.templates.length === 0}
-          <div class="empty-text">No templates configured</div>
+          <div class="empty-state-cta">
+            <p>No templates configured</p>
+            <div class="empty-actions">
+              <button type="button" class="btn btn-sm btn-secondary" onclick={() => selectEntity({ type: 'new-template' })}>
+                <Icon name="add" size={12} />
+                <span>Add Template</span>
+              </button>
+            </div>
+          </div>
         {/if}
       </div>
     </div>
@@ -126,18 +167,14 @@
         </span>
       </div>
       <div class="section-list">
-        <!-- svelte-ignore a11y_click_events_have_key_events -->
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div 
-          class="list-item" 
+        <button
+          type="button"
+          class="list-item"
           class:active={currentEntity.type === 'settings'}
-          onclick={() => selectEntity('settings')}
-          role="button"
-          tabindex="0"
-          onkeydown={(e) => e.key === 'Enter' && selectEntity('settings')}
+          onclick={() => selectEntity({ type: 'settings' })}
         >
           <span class="item-name">Global Config</span>
-        </div>
+        </button>
       </div>
     </div>
   </div>
@@ -232,6 +269,10 @@
     color: var(--vscode-sideBar-foreground);
     font-size: var(--jsm-font-size-md);
     transition: background-color var(--jsm-transition-fast);
+    width: 100%;
+    background: none;
+    border: none;
+    text-align: left;
   }
   .list-item:hover {
     background: var(--jsm-color-bg-hover);
@@ -250,10 +291,45 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  .item-content {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+  .item-meta {
+    font-size: var(--jsm-font-size-xs);
+    color: var(--jsm-color-fg-secondary);
+  }
   .empty-text {
     padding: var(--jsm-space-xs) var(--jsm-space-md) var(--jsm-space-xs) var(--jsm-space-xl);
     font-style: italic;
     color: var(--jsm-color-fg-secondary);
     font-size: var(--jsm-font-size-sm);
+  }
+  .empty-state-cta {
+    padding: var(--jsm-space-md) var(--jsm-space-lg);
+    text-align: center;
+  }
+  .empty-state-cta p {
+    margin: 0 0 var(--jsm-space-sm);
+    font-size: var(--jsm-font-size-sm);
+    color: var(--jsm-color-fg-secondary);
+  }
+  .empty-actions {
+    display: flex;
+    justify-content: center;
+    gap: var(--jsm-space-sm);
+  }
+  .btn-sm {
+    padding: var(--jsm-space-xs) var(--jsm-space-sm);
+    font-size: var(--jsm-font-size-sm);
+  }
+  .btn-primary {
+    background: var(--jsm-color-primary);
+    color: var(--jsm-color-primary-fg);
+  }
+  .btn-secondary {
+    background: var(--jsm-color-secondary);
+    color: var(--jsm-color-secondary-fg);
   }
 </style>

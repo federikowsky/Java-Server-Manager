@@ -150,6 +150,12 @@ export class ConfigService {
       deployments: [...server.deployments, dep],
     };
 
+    const securityResult = validateSecurityPolicy(updated);
+    if (!securityResult.ok) return securityResult;
+
+    const validResult = this.validator.validate(updated, 'server-config');
+    if (!validResult.ok) return validResult;
+
     const saveResult = await this.repo.save(updated);
     if (!saveResult.ok) return saveResult;
 

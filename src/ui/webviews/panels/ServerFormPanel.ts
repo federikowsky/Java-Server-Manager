@@ -690,10 +690,74 @@ function extractPluginConfig(pluginConfig: any): Record<string, unknown> {
   return result;
 }
 
+function hasValue(data: Record<string, unknown>, key: string): boolean {
+  const value = data[key];
+  return value !== undefined && value !== null && String(value).trim() !== '';
+}
+
+function optionalString(data: Record<string, unknown>, key: string): string | undefined {
+  if (!hasValue(data, key)) {
+    return undefined;
+  }
+
+  return String(data[key]).trim();
+}
+
+function optionalNumber(data: Record<string, unknown>, key: string): number | undefined {
+  if (!hasValue(data, key)) {
+    return undefined;
+  }
+
+  const parsed = Number(data[key]);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function buildTomcatPluginConfig(
+  data: Record<string, unknown>,
+  existingPluginConfig?: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  const base = existingPluginConfig && typeof existingPluginConfig === 'object'
+    ? {
+      ...existingPluginConfig,
+      type: 'tomcat',
+    }
+    : {
+      type: 'tomcat',
+      shutdownPort: 8005,
+      disableAjp: true,
+    };
+
+  if (data['pluginConfig.ssl.enabled'] !== true) {
+    const withMaybeSsl = base as Record<string, unknown> & { ssl?: unknown };
+    const { ssl: _ssl, ...withoutSsl } = withMaybeSsl;
+    return withoutSsl;
+  }
+
+  const clientAuth = data['pluginConfig.ssl.clientAuth'] === true;
+
+  return {
+    ...base,
+    ssl: {
+      enabled: true,
+      port: optionalNumber(data, 'pluginConfig.ssl.port') ?? 8443,
+      keystorePath: optionalString(data, 'pluginConfig.ssl.keystorePath') ?? '',
+      keystorePassword: String(data['pluginConfig.ssl.keystorePassword'] ?? ''),
+      keystoreType: optionalString(data, 'pluginConfig.ssl.keystoreType') ?? 'PKCS12',
+      keyAlias: optionalString(data, 'pluginConfig.ssl.keyAlias'),
+      clientAuth,
+      truststorePath: clientAuth ? optionalString(data, 'pluginConfig.ssl.truststorePath') : undefined,
+      truststorePassword: clientAuth ? optionalString(data, 'pluginConfig.ssl.truststorePassword') : undefined,
+      truststoreType: clientAuth ? (optionalString(data, 'pluginConfig.ssl.truststoreType') ?? 'PKCS12') : undefined,
+    },
+  };
+}
+
 export function formDataToServerConfig(
   data: Record<string, unknown>,
   existing: ServerConfig,
 ): ServerConfig {
+  const debugPort = optionalNumber(data, 'ports.debug');
+
   return {
     ...existing,
     name: String(data['name'] ?? existing.name),
@@ -705,7 +769,7 @@ export function formDataToServerConfig(
     },
     ports: {
       http: Number(data['ports.http'] ?? existing.ports.http),
-      debug: Number(data['ports.debug'] ?? existing.ports.debug),
+      debug: debugPort ?? existing.ports.debug,
     },
     run: {
       ...existing.run,
@@ -718,10 +782,16 @@ export function formDataToServerConfig(
       bind: String(data['debug.bind'] ?? existing.debug.bind),
     },
     hooks: normalizeHookList(data['hooks'] ?? existing.hooks),
+    pluginConfig: buildTomcatPluginConfig(
+      data,
+      existing.pluginConfig as Record<string, unknown> | undefined,
+    ) as ServerConfig['pluginConfig'],
   };
 }
 
-function formDataToCreateServerRequest(data: Record<string, unknown>): CreateServerRequest {
+export function formDataToCreateServerRequest(data: Record<string, unknown>): CreateServerRequest {
+  const debugPort = optionalNumber(data, 'ports.debug');
+
   return {
     name: String(data['name'] ?? ''),
     type: 'tomcat',
@@ -729,16 +799,17 @@ function formDataToCreateServerRequest(data: Record<string, unknown>): CreateSer
     javaHome: String(data['javaHome'] ?? ''),
     host: String(data['host'] ?? '127.0.0.1'),
     httpPort: Number(data['ports.http'] ?? DEFAULT_HTTP_PORT),
-    debugPort: Number(data['ports.debug'] ?? DEFAULT_DEBUG_PORT),
+    debugPort: debugPort ?? DEFAULT_DEBUG_PORT,
     debugBind: String(data['debug.bind'] ?? '127.0.0.1'),
     vmArgs: Array.isArray(data['run.vmArgs'])
       ? (data['run.vmArgs'] as string[])
       : [],
     hooks: normalizeHookList(data['hooks']),
+    pluginConfig: buildTomcatPluginConfig(data) as CreateServerRequest['pluginConfig'],
   };
 }
 
-function validateServerForm(data: Record<string, unknown>): FieldError[] {
+export function validateServerForm(data: Record<string, unknown>): FieldError[] {
   const errors: FieldError[] = [];
 
   if (!data['name'] || String(data['name']).trim().length === 0) {
@@ -774,8 +845,9 @@ function validateServerForm(data: Record<string, unknown>): FieldError[] {
     });
   }
 
-  const debugPort = Number(data['ports.debug'] ?? DEFAULT_DEBUG_PORT);
-  if (!Number.isFinite(debugPort) || debugPort < 1 || debugPort > 65535) {
+  const hasDebugPort = hasValue(data, 'ports.debug');
+  const debugPort = hasDebugPort ? Number(data['ports.debug']) : undefined;
+  if (hasDebugPort && (debugPort === undefined || debugPort < 1 || debugPort > 65535)) {
     errors.push({
       field: 'ports.debug',
       message: 'Debug port must be between 1 and 65535.',
@@ -783,15 +855,57 @@ function validateServerForm(data: Record<string, unknown>): FieldError[] {
     });
   }
 
-  if (
-    Number.isFinite(httpPort) && Number.isFinite(debugPort) &&
-    httpPort === debugPort
-  ) {
+  if (Number.isFinite(httpPort) && debugPort !== undefined && httpPort === debugPort) {
     errors.push({
       field: 'ports.debug',
       message: 'Debug port must differ from HTTP port.',
       suggestedFix: `Change debug port to ${httpPort + 1}.`,
     });
+  }
+
+  if (data['pluginConfig.ssl.enabled'] === true) {
+    const httpsPort = Number(data['pluginConfig.ssl.port'] ?? 8443);
+    if (!Number.isFinite(httpsPort) || httpsPort < 1 || httpsPort > 65535) {
+      errors.push({
+        field: 'pluginConfig.ssl.port',
+        message: 'HTTPS port must be between 1 and 65535.',
+        suggestedFix: 'Use port 8443 or another free HTTPS port.',
+      });
+    }
+
+    if (!hasValue(data, 'pluginConfig.ssl.keystorePath')) {
+      errors.push({
+        field: 'pluginConfig.ssl.keystorePath',
+        message: 'Keystore file is required when SSL is enabled.',
+        suggestedFix: 'Select a .p12, .pfx, or .jks keystore file.',
+      });
+    }
+
+    if (!hasValue(data, 'pluginConfig.ssl.keystorePassword')) {
+      errors.push({
+        field: 'pluginConfig.ssl.keystorePassword',
+        message: 'Keystore password is required when SSL is enabled.',
+        suggestedFix: 'Enter the password for the selected keystore.',
+      });
+    }
+
+    if (data['pluginConfig.ssl.clientAuth'] === true) {
+      if (!hasValue(data, 'pluginConfig.ssl.truststorePath')) {
+        errors.push({
+          field: 'pluginConfig.ssl.truststorePath',
+          message: 'Truststore file is required when client authentication is enabled.',
+          suggestedFix: 'Select a truststore file for client certificates.',
+        });
+      }
+
+      if (!hasValue(data, 'pluginConfig.ssl.truststorePassword')) {
+        errors.push({
+          field: 'pluginConfig.ssl.truststorePassword',
+          message: 'Truststore password is required when client authentication is enabled.',
+          suggestedFix: 'Enter the password for the selected truststore.',
+        });
+      }
+    }
   }
 
   errors.push(...validateHookList(data['hooks']));

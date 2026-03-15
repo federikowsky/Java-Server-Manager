@@ -319,6 +319,46 @@
           "icon": "$(server)"
         }
       ]
+    },
+    "configuration": {
+      "title": "Java Server Manager",
+      "properties": {
+        "jsm.autoDiscovery.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable automatic server discovery on startup."
+        },
+        "jsm.autoDiscovery.scanEnvVars": {
+          "type": "boolean",
+          "default": true,
+          "description": "Scan environment variables (CATALINA_HOME, TOMCAT_HOME, etc.) for server installations."
+        },
+        "jsm.autoDiscovery.scanCommonPaths": {
+          "type": "boolean",
+          "default": true,
+          "description": "Scan common installation paths (/opt/tomcat, /usr/local/tomcat, etc.)."
+        },
+        "jsm.defaults.httpPort": {
+          "type": "number",
+          "default": 8080,
+          "description": "Default HTTP port for new servers."
+        },
+        "jsm.defaults.debugPort": {
+          "type": "number",
+          "default": 5005,
+          "description": "Default debug port for new servers."
+        },
+        "jsm.defaults.javaHome": {
+          "type": "string",
+          "default": "",
+          "description": "Default JAVA_HOME path for new servers."
+        },
+        "jsm.ui.showStatusInSidebar": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show server status indicators in the dashboard sidebar."
+        }
+      }
     }
   },
   "capabilities": {

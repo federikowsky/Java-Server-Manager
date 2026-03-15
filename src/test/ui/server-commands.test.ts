@@ -250,6 +250,80 @@ describe('Server Commands', () => {
     expect(mockOpenTextDocument).not.toHaveBeenCalled();
   });
 
+  describe('dashboard entry points', () => {
+    it('jsm.server.add should open the dashboard create flow when called without args', async () => {
+      await invoke('jsm.server.add');
+
+      expect(mockExecuteCommand).toHaveBeenCalledWith('jsm.dashboard.open', { type: 'new-server' });
+    });
+
+    it('jsm.server.edit should open the dashboard server detail view', async () => {
+      const node = createServerNode();
+
+      await invoke('jsm.server.edit', node);
+
+      expect(mockExecuteCommand).toHaveBeenCalledWith('jsm.dashboard.open', {
+        type: 'server',
+        id: 'srv-1',
+      });
+    });
+
+    it('jsm.server.add should provision a server from SPA form data', async () => {
+      const createdServer = makeServer('srv-2', 'Created Server');
+      const createServer = vi.fn(async () => ok(createdServer));
+      deps.workspaceRegistry.getEntry.mockReturnValue({
+        provisioningService: { createServer },
+      });
+
+      const result = await invoke('jsm.server.add', {
+        workspaceFolderUri: 'file:///ws',
+        formData: {
+          name: 'Created Server',
+          'runtime.homePath': '/opt/tomcat',
+          javaHome: '/usr/lib/jvm/java-17',
+          host: '127.0.0.1',
+          'ports.http': 8080,
+          'ports.debug': 5005,
+          'debug.bind': '127.0.0.1',
+          'run.vmArgs': ['-Xmx512m'],
+          'pluginConfig.ssl.enabled': true,
+          'pluginConfig.ssl.port': 8443,
+          'pluginConfig.ssl.keystorePath': '/tmp/server.p12',
+          'pluginConfig.ssl.keystorePassword': 'secret',
+          'pluginConfig.ssl.keystoreType': 'PKCS12',
+        },
+      });
+
+      expect(deps.workspaceRegistry.getEntry).toHaveBeenCalledWith('file:///ws');
+      expect(createServer).toHaveBeenCalledWith(expect.objectContaining({
+        name: 'Created Server',
+        runtimeHomePath: '/opt/tomcat',
+        javaHome: '/usr/lib/jvm/java-17',
+        httpPort: 8080,
+        debugPort: 5005,
+        vmArgs: ['-Xmx512m'],
+        pluginConfig: expect.objectContaining({
+          type: 'tomcat',
+          shutdownPort: 8005,
+          disableAjp: true,
+          ssl: expect.objectContaining({
+            enabled: true,
+            port: 8443,
+            keystorePath: '/tmp/server.p12',
+          }),
+        }),
+      }));
+      expect(deps.treeProvider.requestRefresh).toHaveBeenCalled();
+      expect(result).toEqual(expect.objectContaining({
+        ok: true,
+        data: {
+          serverId: 'srv-2',
+          workspaceFolderUri: 'file:///ws',
+        },
+      }));
+    });
+  });
+
   describe('jsm.server.duplicate', () => {
     const workspaceUri = 'file:///test-ws';
 

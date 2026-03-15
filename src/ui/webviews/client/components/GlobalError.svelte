@@ -1,10 +1,11 @@
 <script lang="ts">
-  import { globalError } from '../stores';
+  import { globalError, hostError } from '../stores';
 
   const { message }: { message: string } = $props();
 
   function dismiss(): void {
     globalError.set('');
+    hostError.set('');
   }
 </script>
 

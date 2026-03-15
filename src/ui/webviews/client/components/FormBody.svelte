@@ -1,15 +1,17 @@
 <script lang="ts">
   import type { FormSection } from '../../protocol';
-  import { mode, templates, formData } from '../stores';
+  import { mode, templates, formData, formId } from '../stores';
   import FormSectionComponent from './FormSection.svelte';
 
   const { sections }: { sections: FormSection[] } = $props();
 
   let currentMode = $state<'create' | 'edit'>('create');
+  let currentFormId = $state('');
   let currentTemplates = $state<Array<{ id: string; name: string; defaults: Record<string, unknown> }>>([]);
   let selectedTemplateId = $state('');
 
   mode.subscribe(m => { currentMode = m; });
+  formId.subscribe(id => { currentFormId = id; });
   templates.subscribe(t => { currentTemplates = t; });
 
   function handleTemplateChange(e: Event) {
@@ -25,7 +27,7 @@
 </script>
 
 <form class="jsm-form" onsubmit={(e: Event) => e.preventDefault()}>
-  {#if currentMode === 'create' && currentTemplates.length > 0}
+  {#if currentMode === 'create' && currentFormId === 'jsm.serverForm' && currentTemplates.length > 0}
     <div class="form-section template-selector">
       <div class="section-header">
         <h3 class="section-title">Starting Point</h3>

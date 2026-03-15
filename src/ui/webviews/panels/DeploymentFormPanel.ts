@@ -107,6 +107,14 @@ function deploymentFormSchema(mode: 'create' | 'edit', hookTaskOptions: HookTask
             helpText: 'Optional GET path for deployment health (e.g. /myapp/health). Left empty to skip deployment health check.',
           },
           {
+            name: 'healthCheckTimeoutMs',
+            label: 'Health Check Timeout (ms)',
+            type: 'number',
+            placeholder: '5000',
+            helpText: 'Optional timeout for deployment health checks. Leave empty to use the default timeout.',
+            validation: { min: 1 },
+          },
+          {
             name: 'ignoreGlobs',
             label: 'Ignore Patterns',
             type: 'tags',
@@ -442,11 +450,17 @@ export class DeploymentFormPanel extends BaseFormPanel {
 import type { DeploymentConfig, DeploymentType, SyncMode } from '@core/types';
 import { DEPLOY_NAME_PATTERN } from '../../../constants';
 
-function formDataToDeploymentConfig(
+export function formDataToDeploymentConfig(
   data: Record<string, unknown>,
   id: string,
 ): DeploymentConfig {
   const type = (data['type'] as DeploymentType) ?? 'exploded';
+  const healthCheckTimeoutMs = data['healthCheckTimeoutMs'] === undefined
+    || data['healthCheckTimeoutMs'] === null
+    || String(data['healthCheckTimeoutMs']).trim() === ''
+    ? undefined
+    : Number(data['healthCheckTimeoutMs']);
+
   return {
     id,
     type,
@@ -461,13 +475,13 @@ function formDataToDeploymentConfig(
     healthCheckPath: typeof data['healthCheckPath'] === 'string' && data['healthCheckPath'].trim() !== ''
       ? data['healthCheckPath'].trim()
       : undefined,
-    healthCheckTimeoutMs: typeof data['healthCheckTimeoutMs'] === 'number' && data['healthCheckTimeoutMs'] > 0
-      ? data['healthCheckTimeoutMs']
+    healthCheckTimeoutMs: typeof healthCheckTimeoutMs === 'number' && healthCheckTimeoutMs > 0
+      ? healthCheckTimeoutMs
       : undefined,
   };
 }
 
-function validateDeploymentForm(data: Record<string, unknown>): FieldError[] {
+export function validateDeploymentForm(data: Record<string, unknown>): FieldError[] {
   const errors: FieldError[] = [];
 
   if (!data['sourcePath'] || String(data['sourcePath']).trim().length === 0) {
@@ -500,6 +514,18 @@ function validateDeploymentForm(data: Record<string, unknown>): FieldError[] {
       message: 'Deployment type is required.',
       suggestedFix: 'Select WAR or Exploded Directory.',
     });
+  }
+
+  const rawTimeout = data['healthCheckTimeoutMs'];
+  if (rawTimeout !== undefined && rawTimeout !== null && String(rawTimeout).trim() !== '') {
+    const timeout = Number(rawTimeout);
+    if (!Number.isFinite(timeout) || timeout < 1) {
+      errors.push({
+        field: 'healthCheckTimeoutMs',
+        message: 'Health check timeout must be a positive number.',
+        suggestedFix: 'Use a timeout such as 5000 milliseconds, or leave the field empty.',
+      });
+    }
   }
 
   errors.push(...validateHookList(

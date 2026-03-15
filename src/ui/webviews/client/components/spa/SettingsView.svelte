@@ -1,24 +1,21 @@
 <script lang="ts">
-  import { spaState, browseResult } from '../../stores';
+  import { onDestroy } from 'svelte';
+  import { spaState, browseResult, lastCommandResult } from '../../stores';
   import { postToHost } from '../../bridge';
   import { WEBVIEW_PROTOCOL_VERSION } from '../../../protocol';
   import Icon from '../Icon.svelte';
 
   let state = $state($spaState);
-  spaState.subscribe(s => { state = s; });
+  const unsubscribeSpaState = spaState.subscribe(s => { state = s; });
 
-  // Settings state — initialized from host settings
-  let autoDiscovery = $state(state.settings?.autoDiscovery ?? true);
-  let scanEnvVars = $state(state.settings?.scanEnvVars ?? true);
-  let scanCommonPaths = $state(state.settings?.scanCommonPaths ?? true);
-  let defaultHttpPort = $state(state.settings?.defaultHttpPort ?? 8080);
-  let defaultDebugPort = $state(state.settings?.defaultDebugPort ?? 5005);
-  let defaultJavaHome = $state(state.settings?.defaultJavaHome ?? '');
+  let autoDiscovery = $state(true);
+  let scanEnvVars = $state(true);
+  let scanCommonPaths = $state(true);
+  let defaultHttpPort = $state(8080);
+  let defaultDebugPort = $state(5005);
+  let defaultJavaHome = $state('');
   let showStatusInSidebar = $state(true);
-  let autoRefreshDeployments = $state(true);
-  let refreshInterval = $state(5);
 
-  // Dynamic plugin metadata for autodiscovery descriptions
   let pluginMetaList = $derived(
     Object.entries(state.capabilities)
       .filter(([_, caps]) => (caps as any)?.supportsAutoDetect)
@@ -32,25 +29,90 @@
   let allEnvVars = $derived(pluginMetaList.flatMap(p => p.envVars).join(', '));
   let allPaths = $derived(pluginMetaList.flatMap(p => p.paths).slice(0, 4).join(', '));
 
-  // Listen for browse dialog results
-  browseResult.subscribe(result => {
+  let settingsFingerprint = $state('');
+  let saving = $state(false);
+  let saveError = $state('');
+  let saveMessage = $state('');
+  let pendingRequestId = $state('');
+
+  const unsubscribeBrowse = browseResult.subscribe(result => {
     if (result && result.field === 'defaultJavaHome') {
       defaultJavaHome = result.path;
     }
   });
 
-  let saving = $state(false);
-  let saved = $state(false);
+  const unsubscribeCommandResult = lastCommandResult.subscribe(result => {
+    if (!result || !pendingRequestId || result.requestId !== pendingRequestId) {
+      return;
+    }
+
+    pendingRequestId = '';
+    saving = false;
+
+    if (!result.ok) {
+      saveError = result.message || 'Unable to save settings.';
+      saveMessage = '';
+      return;
+    }
+
+    saveError = '';
+    saveMessage = result.message || 'Settings saved.';
+  });
+
+  onDestroy(() => {
+    unsubscribeSpaState();
+    unsubscribeBrowse();
+    unsubscribeCommandResult();
+  });
+
+  $effect(() => {
+    if (!state.settings) {
+      return;
+    }
+
+    const nextFingerprint = JSON.stringify(state.settings);
+    if (nextFingerprint === settingsFingerprint) {
+      return;
+    }
+
+    settingsFingerprint = nextFingerprint;
+    autoDiscovery = state.settings.autoDiscovery;
+    scanEnvVars = state.settings.scanEnvVars;
+    scanCommonPaths = state.settings.scanCommonPaths;
+    defaultHttpPort = state.settings.defaultHttpPort;
+    defaultDebugPort = state.settings.defaultDebugPort;
+    defaultJavaHome = state.settings.defaultJavaHome;
+    showStatusInSidebar = state.settings.showStatusInSidebar;
+  });
+
+  function validatePort(port: number, label: string): string {
+    if (!Number.isFinite(port) || port < 1 || port > 65535) {
+      return `${label} must be between 1 and 65535.`;
+    }
+
+    return '';
+  }
 
   async function handleSave() {
-    saving = true;
-    saved = false;
+    const httpError = validatePort(defaultHttpPort, 'Default HTTP port');
+    const debugError = validatePort(defaultDebugPort, 'Default debug port');
+    if (httpError || debugError) {
+      saveError = httpError || debugError;
+      saveMessage = '';
+      return;
+    }
 
-    // Send settings to host for persistence
+    saving = true;
+    saveError = '';
+    saveMessage = '';
+    pendingRequestId = crypto.randomUUID();
+    lastCommandResult.set(null);
+
     postToHost({
       v: WEBVIEW_PROTOCOL_VERSION,
       command: 'executeCommand',
       id: 'jsm.settings.save',
+      requestId: pendingRequestId,
       args: [{
         autoDiscovery,
         scanEnvVars,
@@ -59,16 +121,8 @@
         defaultDebugPort,
         defaultJavaHome,
         showStatusInSidebar,
-        autoRefreshDeployments,
-        refreshInterval,
       }],
     });
-
-    setTimeout(() => {
-      saving = false;
-      saved = true;
-      setTimeout(() => { saved = false; }, 2000);
-    }, 500);
   }
 
   function handleReset() {
@@ -79,8 +133,8 @@
     defaultDebugPort = 5005;
     defaultJavaHome = '';
     showStatusInSidebar = true;
-    autoRefreshDeployments = true;
-    refreshInterval = 5;
+    saveError = '';
+    saveMessage = '';
   }
 
   function handleBrowseJava() {
@@ -176,7 +230,7 @@
             bind:value={defaultJavaHome}
             placeholder="Use system default"
           />
-          <button class="btn btn-secondary" onclick={handleBrowseJava}>
+          <button type="button" class="btn btn-secondary" onclick={handleBrowseJava} aria-label="Browse default Java home">
             <Icon name="folder" size={14} />
           </button>
         </div>
@@ -219,7 +273,7 @@
     <div class="settings-section">
       <h3 class="section-title">
         <Icon name="layout" size={16} />
-        <span>UI Preferences</span>
+        <span>Interface</span>
       </h3>
 
       <div class="setting-row">
@@ -230,33 +284,6 @@
             <span class="setting-desc">Display colored status indicators next to server names</span>
           </div>
         </label>
-      </div>
-
-      <div class="setting-row">
-        <label class="checkbox-label">
-          <input type="checkbox" class="field-checkbox" bind:checked={autoRefreshDeployments} />
-          <div class="setting-info">
-            <span class="setting-name">Auto-refresh deployment list</span>
-            <span class="setting-desc">Periodically refresh deployment status</span>
-          </div>
-        </label>
-      </div>
-
-      <div class="setting-row" class:disabled={!autoRefreshDeployments}>
-        <div class="setting-info">
-          <span class="setting-name">Refresh interval</span>
-          <span class="setting-desc">How often to refresh deployment status (seconds)</span>
-        </div>
-        <div class="setting-control">
-          <input
-            type="number"
-            class="field-input port-input"
-            bind:value={refreshInterval}
-            min="1"
-            max="60"
-            disabled={!autoRefreshDeployments}
-          />
-        </div>
       </div>
     </div>
 
@@ -288,21 +315,31 @@
     </div>
   </div>
 
+  {#if saveError}
+    <div class="feedback-banner error">
+      <Icon name="error" size={16} />
+      <span>{saveError}</span>
+    </div>
+  {:else if saveMessage}
+    <div class="feedback-banner success">
+      <Icon name="check" size={16} />
+      <span>{saveMessage}</span>
+    </div>
+  {/if}
+
   <!-- Actions -->
   <div class="settings-actions">
-    <button class="btn btn-secondary" onclick={handleReset}>
+    <button type="button" class="btn btn-secondary" onclick={handleReset}>
       <Icon name="refresh" size={14} />
       <span>Reset to Defaults</span>
     </button>
-    <button class="btn btn-primary" onclick={handleSave} disabled={saving}>
+    <button type="button" class="btn btn-primary" onclick={handleSave} disabled={saving}>
       {#if saving}
         <Icon name="loading" size={14} />
-      {:else if saved}
-        <Icon name="check" size={14} />
       {:else}
         <Icon name="check" size={14} />
       {/if}
-      <span>{saved ? 'Saved!' : 'Save Settings'}</span>
+      <span>{saving ? 'Saving...' : 'Save Settings'}</span>
     </button>
   </div>
 </div>
@@ -483,6 +520,25 @@
     font-weight: var(--jsm-font-weight-medium);
     color: var(--jsm-color-fg);
     font-size: var(--jsm-font-size-md);
+  }
+
+  .feedback-banner {
+    display: flex;
+    align-items: center;
+    gap: var(--jsm-space-sm);
+    padding: var(--jsm-space-md) var(--jsm-space-xl);
+    border-top: 1px solid var(--jsm-color-border);
+    font-size: var(--jsm-font-size-sm);
+  }
+
+  .feedback-banner.error {
+    color: var(--jsm-color-error);
+    background: color-mix(in srgb, var(--jsm-color-error) 10%, var(--jsm-color-bg));
+  }
+
+  .feedback-banner.success {
+    color: var(--jsm-status-running);
+    background: color-mix(in srgb, var(--jsm-status-running) 10%, var(--jsm-color-bg));
   }
 
   .settings-actions {

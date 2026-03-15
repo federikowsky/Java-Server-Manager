@@ -20,6 +20,7 @@ const mockShowInfoMessage = vi.fn();
 const mockShowWarningMessage = vi.fn();
 const mockOpenTextDocument = vi.fn();
 const mockShowTextDocument = vi.fn();
+const mockExecuteCommand = vi.fn();
 const registeredHandlers: Record<string, (...args: unknown[]) => unknown> = {};
 
 vi.mock('vscode', () => ({
@@ -38,6 +39,7 @@ vi.mock('vscode', () => ({
       registeredHandlers[_id] = handler;
       return { dispose: vi.fn() };
     }),
+    executeCommand: mockExecuteCommand,
   },
   Uri: {
     file: (p: string) => ({ fsPath: p, path: p }),
@@ -159,16 +161,48 @@ describe('Deployment Commands', () => {
   /* ── Happy Path ──────────────────────────────────────────────────────── */
 
   describe('Happy Path', () => {
-    it('jsm.deployment.add should open deployment form in create mode', () => {
+    it('jsm.deployment.add should open the dashboard deployment flow in create mode', () => {
       const node = createServerNode();
       invoke('jsm.deployment.add', node);
-      expect(deps.deploymentFormPanel.open).toHaveBeenCalledWith('create', 'srv-1');
+      expect(mockExecuteCommand).toHaveBeenCalledWith('jsm.dashboard.open', {
+        type: 'deployment',
+        serverId: 'srv-1',
+        mode: 'create',
+      });
     });
 
-    it('jsm.deployment.edit should open deployment form in edit mode', () => {
+    it('jsm.deployment.edit should open the dashboard deployment flow in edit mode', () => {
       const node = createDeploymentNode();
       invoke('jsm.deployment.edit', node);
-      expect(deps.deploymentFormPanel.open).toHaveBeenCalledWith('edit', 'srv-1', 'dep-1');
+      expect(mockExecuteCommand).toHaveBeenCalledWith('jsm.dashboard.open', {
+        type: 'deployment',
+        id: 'dep-1',
+        serverId: 'srv-1',
+        mode: 'edit',
+      });
+    });
+
+    it('jsm.deployment.add should persist a SPA deployment payload and return a command result', async () => {
+      const result = await invoke('jsm.deployment.add', {
+        serverId: 'srv-1',
+        serverKey: 'srv-1',
+        workspaceFolderUri: '',
+        deployment: makeDeployment('dep-2'),
+      });
+
+      expect(deps.configService.updateServer).toHaveBeenCalledWith(
+        expect.objectContaining({
+          deployments: [expect.objectContaining({ id: 'dep-2' })],
+        }),
+      );
+      expect(deps.treeProvider.requestRefresh).toHaveBeenCalled();
+      expect(result).toEqual(expect.objectContaining({
+        ok: true,
+        data: {
+          serverId: 'srv-1',
+          deploymentId: 'dep-2',
+        },
+      }));
     });
 
     it('jsm.deployment.redeploy should call deployService.fullRedeploy', async () => {
@@ -301,7 +335,7 @@ describe('Deployment Commands', () => {
     it('jsm.deployment.add should silently return with DeploymentNode (needs ServerNode)', () => {
       const depNode = createDeploymentNode();
       expect(() => invoke('jsm.deployment.add', depNode)).not.toThrow();
-      expect(deps.deploymentFormPanel.open).not.toHaveBeenCalled();
+      expect(mockExecuteCommand).not.toHaveBeenCalled();
     });
   });
 
@@ -359,6 +393,26 @@ describe('Deployment Commands', () => {
       await invoke('jsm.deployment.remove', node);
 
       expect(mockShowErrorMessage).toHaveBeenCalled();
+    });
+
+    it('remove should resolve deployment details when deploymentConfig is missing on the node', async () => {
+      const dep = makeDeployment();
+      const server = makeServer();
+      server.deployments = [dep];
+      deps.configService.getServer.mockReturnValue(server);
+      mockShowWarningMessage.mockResolvedValue('Remove');
+
+      const node = createDeploymentNode('srv-1', dep) as any;
+      node.deploymentConfig = undefined;
+
+      await invoke('jsm.deployment.remove', node);
+
+      expect(mockShowWarningMessage).toHaveBeenCalledWith(
+        expect.stringContaining(dep.deployName),
+        { modal: true },
+        'Remove',
+      );
+      expect(deps.configService.removeDeployment).toHaveBeenCalledWith('srv-1', dep.id);
     });
 
     it('toggleAutosync should silently return when server not found', async () => {

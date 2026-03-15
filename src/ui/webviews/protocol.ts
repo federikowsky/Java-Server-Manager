@@ -55,6 +55,31 @@ export interface FieldError {
   suggestedFix?: string;
 }
 
+export interface DashboardNavigationTarget {
+  type: 'welcome' | 'server' | 'template' | 'new-server' | 'new-template' | 'settings' | 'deployment';
+  id?: string;
+  serverId?: string;
+  mode?: 'create' | 'edit';
+  templateId?: string;
+}
+
+export interface SpaSettings {
+  autoDiscovery: boolean;
+  scanEnvVars: boolean;
+  scanCommonPaths: boolean;
+  defaultHttpPort: number;
+  defaultDebugPort: number;
+  defaultJavaHome: string;
+  showStatusInSidebar: boolean;
+}
+
+export interface SpaServerRecord {
+  serverKey: string;
+  config: unknown;
+  workspaceFolderUri: string;
+  workspaceFolderName: string;
+}
+
 // ── Messages: Webview → Host ────────────────────────────────────────────────
 
 export type WebviewToHost =
@@ -68,7 +93,7 @@ export type WebviewToHost =
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'loadData'; id?: string }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'requestDefaults'; pluginType: string }
   // SPA Commands
-  | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'executeCommand'; id: string; args?: unknown[] }
+  | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'executeCommand'; id: string; args?: unknown[]; requestId?: string }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'updateServer'; serverId: string; config: unknown; workspaceFolderUri: string }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'createServer'; config: unknown; workspaceFolderUri: string }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'deleteServer'; serverId: string; workspaceFolderUri: string }
@@ -87,6 +112,9 @@ export type HostToWebview =
       data?: Record<string, unknown>; 
       schema: FormSchema;
       templates?: Array<{ id: string; name: string; defaults: Record<string, unknown> }>;
+      targetId?: string;
+      targetWorkspaceFolderUri?: string;
+      targetScope?: 'global' | 'workspace';
     }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'loaded'; data: Record<string, unknown> }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'validationErrors'; errors: FieldError[] }
@@ -100,12 +128,17 @@ export type HostToWebview =
   | { 
       v: typeof WEBVIEW_PROTOCOL_VERSION; 
       command: 'syncState'; 
-      servers: Array<{ config: unknown; workspaceFolderUri: string; workspaceFolderName: string }>;
+      servers: SpaServerRecord[];
       runtimeStates: Record<string, unknown>;
+      deploymentStates: Record<string, Record<string, string>>;
       templates: Array<{ template: unknown; scope: 'global' | 'workspace' }>;
       capabilities: Record<string, unknown>;
       workspaceFolders: Array<{ uri: string; name: string }>;
+      settings: SpaSettings;
     }
-  | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'serverStateChanged'; serverId: string; state: unknown }
+  | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'serverStateChanged'; serverKey: string; state: unknown }
+  | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'deploymentStateChanged'; serverKey: string; deploymentId: string; state: string }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'configChanged' }
-  | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'workspaceFoldersResult'; folders: Array<{ uri: string; name: string }> };
+  | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'workspaceFoldersResult'; folders: Array<{ uri: string; name: string }> }
+  | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'navigate'; target: DashboardNavigationTarget }
+  | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'commandResult'; requestId: string; ok: boolean; message?: string; data?: Record<string, unknown> };

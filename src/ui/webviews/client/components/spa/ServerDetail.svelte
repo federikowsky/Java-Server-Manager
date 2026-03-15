@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { spaState, formData, formId } from '../../stores';
+  import { onDestroy } from 'svelte';
+  import { spaState, formId, submitting } from '../../stores';
   import { postToHost } from '../../bridge';
   import { WEBVIEW_PROTOCOL_VERSION } from '../../../protocol';
   import FormBody from '../FormBody.svelte';
@@ -10,34 +11,112 @@
   const { serverId }: { serverId: string } = $props();
 
   let state = $state($spaState);
-  spaState.subscribe(s => { state = s; });
+  const unsubscribeSpaState = spaState.subscribe(s => { state = s; });
 
   let serverRecord = $derived(state.servers.find(s => s.config.id === serverId));
   let config = $derived(serverRecord?.config);
-  let runtimeState = $derived(state.runtimeStates[serverId]);
+  let runtimeState = $derived(serverRecord ? state.runtimeStates[serverRecord.serverKey] : undefined);
+  let isConfigFormReady = $derived(
+    activeTab === 'config'
+    && !!state.currentFormSchema
+    && state.currentFormId === 'jsm.serverForm'
+    && state.currentFormTargetId === serverId
+  );
 
   let activeTab = $state('overview');
+  let configLoadState = $state<'idle' | 'loading' | 'ready' | 'error'>('idle');
+  let configLoadMessage = $state('');
+  let configRequestKey = $state('');
+  let configLoadTimer: ReturnType<typeof setTimeout> | undefined;
 
-  // Reactively request the form schema and prep the global form store
-  // when the 'config' tab is active for this server.
+  function clearConfigTimer(): void {
+    if (configLoadTimer) {
+      clearTimeout(configLoadTimer);
+      configLoadTimer = undefined;
+    }
+  }
+
+  function requestConfigForm(force = false): void {
+    if (!serverRecord) {
+      return;
+    }
+
+    const nextKey = `${serverId}:${serverRecord.workspaceFolderUri ?? ''}`;
+    if (!force && configRequestKey === nextKey && (configLoadState === 'loading' || configLoadState === 'ready' || isConfigFormReady)) {
+      return;
+    }
+
+    configRequestKey = nextKey;
+    configLoadState = 'loading';
+    configLoadMessage = '';
+    clearConfigTimer();
+    configLoadTimer = setTimeout(() => {
+      if (activeTab === 'config' && !isConfigFormReady) {
+        configLoadState = 'error';
+        configLoadMessage = 'The configuration form did not load. Retry the request.';
+      }
+    }, 1500);
+
+    postToHost({
+      v: WEBVIEW_PROTOCOL_VERSION,
+      command: 'executeCommand',
+      id: 'jsm.internal.requestServerSchema',
+      args: ['edit', serverId, serverRecord.workspaceFolderUri],
+    });
+  }
+
+  onDestroy(() => {
+    unsubscribeSpaState();
+    clearConfigTimer();
+  });
+
   $effect(() => {
-    if (activeTab === 'config' && config) {
-      postToHost({ v: WEBVIEW_PROTOCOL_VERSION, command: 'executeCommand', id: 'jsm.internal.requestServerSchema', args: ['edit', serverId] });
+    const nextKey = serverRecord ? `${serverId}:${serverRecord.workspaceFolderUri ?? ''}` : '';
+
+    if (activeTab !== 'config') {
+      clearConfigTimer();
+      if (configLoadState !== 'ready') {
+        configLoadState = 'idle';
+        configLoadMessage = '';
+      }
+      return;
+    }
+
+    if (!serverRecord) {
+      return;
+    }
+
+    if (configRequestKey !== nextKey) {
+      configRequestKey = '';
+      configLoadState = 'idle';
+      configLoadMessage = '';
+      clearConfigTimer();
+    }
+
+    if (isConfigFormReady || configLoadState === 'loading' || configLoadState === 'error') {
+      return;
+    }
+
+    requestConfigForm();
+  });
+
+  $effect(() => {
+    if (isConfigFormReady) {
+      clearConfigTimer();
+      configLoadState = 'ready';
+      configLoadMessage = '';
     }
   });
 
   function handleAction(cmd: string) {
-    const workspaceFolderUri = serverRecord?.workspaceFolderUri;
-    // serverKey is constructed the same way as makeWorkspaceServerKey
-    const serverKey = workspaceFolderUri ? `${workspaceFolderUri}::${serverId}` : serverId;
     postToHost({
       v: WEBVIEW_PROTOCOL_VERSION,
       command: 'executeCommand',
       id: cmd,
       args: [{ 
         serverId, 
-        serverKey,
-        workspaceFolderUri,
+        serverKey: serverRecord?.serverKey,
+        workspaceFolderUri: serverRecord?.workspaceFolderUri,
         workspaceFolderName: serverRecord?.workspaceFolderName 
       }],
     });
@@ -131,8 +210,34 @@
         </div>
       {:else if activeTab === 'config'}
         <div class="config-view">
-          <FormBody sections={$spaState.currentFormSchema?.sections || []} />
-          <FormActions mode="edit" submitting={false} formId={$formId} />
+          {#if isConfigFormReady}
+            <div class="form-surface">
+              <FormBody sections={$spaState.currentFormSchema?.sections || []} />
+            </div>
+            <FormActions
+              mode="edit"
+              submitting={$submitting}
+              formId={$formId}
+              submitLabel="Save Server"
+              onCancel={() => activeTab = 'overview'}
+            />
+          {:else if configLoadState === 'error'}
+            <div class="inline-loading-state error">
+              <Icon name="error" size={20} />
+              <div class="inline-loading-copy">
+                <span>{configLoadMessage}</span>
+                <button type="button" class="action-btn" onclick={() => requestConfigForm(true)}>
+                  <Icon name="refresh" size={14} />
+                  <span>Retry</span>
+                </button>
+              </div>
+            </div>
+          {:else}
+            <div class="inline-loading-state">
+              <Icon name="loading" size={20} />
+              <span>Loading configuration form…</span>
+            </div>
+          {/if}
         </div>
       {:else if activeTab === 'deployments'}
         <DeploymentsList serverId={serverId} />
@@ -248,6 +353,36 @@
     padding: var(--jsm-space-xl);
     flex: 1;
     overflow-y: auto;
+  }
+
+  .inline-loading-state {
+    display: flex;
+    align-items: center;
+    gap: var(--jsm-space-sm);
+    color: var(--jsm-color-fg-secondary);
+    padding: var(--jsm-space-lg);
+    border: 1px dashed var(--jsm-color-border-secondary);
+    border-radius: var(--jsm-radius-md);
+    background: var(--jsm-color-bg-secondary);
+  }
+
+  .inline-loading-state.error {
+    color: var(--jsm-color-error);
+    border-style: solid;
+    background: color-mix(in srgb, var(--jsm-color-error) 8%, var(--jsm-color-bg-secondary));
+  }
+
+  .inline-loading-copy {
+    display: flex;
+    align-items: center;
+    gap: var(--jsm-space-md);
+  }
+
+  .form-surface {
+    padding: var(--jsm-space-lg);
+    border: 1px solid var(--jsm-color-border-secondary);
+    border-radius: var(--jsm-radius-lg);
+    background: var(--jsm-color-bg-secondary);
   }
 
   .config-grid {

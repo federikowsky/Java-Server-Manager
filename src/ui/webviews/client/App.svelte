@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { onMount, tick } from 'svelte';
-  import { schema, mode, formId, formData, fieldErrors, submitting, globalError, templates, spaState, browseResult, hostError } from './stores';
+  import { onMount } from 'svelte';
+  import { activeEntity, schema, mode, formId, formData, fieldErrors, submitting, globalError, templates, spaState, browseResult, hostError, lastCommandResult } from './stores';
   import { sendReady, onHostMessage } from './bridge';
   import type { HostToWebview, FormSchema } from '../protocol';
   import FormHeader from './components/FormHeader.svelte';
@@ -93,29 +93,52 @@
         formData.update(d => ({ ...d, ...msg.data }));
         break;
       case 'syncState':
-        spaState.set({
+        spaState.update(state => ({
+          ...state,
+          initialized: true,
           servers: msg.servers,
           runtimeStates: msg.runtimeStates,
+          deploymentStates: msg.deploymentStates,
           templates: msg.templates,
           capabilities: msg.capabilities,
           workspaceFolders: msg.workspaceFolders,
-          settings: (msg as any).settings,
-        });
+          settings: msg.settings,
+        }));
+        submitting.set(false);
         break;
       case 'serverStateChanged':
         spaState.update(state => ({
           ...state,
-          runtimeStates: { ...state.runtimeStates, [msg.serverId]: msg.state },
+          runtimeStates: { ...state.runtimeStates, [msg.serverKey]: msg.state },
+        }));
+        break;
+      case 'deploymentStateChanged':
+        spaState.update(state => ({
+          ...state,
+          deploymentStates: {
+            ...state.deploymentStates,
+            [msg.serverKey]: {
+              ...(state.deploymentStates?.[msg.serverKey] || {}),
+              [msg.deploymentId]: msg.state,
+            },
+          },
         }));
         break;
       case 'init':
-        // Reuse init message for form schema
-        spaState.update(s => ({ ...s, currentFormSchema: msg.schema }));
+        spaState.update(s => ({
+          ...s,
+          currentFormSchema: msg.schema,
+          currentFormId: msg.formId,
+          currentFormTargetId: msg.targetId,
+          currentFormTargetWorkspaceFolderUri: msg.targetWorkspaceFolderUri,
+          currentFormTargetScope: msg.targetScope,
+        }));
         formId.set(msg.formId);
         schema.set(msg.schema);
         mode.set(msg.mode);
         fieldErrors.set({});
         globalError.set('');
+        hostError.set('');
         submitting.set(false);
         formData.set({
           ...collectSchemaDefaults(msg.schema),
@@ -127,6 +150,20 @@
         break;
       case 'hookOptions':
         schema.update(current => current ? applyHookTaskOptions(current, msg.fields, msg.taskOptions) : current);
+        break;
+      case 'workspaceFoldersResult':
+        spaState.update(state => ({ ...state, workspaceFolders: msg.folders }));
+        break;
+      case 'navigate':
+        activeEntity.set(msg.target);
+        break;
+      case 'commandResult':
+        lastCommandResult.set({
+          requestId: msg.requestId,
+          ok: msg.ok,
+          message: msg.message,
+          data: msg.data,
+        });
         break;
       case 'error':
         globalError.set(msg.message);
@@ -140,6 +177,11 @@
     performance.mark('jsm:mount');
     onHostMessage(handleHostMessage);
     sendReady();
+
+    // Add spa-mode class to body for CSS overrides
+    if ((window as any).__JSM_SPA_MODE__) {
+      document.body.classList.add('spa-mode');
+    }
   });
 </script>
 

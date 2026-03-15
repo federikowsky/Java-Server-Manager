@@ -3,7 +3,7 @@
  */
 
 import { writable } from 'svelte/store';
-import type { FormSchema } from '../protocol';
+import type { DashboardNavigationTarget, FormSchema, SpaServerRecord, SpaSettings } from '../protocol';
 
 /** The form schema sent by the host on init. */
 export const schema = writable<FormSchema | null>(null);
@@ -37,39 +37,30 @@ export const templates = writable<Array<{ id: string; name: string; defaults: Re
 
 // ── SPA Mode Stores ─────────────────────────────────────────────────────────
 
-export type EntityType = 'server' | 'template' | 'new-server' | 'new-template' | 'settings' | 'deployment';
+export type EntityType = DashboardNavigationTarget['type'];
+export type ActiveEntity = DashboardNavigationTarget;
 
-export interface ActiveEntity {
-  type: EntityType;
-  id?: string;
-  /** For deployment entity: the server ID this deployment belongs to */
-  serverId?: string;
-  /** For deployment entity: 'create' or 'edit' mode */
-  mode?: 'create' | 'edit';
-}
-
-export const activeEntity = writable<ActiveEntity>({ type: 'settings' });
-
-export interface SpaSettings {
-  autoDiscovery: boolean;
-  scanEnvVars: boolean;
-  scanCommonPaths: boolean;
-  defaultHttpPort: number;
-  defaultDebugPort: number;
-  defaultJavaHome: string;
-}
+export const activeEntity = writable<ActiveEntity>({ type: 'welcome' });
 
 export const spaState = writable<{
-  servers: Array<{ config: any; workspaceFolderUri: string; workspaceFolderName: string }>;
+  initialized: boolean;
+  servers: SpaServerRecord[];
   runtimeStates: Record<string, any>;
+  deploymentStates: Record<string, Record<string, string>>; // serverKey -> deploymentId -> state
   templates: Array<{ template: any; scope: 'global' | 'workspace' }>;
   capabilities: Record<string, any>;
   workspaceFolders: Array<{ uri: string; name: string }>;
   currentFormSchema?: import('../protocol').FormSchema;
+  currentFormId?: string;
+  currentFormTargetId?: string;
+  currentFormTargetWorkspaceFolderUri?: string;
+  currentFormTargetScope?: 'global' | 'workspace';
   settings?: SpaSettings;
 }>({
+  initialized: false,
   servers: [],
   runtimeStates: {},
+  deploymentStates: {},
   templates: [],
   capabilities: {},
   workspaceFolders: [],
@@ -80,3 +71,11 @@ export const browseResult = writable<{ field: string; path: string } | null>(nul
 
 /** Host error message — updated when host sends 'error' message */
 export const hostError = writable<string>('');
+
+/** Last command result emitted by the host for async SPA flows. */
+export const lastCommandResult = writable<{
+  requestId: string;
+  ok: boolean;
+  message?: string;
+  data?: Record<string, unknown>;
+} | null>(null);

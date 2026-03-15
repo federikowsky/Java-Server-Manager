@@ -13,10 +13,15 @@
   let config = $derived(serverRecord?.config);
   let deployments = $derived(config?.deployments || []);
 
-  function handleAction(cmd: string, deploymentId: string) {
+  // Deployment states for this server
+  let depStates = $derived(serverRecord ? (state.deploymentStates?.[serverRecord.serverKey] || {}) : {});
+  function isDeploying(depId: string): boolean {
+    return depStates[depId] === 'deploying';
+  }
+
+  function handleAction(cmd: string, deployment: any) {
     const workspaceFolderUri = serverRecord?.workspaceFolderUri;
-    // serverKey is constructed the same way as makeWorkspaceServerKey
-    const serverKey = workspaceFolderUri ? `${workspaceFolderUri}::${serverId}` : serverId;
+    const serverKey = serverRecord?.serverKey ?? (workspaceFolderUri ? `${workspaceFolderUri}::${serverId}` : serverId);
     postToHost({ 
       v: WEBVIEW_PROTOCOL_VERSION, 
       command: 'executeCommand', 
@@ -24,7 +29,8 @@
       args: [{ 
         serverId, 
         serverKey,
-        deploymentId,
+        deploymentId: deployment.id,
+        deploymentConfig: deployment,
         workspaceFolderUri,
         workspaceFolderName: serverRecord?.workspaceFolderName
       }] 
@@ -44,7 +50,7 @@
 
 <div class="deployments-view">
   <div class="toolbar">
-    <button class="btn btn-primary" onclick={handleAddDeployment}>
+    <button type="button" class="btn btn-primary" onclick={handleAddDeployment}>
       <Icon name="add" size={14} />
       <span>Add Deployment</span>
     </button>
@@ -87,19 +93,25 @@
             {/if}
           </td>
           <td class="actions-cell">
-            <button title="Redeploy" class="icon-btn" onclick={() => handleAction('jsm.deployment.redeploy', dep.id)}>
-              <Icon name="refresh" size={14} />
-            </button>
-            <button title="Undeploy" class="icon-btn" onclick={() => handleAction('jsm.deployment.undeploy', dep.id)}>
-              <Icon name="undeploy" size={14} />
-            </button>
-            <button title="Edit" class="icon-btn" onclick={() => handleEditDeployment(dep.id)}>
+            {#if isDeploying(dep.id)}
+              <span class="deploying-indicator" title="Deployment in progress">
+                <Icon name="loading" size={14} />
+              </span>
+            {:else}
+              <button type="button" aria-label={`Redeploy ${dep.deployName}`} title="Redeploy" class="icon-btn" onclick={() => handleAction('jsm.deployment.redeploy', dep)}>
+                <Icon name="refresh" size={14} />
+              </button>
+              <button type="button" aria-label={`Undeploy ${dep.deployName}`} title="Undeploy" class="icon-btn" onclick={() => handleAction('jsm.deployment.undeploy', dep)}>
+                <Icon name="undeploy" size={14} />
+              </button>
+            {/if}
+            <button type="button" aria-label={`Edit ${dep.deployName}`} title="Edit" class="icon-btn" onclick={() => handleEditDeployment(dep.id)}>
               <Icon name="edit" size={14} />
             </button>
-            <button title="Logs" class="icon-btn" onclick={() => handleAction('jsm.deployment.openLogs', dep.id)}>
+            <button type="button" aria-label={`Open logs for ${dep.deployName}`} title="Logs" class="icon-btn" onclick={() => handleAction('jsm.deployment.openLogs', dep)}>
               <Icon name="terminal" size={14} />
             </button>
-            <button title="Remove" class="icon-btn danger" onclick={() => handleAction('jsm.deployment.remove', dep.id)}>
+            <button type="button" aria-label={`Remove ${dep.deployName}`} title="Remove" class="icon-btn danger" onclick={() => handleAction('jsm.deployment.remove', dep)} disabled={isDeploying(dep.id)}>
               <Icon name="trash" size={14} />
             </button>
           </td>
@@ -107,7 +119,7 @@
       {/each}
       {#if deployments.length === 0}
         <tr>
-          <td colspan="5" class="empty-row">No deployments configured for this server.</td>
+          <td colspan="5" class="empty-row">No deployments configured yet. Add one to enable deploy, undeploy, and health checks.</td>
         </tr>
       {/if}
     </tbody>
@@ -225,6 +237,19 @@
   .icon-btn.danger:hover {
     background: var(--jsm-color-error);
     color: white;
+  }
+
+  .icon-btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
+
+  .deploying-indicator {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--jsm-space-xs);
+    color: var(--jsm-status-starting);
   }
 
   .empty-row {

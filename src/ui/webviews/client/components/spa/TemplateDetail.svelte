@@ -1,70 +1,212 @@
 <script lang="ts">
-  import { spaState } from '../../stores';
+  import { onDestroy } from 'svelte';
+  import { activeEntity, formId, spaState, submitting } from '../../stores';
   import { postToHost } from '../../bridge';
   import { WEBVIEW_PROTOCOL_VERSION } from '../../../protocol';
   import FormBody from '../FormBody.svelte';
   import FormActions from '../FormActions.svelte';
   import Icon from '../Icon.svelte';
+  import FormPage from './FormPage.svelte';
 
   const { templateId }: { templateId?: string } = $props();
 
   let state = $state($spaState);
-  spaState.subscribe(s => { state = s; });
+  const unsubscribeSpaState = spaState.subscribe(s => { state = s; });
 
   let tpl = $derived(templateId ? state.templates.find(t => t.template.id === templateId) : undefined);
+  let isFormReady = $derived(
+    !!state.currentFormSchema
+    && state.currentFormId === 'jsm.templateForm'
+    && (templateId ? state.currentFormTargetId === templateId : !state.currentFormTargetId)
+  );
 
-  let schemaRequested = false;
+  let requestedKey = $state('');
+  let formLoadState = $state<'idle' | 'loading' | 'ready' | 'error'>('idle');
+  let formLoadMessage = $state('');
+  let formLoadTimer: ReturnType<typeof setTimeout> | undefined;
 
-  $effect(() => {
-    if (schemaRequested) return;
+  function clearFormTimer(): void {
+    if (formLoadTimer) {
+      clearTimeout(formLoadTimer);
+      formLoadTimer = undefined;
+    }
+  }
 
-    if (tpl) {
-      postToHost({ v: WEBVIEW_PROTOCOL_VERSION, command: 'executeCommand', id: 'jsm.internal.requestTemplateSchema', args: ['edit', templateId] });
-      schemaRequested = true;
+  function requestTemplateForm(force = false): void {
+    const nextKey = templateId ? `edit:${templateId}` : 'create';
+    if (!force && requestedKey === nextKey && (formLoadState === 'loading' || formLoadState === 'ready' || isFormReady)) {
       return;
     }
 
-    // In create mode, request a schema for a new template.
-    if (!templateId) {
-      postToHost({ v: WEBVIEW_PROTOCOL_VERSION, command: 'executeCommand', id: 'jsm.internal.requestTemplateSchema', args: ['create'] });
-      schemaRequested = true;
+    formLoadState = 'loading';
+    formLoadMessage = '';
+    requestedKey = nextKey;
+    clearFormTimer();
+    formLoadTimer = setTimeout(() => {
+      if (!isFormReady) {
+        formLoadState = 'error';
+        formLoadMessage = 'The template form did not load. Retry the request.';
+      }
+    }, 1500);
+
+    if (templateId) {
+      postToHost({ v: WEBVIEW_PROTOCOL_VERSION, command: 'executeCommand', id: 'jsm.internal.requestTemplateSchema', args: ['edit', templateId] });
+      return;
+    }
+
+    postToHost({ v: WEBVIEW_PROTOCOL_VERSION, command: 'executeCommand', id: 'jsm.internal.requestTemplateSchema', args: ['create'] });
+  }
+
+  onDestroy(() => {
+    unsubscribeSpaState();
+    clearFormTimer();
+  });
+
+  $effect(() => {
+    const nextKey = templateId ? `edit:${templateId}` : 'create';
+
+    if (requestedKey !== nextKey) {
+      requestedKey = '';
+      formLoadState = 'idle';
+      formLoadMessage = '';
+      clearFormTimer();
+    }
+
+    if (templateId && !tpl) {
+      return;
+    }
+
+    if (isFormReady || formLoadState === 'loading' || formLoadState === 'error') {
+      return;
+    }
+
+    requestTemplateForm();
+  });
+
+  $effect(() => {
+    if (isFormReady) {
+      clearFormTimer();
+      formLoadState = 'ready';
+      formLoadMessage = '';
     }
   });
 
-  function handleAction(cmd: string) {
+  function handleDelete() {
     postToHost({ 
       v: WEBVIEW_PROTOCOL_VERSION, 
       command: 'executeCommand', 
-      id: cmd, 
+      id: 'jsm.template.delete', 
       args: [templateId] 
     });
+  }
+
+  function handleCreateServer() {
+    if (!templateId) return;
+    activeEntity.set({ type: 'new-server', templateId });
   }
 </script>
 
 {#if tpl}
-  <div class="template-detail">
-    <div class="header">
-      <div class="header-main">
-        <h1>{tpl.template.name}</h1>
-        <span class="badge scope">{tpl.scope}</span>
+  <FormPage
+    icon="file-code"
+    eyebrow="Template"
+    title={tpl.template.name}
+    subtitle={tpl.template.description || 'Reusable defaults for provisioning new servers from the dashboard.'}
+  >
+    <svelte:fragment slot="actions">
+      <span class="badge scope">{tpl.scope}</span>
+      <button type="button" class="action-btn primary" onclick={handleCreateServer}>
+        <Icon name="play" size={14} />
+        <span>Create Server</span>
+      </button>
+      <button type="button" class="action-btn danger" onclick={handleDelete}>
+        <Icon name="trash" size={14} />
+        <span>Delete</span>
+      </button>
+    </svelte:fragment>
+
+    {#if isFormReady}
+      <div class="form-surface">
+        <FormBody sections={$spaState.currentFormSchema?.sections || []} />
       </div>
-      <div class="header-actions">
-        <button class="action-btn primary" title="Create Server from Template" onclick={() => handleAction('jsm.template.createServer')}>
-          <Icon name="play" size={14} />
-          <span>Create Server</span>
-        </button>
-        <button class="action-btn danger" title="Delete Template" onclick={() => handleAction('jsm.template.delete')}>
-          <Icon name="trash" size={14} />
-          <span>Delete</span>
-        </button>
+    {:else if formLoadState === 'error'}
+      <div class="inline-loading-state error">
+        <Icon name="error" size={20} />
+        <div class="inline-loading-copy">
+          <span>{formLoadMessage}</span>
+          <button type="button" class="action-btn" onclick={() => requestTemplateForm(true)}>
+            <Icon name="refresh" size={14} />
+            <span>Retry</span>
+          </button>
+        </div>
+      </div>
+    {:else}
+      <div class="inline-loading-state">
+        <Icon name="loading" size={20} />
+        <span>Loading template form…</span>
+      </div>
+    {/if}
+
+    <svelte:fragment slot="footer">
+      {#if isFormReady}
+        <FormActions
+          mode="edit"
+          submitting={$submitting}
+          formId={$formId}
+          submitLabel="Save Template"
+          showCancel={false}
+        />
+      {/if}
+    </svelte:fragment>
+  </FormPage>
+{:else if !templateId}
+  <FormPage
+    icon="file-code"
+    eyebrow="New Template"
+    title="Create Template"
+    subtitle="Capture server defaults once, then reuse them from the dashboard when adding new managed instances."
+  >
+    <div class="template-hero">
+      <div class="hero-copy">
+        <strong>What goes in a template?</strong>
+        <span>Store defaults for runtime path, ports, JVM arguments, hooks, and SSL settings. Templates never create files on disk by themselves.</span>
       </div>
     </div>
 
-    <div class="content">
-      <FormBody sections={$spaState.currentFormSchema?.sections || []} />
-      <FormActions mode="edit" submitting={false} formId="jsm.templateForm" />
-    </div>
-  </div>
+    {#if isFormReady}
+      <div class="form-surface">
+        <FormBody sections={$spaState.currentFormSchema?.sections || []} />
+      </div>
+    {:else if formLoadState === 'error'}
+      <div class="inline-loading-state error">
+        <Icon name="error" size={20} />
+        <div class="inline-loading-copy">
+          <span>{formLoadMessage}</span>
+          <button type="button" class="action-btn" onclick={() => requestTemplateForm(true)}>
+            <Icon name="refresh" size={14} />
+            <span>Retry</span>
+          </button>
+        </div>
+      </div>
+    {:else}
+      <div class="inline-loading-state">
+        <Icon name="loading" size={20} />
+        <span>Loading template form…</span>
+      </div>
+    {/if}
+
+    <svelte:fragment slot="footer">
+      {#if isFormReady}
+        <FormActions
+          mode="create"
+          submitting={$submitting}
+          formId={$formId}
+          submitLabel="Create Template"
+          showCancel={false}
+        />
+      {/if}
+    </svelte:fragment>
+  </FormPage>
 {:else}
   <div class="empty-state">
     <Icon name="file-code" size={48} />
@@ -74,32 +216,6 @@
 {/if}
 
 <style>
-  .template-detail {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-  }
-  .header {
-    padding: var(--jsm-space-xl);
-    border-bottom: 1px solid var(--jsm-color-border);
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-  }
-  .header-main {
-    display: flex;
-    align-items: center;
-    gap: var(--jsm-space-lg);
-  }
-  .header-main h1 {
-    margin: 0;
-    font-size: var(--jsm-font-size-2xl);
-    font-weight: var(--jsm-font-weight-medium);
-  }
-  .header-actions {
-    display: flex;
-    gap: var(--jsm-space-sm);
-  }
   .action-btn {
     background: var(--jsm-color-secondary);
     color: var(--jsm-color-secondary-fg);
@@ -139,10 +255,56 @@
     color: var(--jsm-badge-fg);
   }
 
-  .content {
-    padding: var(--jsm-space-xl);
-    flex: 1;
-    overflow-y: auto;
+  .template-hero {
+    padding: var(--jsm-space-lg);
+    border: 1px solid var(--jsm-color-border-secondary);
+    border-radius: var(--jsm-radius-lg);
+    background:
+      linear-gradient(180deg, color-mix(in srgb, var(--jsm-color-primary) 10%, transparent), transparent 55%),
+      var(--jsm-color-bg-secondary);
+  }
+
+  .hero-copy {
+    display: flex;
+    flex-direction: column;
+    gap: var(--jsm-space-xs);
+    color: var(--jsm-color-fg-secondary);
+    max-width: 720px;
+  }
+
+  .hero-copy strong {
+    color: var(--jsm-color-fg);
+    font-size: var(--jsm-font-size-md);
+  }
+
+  .form-surface {
+    padding: var(--jsm-space-lg);
+    border: 1px solid var(--jsm-color-border-secondary);
+    border-radius: var(--jsm-radius-lg);
+    background: var(--jsm-color-bg-secondary);
+  }
+
+  .inline-loading-state {
+    display: flex;
+    align-items: center;
+    gap: var(--jsm-space-sm);
+    color: var(--jsm-color-fg-secondary);
+    padding: var(--jsm-space-lg);
+    border: 1px dashed var(--jsm-color-border-secondary);
+    border-radius: var(--jsm-radius-md);
+    background: var(--jsm-color-bg-secondary);
+  }
+
+  .inline-loading-state.error {
+    color: var(--jsm-color-error);
+    border-style: solid;
+    background: color-mix(in srgb, var(--jsm-color-error) 8%, var(--jsm-color-bg-secondary));
+  }
+
+  .inline-loading-copy {
+    display: flex;
+    align-items: center;
+    gap: var(--jsm-space-md);
   }
 
   .empty-state {

@@ -1,6 +1,14 @@
 import type { ServerId, DeploymentId, TemplateId } from './ids';
 import type { ServerType, DeploymentType, SyncMode } from './enums';
 
+type DeepPartial<T> = {
+  [K in keyof T]?: T[K] extends Array<infer U>
+    ? Array<DeepPartial<U>>
+    : T[K] extends object
+      ? DeepPartial<T[K]>
+      : T[K];
+};
+
 // ── Plugin Config ───────────────────────────────────────────────────────────
 
 // ── SSL Config ───────────────────────────────────────────────────────────────
@@ -200,6 +208,6 @@ export interface ServerTemplate {
   name: string;
   pluginType: ServerType;
   /** Deep partial of ServerConfig, omitting instance-specific identity fields. */
-  serverDefaults: Partial<Omit<ServerConfig, 'id' | 'name' | 'instancePath'>>;
+  serverDefaults: DeepPartial<Omit<ServerConfig, 'id' | 'name' | 'instancePath'>>;
   description?: string;
 }

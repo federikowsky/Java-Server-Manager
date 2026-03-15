@@ -11,7 +11,7 @@
   let error = $state('');
   hostError.subscribe(e => { error = e; });
 
-  let loading = $derived(state.servers.length === 0 && state.templates.length === 0 && !error);
+  let loading = $derived(!state.initialized && !error);
 </script>
 
 <div class="spa-layout">

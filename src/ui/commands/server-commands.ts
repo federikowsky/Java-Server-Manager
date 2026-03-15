@@ -15,6 +15,7 @@ import type { SchemaValidator } from '@core/validation/SchemaValidator';
 import { exists } from '@infra/fs';
 import type { ServerTreeViewProvider } from '@ui/tree/ServerTreeViewProvider';
 import type { ServerFormPanel } from '@ui/webviews/panels/ServerFormPanel';
+import { formDataToCreateServerRequest } from '@ui/webviews/panels/ServerFormPanel';
 import {
   isServerNode,
   registerMany,
@@ -123,22 +124,50 @@ export function registerServerCommands(
 
   return registerMany([
     ['jsm.server.add', async (arg: unknown) => {
-      // Check if this is a SPA form submission (has config data)
+      if (arg && typeof arg === 'object' && 'formData' in arg && 'workspaceFolderUri' in arg) {
+        const spaArg = arg as { formData: Record<string, unknown>; workspaceFolderUri: string };
+        if (!workspaceRegistry) {
+          return { ok: false, message: 'Workspace registry not available' };
+        }
+        const entry = workspaceRegistry.getEntry(spaArg.workspaceFolderUri);
+        if (!entry) {
+          return { ok: false, message: 'Workspace not found.' };
+        }
+
+        const result = await entry.provisioningService.createServer(
+          formDataToCreateServerRequest(spaArg.formData),
+        );
+        if (!result.ok) {
+          return { ok: false, message: result.error.message };
+        }
+
+        treeProvider.requestRefresh();
+        return {
+          ok: true,
+          message: `Server "${result.value.name}" created.`,
+          data: {
+            serverId: result.value.id,
+            workspaceFolderUri: spaArg.workspaceFolderUri,
+          },
+        };
+      }
+
+      // Backward-compatible raw config path.
       if (arg && typeof arg === 'object' && 'config' in arg && 'workspaceFolderUri' in arg) {
         const spaArg = arg as { config: any; workspaceFolderUri: string };
         if (!workspaceRegistry) {
-          showErr(new JsmError({ code: ErrorCode.InvalidConfig, message: 'Workspace registry not available' }));
-          return;
+          return { ok: false, message: 'Workspace registry not available' };
         }
         const result = await workspaceRegistry.addServer(spaArg.workspaceFolderUri, spaArg.config);
-        if (!result.ok) { showErr(result.error); return; }
-        showSuccess(`Server "${spaArg.config.name}" created.`);
+        if (!result.ok) {
+          return { ok: false, message: result.error.message };
+        }
         treeProvider.requestRefresh();
-        return;
+        return { ok: true, message: `Server "${spaArg.config.name}" created.` };
       }
       
-      // Legacy: open dashboard
-      vscode.commands.executeCommand('jsm.dashboard.open');
+      void vscode.commands.executeCommand('jsm.dashboard.open', { type: 'new-server' });
+      return undefined;
     }],
 
     ['jsm.server.startRun', async (arg: unknown) => {
@@ -212,7 +241,7 @@ export function registerServerCommands(
 
     ['jsm.server.edit', (arg: unknown) => {
       if (!isServerNode(arg)) return;
-      vscode.commands.executeCommand('jsm.dashboard.open');
+      vscode.commands.executeCommand('jsm.dashboard.open', { type: 'server', id: arg.serverId });
     }],
 
     ['jsm.server.duplicate', async (arg: unknown) => {

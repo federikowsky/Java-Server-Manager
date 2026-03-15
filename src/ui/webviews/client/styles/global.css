@@ -63,6 +63,16 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* SPA mode: remove body padding and prevent scrolling (Layout handles it) */
+body.spa-mode {
+  padding: 0;
+  overflow: hidden;
+}
+
+html:has(body.spa-mode) {
+  overflow: hidden;
+}
+
 /* ── Form Header ───────────────────────────────────────────────────────────── */
 
 .form-header {

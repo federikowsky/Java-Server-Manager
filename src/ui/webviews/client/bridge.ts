@@ -70,8 +70,8 @@ export function sendRequestDefaults(pluginType: string): void {
 
 // ── SPA Command Helpers ─────────────────────────────────────────────────────
 
-export function sendExecuteCommand(id: string, args?: unknown[]): void {
-  postToHost({ v: WEBVIEW_PROTOCOL_VERSION, command: 'executeCommand', id, args });
+export function sendExecuteCommand(id: string, args?: unknown[], requestId?: string): void {
+  postToHost({ v: WEBVIEW_PROTOCOL_VERSION, command: 'executeCommand', id, args, requestId });
 }
 
 export function sendUpdateServer(serverId: string, config: unknown, workspaceFolderUri: string): void {

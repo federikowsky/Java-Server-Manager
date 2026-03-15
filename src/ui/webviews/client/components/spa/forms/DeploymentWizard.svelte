@@ -34,7 +34,7 @@
   let ignoreGlobs = $state<string[]>([]);
   let ignoreGlobDraft = $state('');
 
-  let expandedSection = $state<'source' | 'sync' | 'advanced'>('source');
+  let expandedSection = $state<'advanced' | ''>('');
   let errors = $state<Record<string, string>>({});
   let touched = $state<Record<string, boolean>>({});
 
@@ -97,20 +97,13 @@
     healthCheckTimeoutMs = existingDeployment?.healthCheckTimeoutMs;
     ignoreGlobs = existingDeployment?.ignoreGlobs ? [...existingDeployment.ignoreGlobs] : [];
     ignoreGlobDraft = '';
-    expandedSection = 'source';
+    expandedSection = '';
     errors = {};
     touched = {};
     submitState = 'idle';
     submitError = '';
     pendingRequestId = '';
   });
-
-  let sourceComplete = $derived(
-    sourcePath.trim().length > 0 &&
-    deployName.trim().length > 0 &&
-    /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(deployName)
-  );
-  let syncComplete = $derived(true);
 
   function validateField(field: string, value: string): string {
     switch (field) {
@@ -140,8 +133,8 @@
     touched = { ...touched, [field]: true };
   }
 
-  function toggleSection(section: typeof expandedSection) {
-    expandedSection = expandedSection === section ? '' as typeof expandedSection : section;
+  function toggleAdvanced() {
+    expandedSection = expandedSection === 'advanced' ? '' : 'advanced';
   }
 
   function handleBrowse() {
@@ -203,8 +196,6 @@
     };
 
     if (Object.keys(allErrors).length > 0) {
-      if (allErrors.sourcePath || allErrors.deployName) expandedSection = 'source';
-      else expandedSection = 'advanced';
       return;
     }
 
@@ -280,14 +271,12 @@
   </div>
 
   <div class="wizard-content">
-    <!-- Section 1: Source & Type -->
-    <AccordionSection 
-      title="Source & Type" 
-      icon="folder"
-      expanded={expandedSection === 'source'}
-      completed={sourceComplete}
-      onToggle={() => toggleSection('source')}
-    >
+    <!-- Section 1: Source & Type (Flat) -->
+    <div class="form-section">
+      <h3 class="section-title">
+        <Icon name="folder" size={16} />
+        <span>Source & Type</span>
+      </h3>
       <div class="section-grid">
         <!-- Deployment Type Cards -->
         <div class="type-selector">
@@ -368,16 +357,14 @@
           {/if}
         </div>
       </div>
-    </AccordionSection>
+    </div>
 
-    <!-- Section 2: Sync & Options -->
-    <AccordionSection 
-      title="Sync & Options" 
-      icon="refresh"
-      expanded={expandedSection === 'sync'}
-      completed={syncComplete}
-      onToggle={() => toggleSection('sync')}
-    >
+    <!-- Section 2: Sync & Options (Flat) -->
+    <div class="form-section">
+      <h3 class="section-title">
+        <Icon name="refresh" size={16} />
+        <span>Sync & Options</span>
+      </h3>
       <div class="section-grid">
         {#if formType === 'exploded'}
           <div class="form-field">
@@ -416,14 +403,14 @@
           </div>
         {/if}
       </div>
-    </AccordionSection>
+    </div>
 
-    <!-- Section 3: Advanced -->
+    <!-- Section 3: Advanced (Accordion) -->
     <AccordionSection 
       title="Advanced Options" 
       icon="settings"
       expanded={expandedSection === 'advanced'}
-      onToggle={() => toggleSection('advanced')}
+      onToggle={toggleAdvanced}
     >
       <div class="section-grid">
         <div class="form-field">
@@ -866,6 +853,26 @@
   .btn-sm {
     padding: var(--jsm-space-xs) var(--jsm-space-sm);
     font-size: var(--jsm-font-size-sm);
+  }
+
+  .form-section {
+    display: flex;
+    flex-direction: column;
+    gap: var(--jsm-space-md);
+    padding: var(--jsm-space-lg);
+    border: 1px solid var(--jsm-color-border-secondary);
+    border-radius: var(--jsm-radius-lg);
+    background: var(--jsm-color-bg);
+  }
+
+  .section-title {
+    display: flex;
+    align-items: center;
+    gap: var(--jsm-space-sm);
+    font-size: var(--jsm-font-size-md);
+    font-weight: var(--jsm-font-weight-semibold);
+    color: var(--jsm-color-fg);
+    margin: 0;
   }
 
   @media (max-width: 900px) {

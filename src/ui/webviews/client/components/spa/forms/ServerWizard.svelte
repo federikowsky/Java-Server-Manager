@@ -54,7 +54,7 @@
     state.workspaceFolders.find(folder => folder.uri === selectedWorkspace)?.name || 'No workspace selected'
   );
 
-  let expandedSection = $state<'identity' | 'runtime' | 'network' | 'advanced'>('identity');
+  let expandedSection = $state<'advanced' | ''>('');
   let errors = $state<Record<string, string>>({});
   let touched = $state<Record<string, boolean>>({});
 
@@ -191,15 +191,7 @@
     defaultsHydrated = true;
   });
 
-  let identityComplete = $derived(
-    selectedType && serverName.trim().length > 0 && (creationMode !== 'template' || selectedTemplateId !== '')
-  );
-  let runtimeComplete = $derived(
-    runtimeHome.trim().length > 0 && javaHome.trim().length > 0 && !errors.runtimeHome && !errors.javaHome
-  );
-  let networkComplete = $derived(
-    httpPort > 0 && httpPort <= 65535 && !errors.httpPort
-  );
+
 
   function validateField(field: string, value: string): string {
     switch (field) {
@@ -236,8 +228,8 @@
     touched = { ...touched, [field]: true };
   }
 
-  function toggleSection(section: typeof expandedSection) {
-    expandedSection = expandedSection === section ? '' as typeof expandedSection : section;
+  function toggleAdvanced() {
+    expandedSection = expandedSection === 'advanced' ? '' : 'advanced';
   }
 
   function setCreationMode(mode: 'scratch' | 'template') {
@@ -326,15 +318,11 @@
     };
 
     if (Object.keys(allErrors).length > 0) {
-      if (allErrors.serverName || allErrors.selectedTemplateId) expandedSection = 'identity';
-      else if (allErrors.runtimeHome || allErrors.javaHome) expandedSection = 'runtime';
-      else if (allErrors.httpPort || allErrors.debugPort) expandedSection = 'network';
       return;
     }
 
     if (!selectedWorkspace) {
       submitError = 'Select a workspace before creating the server.';
-      expandedSection = 'identity';
       return;
     }
 
@@ -400,14 +388,12 @@
   </div>
 
   <div class="wizard-content">
-    <!-- Section 1: Type & Identity -->
-    <AccordionSection 
-      title="Server Type & Identity" 
-      icon="server"
-      expanded={expandedSection === 'identity'}
-      completed={identityComplete}
-      onToggle={() => toggleSection('identity')}
-    >
+    <!-- Section 1: Type & Identity (Flat) -->
+    <div class="form-section">
+      <h3 class="section-title">
+        <Icon name="server" size={16} />
+        <span>Server Type & Identity</span>
+      </h3>
       <div class="section-grid">
         <!-- Creation Mode -->
         {#if availableTemplates.length > 0}
@@ -505,16 +491,14 @@
           </div>
         {/if}
       </div>
-    </AccordionSection>
+    </div>
 
-    <!-- Section 2: Runtime & Java -->
-    <AccordionSection 
-      title="Runtime & Java" 
-      icon="folder"
-      expanded={expandedSection === 'runtime'}
-      completed={runtimeComplete}
-      onToggle={() => toggleSection('runtime')}
-    >
+    <!-- Section 2: Runtime & Java (Flat) -->
+    <div class="form-section">
+      <h3 class="section-title">
+        <Icon name="folder" size={16} />
+        <span>Runtime & Java</span>
+      </h3>
       <div class="section-grid two-columns">
         <div class="form-field">
           <label class="field-label" for="runtime-home">
@@ -571,16 +555,14 @@
           {/if}
         </div>
       </div>
-    </AccordionSection>
+    </div>
 
-    <!-- Section 3: Network & Ports -->
-    <AccordionSection 
-      title="Network & Ports" 
-      icon="globe"
-      expanded={expandedSection === 'network'}
-      completed={networkComplete}
-      onToggle={() => toggleSection('network')}
-    >
+    <!-- Section 3: Network & Ports (Flat) -->
+    <div class="form-section">
+      <h3 class="section-title">
+        <Icon name="globe" size={16} />
+        <span>Network & Ports</span>
+      </h3>
       <div class="section-grid two-columns">
         <div class="form-field">
           <label class="field-label" for="http-port">
@@ -603,6 +585,25 @@
         </div>
 
         <div class="form-field">
+          <label class="field-label" for="bind-address">Bind Address</label>
+          <select id="bind-address" class="field-input" bind:value={host}>
+            <option value="127.0.0.1">127.0.0.1 (localhost only)</option>
+            <option value="0.0.0.0">0.0.0.0 (all interfaces)</option>
+            <option value="localhost">localhost</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- Section 4: Advanced (Accordion) -->
+    <AccordionSection 
+      title="Advanced Options" 
+      icon="settings"
+      expanded={expandedSection === 'advanced'}
+      onToggle={toggleAdvanced}
+    >
+      <div class="section-grid">
+        <div class="form-field">
           <label class="field-label" for="debug-port">Debug Port</label>
           <input
             id="debug-port"
@@ -619,29 +620,19 @@
           {#if errors.debugPort && touched.debugPort}
             <p class="field-error">{errors.debugPort}</p>
           {:else}
-            <p class="field-help">Leave empty to use the default debug port.</p>
+            <p class="field-help">Leave empty to auto-assign a free port.</p>
           {/if}
         </div>
-      </div>
 
-      <div class="form-field">
-        <label class="field-label" for="host">Bind Address</label>
-        <select id="host" class="field-input" bind:value={host}>
-          <option value="127.0.0.1">127.0.0.1 (localhost only)</option>
-          <option value="0.0.0.0">0.0.0.0 (all interfaces)</option>
-          <option value="localhost">localhost</option>
-        </select>
-      </div>
-    </AccordionSection>
+        <div class="form-field">
+          <label class="field-label" for="debug-bind">Debug Bind Address</label>
+          <select id="debug-bind" class="field-input" bind:value={debugBind}>
+            <option value="127.0.0.1">127.0.0.1</option>
+            <option value="localhost">localhost</option>
+            <option value="::1">::1 (IPv6)</option>
+          </select>
+        </div>
 
-    <!-- Section 4: Advanced -->
-    <AccordionSection 
-      title="Advanced Options" 
-      icon="settings"
-      expanded={expandedSection === 'advanced'}
-      onToggle={() => toggleSection('advanced')}
-    >
-      <div class="section-grid">
         <div class="form-field">
           <label class="field-label">VM Arguments</label>
           <div class="tag-list">
@@ -657,6 +648,13 @@
               <span class="tag-empty">No VM arguments</span>
             {/if}
           </div>
+          <div class="vm-presets">
+            <span class="presets-label">Presets:</span>
+            <button type="button" class="btn btn-secondary btn-xs" onclick={() => { vmArgs = [...vmArgs, '-Xmx512m']; }}>512m</button>
+            <button type="button" class="btn btn-secondary btn-xs" onclick={() => { vmArgs = [...vmArgs, '-Xmx1g']; }}>1g</button>
+            <button type="button" class="btn btn-secondary btn-xs" onclick={() => { vmArgs = [...vmArgs, '-Xmx2g']; }}>2g</button>
+            <button type="button" class="btn btn-secondary btn-xs" onclick={() => { vmArgs = [...vmArgs, '-Xss256k']; }}>-Xss256k</button>
+          </div>
           <div class="tag-input-row">
             <input
               type="text"
@@ -671,15 +669,6 @@
             </button>
           </div>
           <p class="field-help">JVM arguments (e.g., -Xmx512m, -Dmy.property=value)</p>
-        </div>
-
-        <div class="form-field">
-          <label class="field-label" for="debug-bind">Debug Bind Address</label>
-          <select id="debug-bind" class="field-input" bind:value={debugBind}>
-            <option value="127.0.0.1">127.0.0.1</option>
-            <option value="localhost">localhost</option>
-            <option value="::1">::1 (IPv6)</option>
-          </select>
         </div>
       </div>
     </AccordionSection>
@@ -975,6 +964,43 @@
   .btn-sm {
     padding: var(--jsm-space-xs) var(--jsm-space-sm);
     font-size: var(--jsm-font-size-sm);
+  }
+
+  .btn-xs {
+    padding: var(--jsm-space-2xs) var(--jsm-space-xs);
+    font-size: var(--jsm-font-size-xs);
+  }
+
+  .form-section {
+    display: flex;
+    flex-direction: column;
+    gap: var(--jsm-space-md);
+    padding: var(--jsm-space-lg);
+    border: 1px solid var(--jsm-color-border-secondary);
+    border-radius: var(--jsm-radius-lg);
+    background: var(--jsm-color-bg);
+  }
+
+  .section-title {
+    display: flex;
+    align-items: center;
+    gap: var(--jsm-space-sm);
+    font-size: var(--jsm-font-size-md);
+    font-weight: var(--jsm-font-weight-semibold);
+    color: var(--jsm-color-fg);
+    margin: 0;
+  }
+
+  .vm-presets {
+    display: flex;
+    align-items: center;
+    gap: var(--jsm-space-xs);
+    flex-wrap: wrap;
+  }
+
+  .presets-label {
+    font-size: var(--jsm-font-size-xs);
+    color: var(--jsm-color-fg-secondary);
   }
 
   @media (max-width: 900px) {

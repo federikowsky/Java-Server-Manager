@@ -31,7 +31,6 @@ import { ServerTreeViewProvider } from '@ui/tree';
 import { DashboardPanel } from '@ui/webviews/panels/DashboardPanel';
 import { ServerFormPanel } from '@ui/webviews/panels/ServerFormPanel';
 import { DeploymentFormPanel } from '@ui/webviews/panels/DeploymentFormPanel';
-import { TemplateManagerPanel } from '@ui/webviews/panels/TemplateManagerPanel';
 import { registerServerCommands, registerDeploymentCommands } from '@ui/commands';
 import {
   MAIN_OUTPUT_CHANNEL,
@@ -352,15 +351,6 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
     logger,
   });
   disposables.push(deploymentFormPanel);
-
-  const templateManagerPanel = new TemplateManagerPanel({
-    extensionUri: ctx.extensionUri,
-    templateService,
-    workspaceRegistry: workspaceServiceRegistry,
-    serverFormPanel,
-    logger,
-  });
-  disposables.push(templateManagerPanel);
 
   const dashboardPanel = new DashboardPanel({
     extensionUri: ctx.extensionUri,

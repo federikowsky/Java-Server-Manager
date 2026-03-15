@@ -249,26 +249,9 @@
   alignStart={true}
 >
   <svelte:fragment slot="actions">
-    <span class="meta-chip">{formType === 'exploded' ? 'Exploded Directory' : 'WAR File'}</span>
+    <span class="meta-chip">{formType === 'exploded' ? 'Exploded' : 'WAR'}</span>
     <span class="meta-chip subtle">{config?.type || 'Server'}</span>
   </svelte:fragment>
-
-  <div class="intro-panel">
-    <div class="intro-copy">
-      <strong>Deployment scope</strong>
-      <span>Use auto sync for exploded content while iterating, or switch to a packaged WAR when you want an explicit deploy step with fewer moving parts.</span>
-    </div>
-    <div class="meta-grid">
-      <div class="meta-card">
-        <span class="meta-label">Target Server</span>
-        <strong>{config?.name || 'Unknown Server'}</strong>
-      </div>
-      <div class="meta-card">
-        <span class="meta-label">Access URL</span>
-        <strong>http://localhost:{config?.ports?.http || 8080}/{deployName || 'myapp'}</strong>
-      </div>
-    </div>
-  </div>
 
   <div class="wizard-content">
     <!-- Section 1: Source & Type (Flat) -->
@@ -278,31 +261,36 @@
         <span>Source & Type</span>
       </h3>
       <div class="section-grid">
-        <!-- Deployment Type Cards -->
-        <div class="type-selector">
+        <!-- Deployment Type — Segmented Control -->
+        <div class="form-field">
           <label class="field-label">Deployment Type</label>
-          <div class="type-cards">
-            <button 
+          <div class="segmented-control" role="radiogroup" aria-label="Deployment type">
+            <button
               type="button"
-              class="type-card" 
+              class="segment"
               class:selected={formType === 'exploded'}
+              role="radio"
+              aria-checked={formType === 'exploded'}
               onclick={() => formType = 'exploded'}
             >
-              <Icon name="folder-open" size={24} />
-              <span class="type-name">Exploded Directory</span>
-              <span class="type-desc">Hot-reload ready</span>
+              <Icon name="folder-open" size={14} />
+              <span>Exploded Directory</span>
             </button>
-            <button 
+            <button
               type="button"
-              class="type-card" 
+              class="segment"
               class:selected={formType === 'war'}
+              role="radio"
+              aria-checked={formType === 'war'}
               onclick={() => formType = 'war'}
             >
-              <Icon name="package" size={24} />
-              <span class="type-name">WAR File</span>
-              <span class="type-desc">Packaged archive</span>
+              <Icon name="package" size={14} />
+              <span>WAR File</span>
             </button>
           </div>
+          <p class="field-help">
+            {formType === 'exploded' ? 'Hot-reload ready for iterative development.' : 'Packaged archive for explicit deploy steps.'}
+          </p>
         </div>
 
         <!-- Source Path -->
@@ -515,60 +503,6 @@
     gap: var(--jsm-space-lg);
   }
 
-  .intro-panel {
-    display: grid;
-    grid-template-columns: minmax(0, 1.35fr) minmax(260px, 1fr);
-    gap: var(--jsm-space-lg);
-    padding: var(--jsm-space-lg);
-    border: 1px solid var(--jsm-color-border-secondary);
-    border-radius: var(--jsm-radius-lg);
-    background:
-      linear-gradient(180deg, color-mix(in srgb, var(--jsm-color-primary) 10%, transparent), transparent 60%),
-      var(--jsm-color-bg-secondary);
-  }
-
-  .intro-copy {
-    display: flex;
-    flex-direction: column;
-    gap: var(--jsm-space-xs);
-    color: var(--jsm-color-fg-secondary);
-  }
-
-  .intro-copy strong {
-    color: var(--jsm-color-fg);
-    font-size: var(--jsm-font-size-md);
-    font-weight: var(--jsm-font-weight-semibold);
-  }
-
-  .meta-grid {
-    display: grid;
-    gap: var(--jsm-space-sm);
-  }
-
-  .meta-card {
-    display: flex;
-    flex-direction: column;
-    gap: var(--jsm-space-2xs);
-    padding: var(--jsm-space-md);
-    border: 1px solid var(--jsm-color-border-secondary);
-    border-radius: var(--jsm-radius-md);
-    background: color-mix(in srgb, var(--jsm-color-bg) 88%, transparent);
-  }
-
-  .meta-label {
-    color: var(--jsm-color-fg-secondary);
-    font-size: var(--jsm-font-size-xs);
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-  }
-
-  .meta-card strong {
-    color: var(--jsm-color-fg);
-    font-size: var(--jsm-font-size-md);
-    font-weight: var(--jsm-font-weight-semibold);
-    overflow-wrap: anywhere;
-  }
-
   .meta-chip {
     display: inline-flex;
     align-items: center;
@@ -595,39 +529,43 @@
     gap: var(--jsm-space-lg);
   }
 
-  .type-selector {
+  .segmented-control {
     display: flex;
-    flex-direction: column;
-    gap: var(--jsm-space-sm);
+    border: 1px solid var(--jsm-color-border-secondary);
+    border-radius: var(--jsm-radius-md);
+    overflow: hidden;
   }
 
-  .type-cards {
-    display: flex;
-    gap: var(--jsm-space-md);
-  }
-
-  .type-card {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: var(--jsm-space-xs);
-    padding: var(--jsm-space-lg);
-    border: 2px solid var(--jsm-color-border-secondary);
-    border-radius: var(--jsm-radius-lg);
-    background: var(--jsm-color-bg);
-    cursor: pointer;
-    transition: all var(--jsm-transition-normal);
+  .segment {
     flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--jsm-space-xs);
+    padding: var(--jsm-space-sm) var(--jsm-space-md);
+    background: var(--jsm-color-bg);
+    border: none;
+    border-right: 1px solid var(--jsm-color-border-secondary);
+    color: var(--jsm-color-fg-secondary);
+    font-family: var(--jsm-font-family);
+    font-size: var(--jsm-font-size-sm);
+    font-weight: var(--jsm-font-weight-medium);
+    cursor: pointer;
+    transition: all var(--jsm-transition-fast);
   }
 
-  .type-card:hover {
-    border-color: var(--jsm-color-border-focus);
+  .segment:last-child {
+    border-right: none;
+  }
+
+  .segment:hover:not(.selected) {
     background: var(--jsm-color-bg-hover);
+    color: var(--jsm-color-fg);
   }
 
-  .type-card.selected {
-    border-color: var(--jsm-color-primary);
-    background: color-mix(in srgb, var(--jsm-color-primary) 10%, var(--jsm-color-bg));
+  .segment.selected {
+    background: var(--jsm-color-primary);
+    color: var(--jsm-color-primary-fg);
   }
 
   .type-name {

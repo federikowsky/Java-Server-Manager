@@ -370,23 +370,6 @@
     <span class="meta-chip subtle">{pluginDisplayName}</span>
   </svelte:fragment>
 
-  <div class="intro-panel">
-    <div class="intro-copy">
-      <strong>Provisioning flow</strong>
-      <span>The server will be created as a managed instance and initialized in the selected workspace using the same host workflow used by the command palette.</span>
-    </div>
-    <div class="meta-grid">
-      <div class="meta-card">
-        <span class="meta-label">Workspace</span>
-        <strong>{selectedWorkspaceName}</strong>
-      </div>
-      <div class="meta-card">
-        <span class="meta-label">Source</span>
-        <strong>{creationMode === 'template' ? (selectedTemplateName || 'Choose a template') : 'Manual configuration'}</strong>
-      </div>
-    </div>
-  </div>
-
   <div class="wizard-content">
     <!-- Section 1: Type & Identity (Flat) -->
     <div class="form-section">
@@ -395,32 +378,37 @@
         <span>Server Type & Identity</span>
       </h3>
       <div class="section-grid">
-        <!-- Creation Mode -->
+        <!-- Creation Mode — Segmented Control -->
         {#if availableTemplates.length > 0}
-          <div class="type-selector">
+          <div class="form-field">
             <label class="field-label">How do you want to create this server?</label>
-            <div class="type-cards">
-              <button 
+            <div class="segmented-control" role="radiogroup" aria-label="Creation mode">
+              <button
                 type="button"
-                class="type-card" 
+                class="segment"
                 class:selected={creationMode === 'scratch'}
+                role="radio"
+                aria-checked={creationMode === 'scratch'}
                 onclick={() => setCreationMode('scratch')}
               >
-                <Icon name="server" size={24} />
-                <span class="type-name">From Scratch</span>
-                <span class="type-desc">Configure manually</span>
+                <Icon name="server" size={14} />
+                <span>From Scratch</span>
               </button>
-              <button 
+              <button
                 type="button"
-                class="type-card" 
+                class="segment"
                 class:selected={creationMode === 'template'}
+                role="radio"
+                aria-checked={creationMode === 'template'}
                 onclick={() => setCreationMode('template')}
               >
-                <Icon name="file-code" size={24} />
-                <span class="type-name">From Template</span>
-                <span class="type-desc">Use existing configuration</span>
+                <Icon name="file-code" size={14} />
+                <span>From Template</span>
               </button>
             </div>
+            <p class="field-help">
+              {creationMode === 'scratch' ? 'Configure all settings manually.' : 'Use an existing template as starting point.'}
+            </p>
           </div>
 
           {#if creationMode === 'template'}
@@ -449,20 +437,22 @@
           {/if}
         {/if}
 
-        <!-- Server Type Cards (only for scratch mode) -->
+        <!-- Server Type — Segmented Control (only for scratch mode) -->
         {#if creationMode === 'scratch' && availableTypes.length > 1}
-          <div class="type-selector">
+          <div class="form-field">
             <label class="field-label">Server Type</label>
-            <div class="type-cards">
+            <div class="segmented-control" role="radiogroup" aria-label="Server type">
               {#each availableTypes as t}
-                <button 
+                <button
                   type="button"
-                  class="type-card" 
+                  class="segment"
                   class:selected={selectedType === t.type}
+                  role="radio"
+                  aria-checked={selectedType === t.type}
                   onclick={() => selectedType = t.type}
                 >
-                  <Icon name="server" size={24} />
-                  <span class="type-name">{t.displayName}</span>
+                  <Icon name="server" size={14} />
+                  <span>{t.displayName}</span>
                 </button>
               {/each}
             </div>
@@ -710,59 +700,6 @@
     gap: var(--jsm-space-lg);
   }
 
-  .intro-panel {
-    display: grid;
-    grid-template-columns: minmax(0, 1.4fr) minmax(260px, 1fr);
-    gap: var(--jsm-space-lg);
-    padding: var(--jsm-space-lg);
-    border: 1px solid var(--jsm-color-border-secondary);
-    border-radius: var(--jsm-radius-lg);
-    background:
-      linear-gradient(180deg, color-mix(in srgb, var(--jsm-color-primary) 10%, transparent), transparent 60%),
-      var(--jsm-color-bg-secondary);
-  }
-
-  .intro-copy {
-    display: flex;
-    flex-direction: column;
-    gap: var(--jsm-space-xs);
-    color: var(--jsm-color-fg-secondary);
-  }
-
-  .intro-copy strong {
-    color: var(--jsm-color-fg);
-    font-size: var(--jsm-font-size-md);
-    font-weight: var(--jsm-font-weight-semibold);
-  }
-
-  .meta-grid {
-    display: grid;
-    gap: var(--jsm-space-sm);
-  }
-
-  .meta-card {
-    display: flex;
-    flex-direction: column;
-    gap: var(--jsm-space-2xs);
-    padding: var(--jsm-space-md);
-    border: 1px solid var(--jsm-color-border-secondary);
-    border-radius: var(--jsm-radius-md);
-    background: color-mix(in srgb, var(--jsm-color-bg) 88%, transparent);
-  }
-
-  .meta-label {
-    color: var(--jsm-color-fg-secondary);
-    font-size: var(--jsm-font-size-xs);
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-  }
-
-  .meta-card strong {
-    color: var(--jsm-color-fg);
-    font-size: var(--jsm-font-size-md);
-    font-weight: var(--jsm-font-weight-semibold);
-  }
-
   .meta-chip {
     display: inline-flex;
     align-items: center;
@@ -795,39 +732,43 @@
     gap: var(--jsm-space-lg);
   }
 
-  .type-selector {
+  .segmented-control {
     display: flex;
-    flex-direction: column;
-    gap: var(--jsm-space-sm);
+    border: 1px solid var(--jsm-color-border-secondary);
+    border-radius: var(--jsm-radius-md);
+    overflow: hidden;
   }
 
-  .type-cards {
+  .segment {
+    flex: 1;
     display: flex;
-    gap: var(--jsm-space-md);
-  }
-
-  .type-card {
-    display: flex;
-    flex-direction: column;
     align-items: center;
-    gap: var(--jsm-space-sm);
-    padding: var(--jsm-space-lg);
-    border: 2px solid var(--jsm-color-border-secondary);
-    border-radius: var(--jsm-radius-lg);
+    justify-content: center;
+    gap: var(--jsm-space-xs);
+    padding: var(--jsm-space-sm) var(--jsm-space-md);
     background: var(--jsm-color-bg);
+    border: none;
+    border-right: 1px solid var(--jsm-color-border-secondary);
+    color: var(--jsm-color-fg-secondary);
+    font-family: var(--jsm-font-family);
+    font-size: var(--jsm-font-size-sm);
+    font-weight: var(--jsm-font-weight-medium);
     cursor: pointer;
-    transition: all var(--jsm-transition-normal);
-    min-width: 100px;
+    transition: all var(--jsm-transition-fast);
   }
 
-  .type-card:hover {
-    border-color: var(--jsm-color-border-focus);
+  .segment:last-child {
+    border-right: none;
+  }
+
+  .segment:hover:not(.selected) {
     background: var(--jsm-color-bg-hover);
+    color: var(--jsm-color-fg);
   }
 
-  .type-card.selected {
-    border-color: var(--jsm-color-primary);
-    background: color-mix(in srgb, var(--jsm-color-primary) 10%, var(--jsm-color-bg));
+  .segment.selected {
+    background: var(--jsm-color-primary);
+    color: var(--jsm-color-primary-fg);
   }
 
   .type-name {

@@ -166,13 +166,6 @@
     title="Create Template"
     subtitle="Capture server defaults once, then reuse them from the dashboard when adding new managed instances."
   >
-    <div class="template-hero">
-      <div class="hero-copy">
-        <strong>What goes in a template?</strong>
-        <span>Store defaults for runtime path, ports, JVM arguments, hooks, and SSL settings. Templates never create files on disk by themselves.</span>
-      </div>
-    </div>
-
     {#if isFormReady}
       <div class="form-surface">
         <FormBody sections={$spaState.currentFormSchema?.sections || []} />
@@ -253,28 +246,6 @@
     text-transform: uppercase;
     background: var(--jsm-badge-bg);
     color: var(--jsm-badge-fg);
-  }
-
-  .template-hero {
-    padding: var(--jsm-space-lg);
-    border: 1px solid var(--jsm-color-border-secondary);
-    border-radius: var(--jsm-radius-lg);
-    background:
-      linear-gradient(180deg, color-mix(in srgb, var(--jsm-color-primary) 10%, transparent), transparent 55%),
-      var(--jsm-color-bg-secondary);
-  }
-
-  .hero-copy {
-    display: flex;
-    flex-direction: column;
-    gap: var(--jsm-space-xs);
-    color: var(--jsm-color-fg-secondary);
-    max-width: 720px;
-  }
-
-  .hero-copy strong {
-    color: var(--jsm-color-fg);
-    font-size: var(--jsm-font-size-md);
   }
 
   .form-surface {

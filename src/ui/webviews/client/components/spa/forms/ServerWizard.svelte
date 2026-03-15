@@ -683,7 +683,7 @@
         <div class="form-field">
           <label class="field-label">Hooks</label>
           <HookList
-            def={{ name: 'hooks', label: 'Hooks', type: 'hooks' }}
+            def={{ name: 'hooks', label: 'Hooks', type: 'hooks', hookOptions: { taskOptions: state.hookTaskOptions || [] } }}
             value={userHooks}
             onChange={(v) => userHooks = v}
             id="server-hooks"

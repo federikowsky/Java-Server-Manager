@@ -150,6 +150,7 @@
         break;
       case 'hookOptions':
         schema.update(current => current ? applyHookTaskOptions(current, msg.fields, msg.taskOptions) : current);
+        spaState.update(state => ({ ...state, hookTaskOptions: msg.taskOptions }));
         break;
       case 'workspaceFoldersResult':
         spaState.update(state => ({ ...state, workspaceFolders: msg.folders }));

@@ -56,6 +56,7 @@ export const spaState = writable<{
   currentFormTargetWorkspaceFolderUri?: string;
   currentFormTargetScope?: 'global' | 'workspace';
   settings?: SpaSettings;
+  hookTaskOptions?: Array<{ value: string; label: string }>;
 }>({
   initialized: false,
   servers: [],
@@ -64,6 +65,7 @@ export const spaState = writable<{
   templates: [],
   capabilities: {},
   workspaceFolders: [],
+  hookTaskOptions: [],
 });
 
 /** Browse dialog result — updated when host sends 'browsed' message */

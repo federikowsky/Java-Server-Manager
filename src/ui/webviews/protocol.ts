@@ -73,6 +73,11 @@ export interface SpaSettings {
   showStatusInSidebar: boolean;
 }
 
+export interface HookTaskOption {
+  value: string;
+  label: string;
+}
+
 export interface SpaServerRecord {
   serverKey: string;
   config: unknown;

@@ -11,6 +11,7 @@ import { WEBVIEW_PROTOCOL_VERSION } from '../protocol';
 import { EventBus } from '@core/events/EventBus';
 import { v4 as uuid } from 'uuid';
 import { normalizeHookList } from '../hookForm';
+import { areHookTaskOptionsEqual, fetchHookTaskOptions, type HookTaskOption } from '../hookTaskOptions';
 import {
   formDataToServerConfig,
   serverConfigToFormData,
@@ -48,6 +49,7 @@ export class DashboardPanel implements vscode.Disposable {
   private currentFormTargetScope?: 'global' | 'workspace';
   private lastSubmittedFormData?: Record<string, unknown>;
   private pendingNavigationTarget?: DashboardNavigationTarget;
+  private hookTaskOptions: HookTaskOption[] = [];
 
   constructor(private readonly deps: DashboardPanelDeps) {
     // Listen to events to push state changes to webview
@@ -124,6 +126,31 @@ export class DashboardPanel implements vscode.Disposable {
       undefined,
       this.disposables
     );
+
+    void this.refreshHookTaskOptions();
+  }
+
+  private async refreshHookTaskOptions(): Promise<void> {
+    const nextTaskOptions = await fetchHookTaskOptions(this.deps.logger);
+    if (areHookTaskOptionsEqual(this.hookTaskOptions, nextTaskOptions)) {
+      return;
+    }
+
+    this.hookTaskOptions = nextTaskOptions;
+    this.pushHookTaskOptions();
+  }
+
+  private pushHookTaskOptions(): void {
+    if (!this.panel || !this.isWebviewReady) {
+      return;
+    }
+
+    this.postMessage({
+      v: WEBVIEW_PROTOCOL_VERSION,
+      command: 'hookOptions',
+      fields: ['hooks'],
+      taskOptions: this.hookTaskOptions,
+    });
   }
 
   private async handleMessage(msg: WebviewToHost): Promise<void> {
@@ -137,6 +164,8 @@ export class DashboardPanel implements vscode.Disposable {
         this.currentFormTargetScope = undefined;
         this.syncState();
         this.flushPendingNavigation();
+        this.pushHookTaskOptions();
+        void this.refreshHookTaskOptions();
         break;
 
       case 'executeCommand': {
@@ -500,6 +529,9 @@ export class DashboardPanel implements vscode.Disposable {
               type: 'hooks',
               defaultValue: [],
               helpText: 'Configure server hooks as terminal commands or VS Code tasks.',
+              hookOptions: {
+                taskOptions: this.hookTaskOptions,
+              },
             },
           ],
         },
@@ -708,6 +740,9 @@ export class DashboardPanel implements vscode.Disposable {
               type: 'hooks',
               defaultValue: [],
               helpText: 'Default hooks applied to servers created from this template.',
+              hookOptions: {
+                taskOptions: this.hookTaskOptions,
+              },
             },
           ],
         },

@@ -318,7 +318,21 @@
                   />
                 </div>
 
-                <div class="hook-field">
+                {#if hook.kind === 'command'}
+                  <div class="hook-field">
+                    <label class="field-label" for={fieldId(index, 'command.cwd')}>Working Directory</label>
+                    <input
+                      id={fieldId(index, 'command.cwd')}
+                      class="field-input"
+                      type="text"
+                      value={hook.command?.cwd ?? ''}
+                      oninput={(e: Event) => updateCommand(index, { cwd: (e.target as HTMLInputElement).value })}
+                    />
+                  </div>
+                {/if}
+
+                <div class="hook-field hook-field-checkbox">
+                  <label class="field-label">&nbsp;</label>
                   <label class="hook-toggle">
                     <input
                       class="field-checkbox"
@@ -332,17 +346,6 @@
               </div>
 
               {#if hook.kind === 'command'}
-                <div class="hook-field">
-                  <label class="field-label" for={fieldId(index, 'command.cwd')}>Working Directory</label>
-                  <input
-                    id={fieldId(index, 'command.cwd')}
-                    class="field-input"
-                    type="text"
-                    value={hook.command?.cwd ?? ''}
-                    oninput={(e: Event) => updateCommand(index, { cwd: (e.target as HTMLInputElement).value })}
-                  />
-                </div>
-
                 <div class="hook-field">
                   <div class="field-label">Environment Variables</div>
                   <KeyValueList
@@ -425,18 +428,19 @@
             <label class="field-label">Timeout (ms)</label>
             <input type="number" class="field-input" bind:value={addTimeout} min="1000" step="1000" />
           </div>
-          <div class="hook-field">
-            <label class="hook-toggle">
-              <input type="checkbox" class="field-checkbox" bind:checked={addContinueOnError} />
-              <span>Continue on error</span>
-            </label>
-          </div>
           {#if addKind === 'command'}
             <div class="hook-field">
               <label class="field-label">Working Directory</label>
               <input type="text" class="field-input" placeholder="Optional" bind:value={addCwd} />
             </div>
           {/if}
+          <div class="hook-field hook-field-checkbox">
+            <label class="field-label">&nbsp;</label>
+            <label class="hook-toggle">
+              <input type="checkbox" class="field-checkbox" bind:checked={addContinueOnError} />
+              <span>Continue on error</span>
+            </label>
+          </div>
         </div>
         {#if addKind === 'command'}
           <div class="hook-field">
@@ -600,6 +604,11 @@
     display: flex;
     flex-direction: column;
     gap: var(--jsm-space-2xs);
+  }
+
+  .hook-field-checkbox {
+    justify-content: flex-end;
+    padding-top: calc(var(--jsm-font-size-md) + var(--jsm-space-2xs));
   }
 
   .hook-advanced {

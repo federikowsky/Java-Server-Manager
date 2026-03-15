@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { HookConfig, HookPhase, HookEvent } from '@core/types';
+  import type { HookConfig, HookPhase, HookEvent, HookKind } from '@core/types';
   import type { FormFieldDef, FieldError } from '../../protocol';
   import {
     createDefaultHook,
@@ -27,7 +27,9 @@
   let editingIndex = $state<number | null>(null);
   let addEvent = $state<HookConfig['event']>('lifecycle.start');
   let addPhase = $state<HookPhase>('pre');
+  let addKind = $state<HookKind>('command');
   let addCommand = $state('');
+  let addTaskName = $state('');
   let addTimeout = $state(60000);
   let addContinueOnError = $state(false);
   let addCwd = $state('');
@@ -53,25 +55,34 @@
   }
 
   function addHook(): void {
-    const cmd = addCommand.trim();
-    if (!cmd) return;
-
     const hook = createDefaultHook(nextHookIndex, { event: addEvent });
     hook.phase = addPhase;
-    hook.command = { mode: 'shell', line: cmd };
-    hook.kind = 'command';
+    hook.kind = addKind;
     hook.timeoutMs = addTimeout;
     hook.continueOnError = addContinueOnError;
-    if (addCwd.trim()) {
-      hook.command.cwd = addCwd.trim();
-    }
-    if (Object.keys(addEnv).length > 0) {
-      hook.command.env = { ...addEnv };
+
+    if (addKind === 'command') {
+      const cmd = addCommand.trim();
+      if (!cmd) return;
+      hook.command = { mode: 'shell', line: cmd };
+      if (addCwd.trim()) {
+        hook.command.cwd = addCwd.trim();
+      }
+      if (Object.keys(addEnv).length > 0) {
+        hook.command.env = { ...addEnv };
+      }
+      delete hook.vscodeTask;
+    } else {
+      const task = addTaskName.trim();
+      if (!task) return;
+      hook.vscodeTask = { taskName: task };
+      delete hook.command;
     }
 
     commit([...getHooks(), hook]);
     nextHookIndex += 1;
     addCommand = '';
+    addTaskName = '';
     addTimeout = 60000;
     addContinueOnError = false;
     addCwd = '';
@@ -235,20 +246,6 @@
             </div>
 
             <div class="hook-field">
-              <label class="field-label" for={fieldId(index, 'kind')}>Kind</label>
-              <select
-                id={fieldId(index, 'kind')}
-                class="field-input"
-                value={hook.kind}
-                onchange={(e: Event) => updateHook(index, { kind: (e.target as HTMLSelectElement).value as HookConfig['kind'] })}
-              >
-                {#each HOOK_KIND_OPTIONS as option (option.value)}
-                  <option value={option.value} selected={hook.kind === option.value}>{option.label}</option>
-                {/each}
-              </select>
-            </div>
-
-            <div class="hook-field">
               <label class="field-label" for={fieldId(index, 'id')}>Hook ID</label>
               <input
                 id={fieldId(index, 'id')}
@@ -386,14 +383,36 @@
           <option value={option.value}>{option.label}</option>
         {/each}
       </select>
-      <input
-        type="text"
-        class="field-input hook-add-input"
-        placeholder="npm test"
-        bind:value={addCommand}
-        onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter') { e.preventDefault(); addHook(); } }}
-      />
-      <button type="button" class="btn btn-primary btn-sm" onclick={addHook} disabled={!addCommand.trim()}>
+      <select class="field-input hook-add-select hook-add-kind" bind:value={addKind}>
+        {#each HOOK_KIND_OPTIONS as option (option.value)}
+          <option value={option.value}>{option.label}</option>
+        {/each}
+      </select>
+      {#if addKind === 'command'}
+        <input
+          type="text"
+          class="field-input hook-add-input"
+          placeholder="npm test"
+          bind:value={addCommand}
+          onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter') { e.preventDefault(); addHook(); } }}
+        />
+      {:else}
+        <select
+          class="field-input hook-add-input"
+          bind:value={addTaskName}
+        >
+          <option value="">Select a task...</option>
+          {#each taskOptions as option (option.value)}
+            <option value={option.value}>{option.label}</option>
+          {/each}
+        </select>
+      {/if}
+      <button
+        type="button"
+        class="btn btn-primary btn-sm"
+        onclick={addHook}
+        disabled={addKind === 'command' ? !addCommand.trim() : !addTaskName.trim()}
+      >
         <Icon name="add" size={12} />
         <span>Add</span>
       </button>
@@ -412,19 +431,23 @@
               <span>Continue on error</span>
             </label>
           </div>
+          {#if addKind === 'command'}
+            <div class="hook-field">
+              <label class="field-label">Working Directory</label>
+              <input type="text" class="field-input" placeholder="Optional" bind:value={addCwd} />
+            </div>
+          {/if}
+        </div>
+        {#if addKind === 'command'}
           <div class="hook-field">
-            <label class="field-label">Working Directory</label>
-            <input type="text" class="field-input" placeholder="Optional" bind:value={addCwd} />
+            <div class="field-label">Environment Variables</div>
+            <KeyValueList
+              id="{id}-add-env"
+              value={addEnv}
+              onChange={(env: Record<string, string>) => addEnv = env}
+            />
           </div>
-        </div>
-        <div class="hook-field">
-          <div class="field-label">Environment Variables</div>
-          <KeyValueList
-            id="{id}-add-env"
-            value={addEnv}
-            onChange={(env: Record<string, string>) => addEnv = env}
-          />
-        </div>
+        {/if}
       </div>
     </details>
   </div>
@@ -650,6 +673,10 @@
 
   .hook-add-phase {
     min-width: 80px;
+  }
+
+  .hook-add-kind {
+    min-width: 100px;
   }
 
   .hook-add-input {

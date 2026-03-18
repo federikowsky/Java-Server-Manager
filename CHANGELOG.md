@@ -9,6 +9,24 @@ The format follows Keep a Changelog and this project adheres to Semantic Version
 ### Added
 - ongoing improvements after the first public beta release
 
+## [0.1.1] - 2026-03-18
+
+### Summary
+- added explicit manifest licensing metadata required by OpenVSX validation
+- aligned release metadata for dual publication (VS Code Marketplace and OpenVSX)
+
+### Beta Disclaimer
+- this is a beta prerelease intended for validation and feedback
+- behavior and feature surface may change before the first stable release
+
+### Known Limitations
+- only Tomcat is supported in this release
+- some advanced workflows and hardening tasks are still in progress
+
+### Added
+- added MIT license declaration and repository license file for registry compliance
+- added publisher field to the extension manifest for deterministic release identity checks
+
 ## [0.1.0] - 2026-03-18
 
 ### Summary

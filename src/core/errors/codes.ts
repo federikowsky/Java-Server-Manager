@@ -1,87 +1,67 @@
-// src/core/errors/codes.ts
+export type ErrorSeverity = 'info' | 'warning' | 'error';
+
 export enum ErrorCode {
-  // Core Config Errors
-  CONFIG_INVALID          = 'CONFIG_INVALID',
-  INVALID_CONFIGURATION   = 'INVALID_CONFIGURATION',
-  VALIDATION_ERROR        = 'VALIDATION_ERROR',
-  TEMPLATE_DUPLICATE      = 'TEMPLATE_DUPLICATE',
-  TEMPLATE_NOT_FOUND      = 'TEMPLATE_NOT_FOUND',
-  
-  // File System Errors
-  FS_READ                 = 'FS_READ',
-  FS_WRITE                = 'FS_WRITE',
-  FS_DELETE               = 'FS_DELETE',
-  
-  // Server Lifecycle Errors
-  SERVER_STARTUP_ERROR    = 'SERVER_STARTUP_ERROR',
-  SERVER_SHUTDOWN_ERROR   = 'SERVER_SHUTDOWN_ERROR',
-  SERVER_STOP_ERROR       = 'SERVER_STOP_ERROR',
-  SERVER_RESTART_ERROR    = 'SERVER_RESTART_ERROR',
-  SERVER_DELETE_ERROR     = 'SERVER_DELETE_ERROR',
-  SERVER_ALREADY_RUNNING  = 'SERVER_ALREADY_RUNNING',
-  SERVER_NOT_FOUND        = 'SERVER_NOT_FOUND',
-  SERVER_VALIDATION_ERROR = 'SERVER_VALIDATION_ERROR',
-  
-  // Deployment Errors
-  DEPLOY_ERROR            = 'DEPLOY_ERROR',
-  UNDEPLOY_ERROR          = 'UNDEPLOY_ERROR',
-  DEPLOYMENT_UPDATE_ERROR = 'DEPLOYMENT_UPDATE_ERROR',
-  DEPLOYMENT_NOT_FOUND    = 'DEPLOYMENT_NOT_FOUND',
-  PORT_UNAVAILABLE        = 'PORT_UNAVAILABLE',
-  AUTOSYNC_TOGGLE_ERROR   = 'AUTOSYNC_TOGGLE_ERROR',
-  
-  // Plugin System Errors
-  PLUGIN_ERROR            = 'PLUGIN_ERROR',
-  PLUGIN_NOT_FOUND        = 'PLUGIN_NOT_FOUND',
-  PLUGIN_REGISTRATION_ERROR = 'PLUGIN_REGISTRATION_ERROR',
-  PLUGIN_CREATION_ERROR   = 'PLUGIN_CREATION_ERROR',
-  PLUGIN_VALIDATION_ERROR = 'PLUGIN_VALIDATION_ERROR',
-  PLUGIN_RELOAD_ERROR     = 'PLUGIN_RELOAD_ERROR',
-  
-  // Runtime Errors
-  RUNTIME_CREATION_ERROR  = 'RUNTIME_CREATION_ERROR',
-  RUNTIME_REGISTRATION_ERROR = 'RUNTIME_REGISTRATION_ERROR',
-  RUNTIME_UNREGISTRATION_ERROR = 'RUNTIME_UNREGISTRATION_ERROR',
-  
-  // Cache Errors
-  CACHE_ERROR             = 'CACHE_ERROR',
-  
-  // Command & Operation Errors
-  COMMAND_EXECUTION_ERROR = 'COMMAND_EXECUTION_ERROR',
-  COMMAND_BUILD_ERROR     = 'COMMAND_BUILD_ERROR',
-  
-  // Status & Monitoring Errors
-  STATUS_MONITOR_ERROR    = 'STATUS_MONITOR_ERROR',
-  STATUS_CHECK_ERROR      = 'STATUS_CHECK_ERROR',
-  HEALTH_CHECK_ERROR      = 'HEALTH_CHECK_ERROR',
-  
-  // Server Detection & Installation
-  SERVER_TYPE_DETECTION_ERROR = 'SERVER_TYPE_DETECTION_ERROR',
-  INSTALLATION_VALIDATION_ERROR = 'INSTALLATION_VALIDATION_ERROR',
-  
-  // Instance Management
-  INSTANCE_CREATION_ERROR = 'INSTANCE_CREATION_ERROR',
-  INSTANCE_NOT_FOUND      = 'INSTANCE_NOT_FOUND',
-  INSTANCE_REMOVAL_ERROR  = 'INSTANCE_REMOVAL_ERROR',
-  INSTANCE_VALIDATION_ERROR = 'INSTANCE_VALIDATION_ERROR',
-  
-  // Template Management
-  TEMPLATE_REGISTRATION_ERROR = 'TEMPLATE_REGISTRATION_ERROR',
-  TEMPLATE_DELETION_ERROR = 'TEMPLATE_DELETION_ERROR',
-  
-  // System Errors
-  TIMEOUT_ERROR           = 'TIMEOUT_ERROR',
-  LOG_READ_ERROR          = 'LOG_READ_ERROR',
-  METRICS_ERROR           = 'METRICS_ERROR',
-  BULK_OPERATION_ERROR    = 'BULK_OPERATION_ERROR',
-  
-  // Configuration System Errors
-  CONFIG_INITIALIZATION_FAILED = 'CONFIG_INITIALIZATION_FAILED',
-  CONFIG_MIGRATION_FAILED = 'CONFIG_MIGRATION_FAILED',
-  CONFIG_VALIDATION_FAILED = 'CONFIG_VALIDATION_FAILED',
-  
+  InvalidConfig = 'InvalidConfig',
+  ValidationFailed = 'ValidationFailed',
+  ConfigReadFailed = 'ConfigReadFailed',
+  ConfigWriteFailed = 'ConfigWriteFailed',
+  OperationInProgress = 'OperationInProgress',
+  AlreadyRunning = 'AlreadyRunning',
+  NotRunning = 'NotRunning',
+  ProcessSpawnFailed = 'ProcessSpawnFailed',
+  ProcessNotFound = 'ProcessNotFound',
+  ProcessKillFailed = 'ProcessKillFailed',
+  ScriptNotExecutable = 'ScriptNotExecutable',
+  JavaNotFound = 'JavaNotFound',
+  PortInUse = 'PortInUse',
+  Timeout = 'Timeout',
+  DeployFailed = 'DeployFailed',
+  UndeployFailed = 'UndeployFailed',
+  SourceNotFound = 'SourceNotFound',
+  TargetNotWritable = 'TargetNotWritable',
+  LogNotFound = 'LogNotFound',
+  HookFailed = 'HookFailed',
+  Cancelled = 'Cancelled',
+  Unsupported = 'Unsupported',
+  WorkspaceUntrusted = 'WorkspaceUntrusted',
+  SecurityPolicyViolation = 'SecurityPolicyViolation',
+  Unknown = 'Unknown',
+}
 
+/** Whether the error code is retryable. */
+export function isRetryable(code: ErrorCode): boolean {
+  return code !== ErrorCode.Unsupported;
+}
 
-  // Fallback
-  UNKNOWN                 = 'UNKNOWN'
+/** Default severity for each error code. */
+const DEFAULT_SEVERITY: Record<ErrorCode, ErrorSeverity> = {
+  [ErrorCode.InvalidConfig]: 'error',
+  [ErrorCode.ValidationFailed]: 'error',
+  [ErrorCode.ConfigReadFailed]: 'error',
+  [ErrorCode.ConfigWriteFailed]: 'error',
+  [ErrorCode.OperationInProgress]: 'info',
+  [ErrorCode.AlreadyRunning]: 'info',
+  [ErrorCode.NotRunning]: 'info',
+  [ErrorCode.ProcessSpawnFailed]: 'error',
+  [ErrorCode.ProcessNotFound]: 'warning',
+  [ErrorCode.ProcessKillFailed]: 'error',
+  [ErrorCode.ScriptNotExecutable]: 'error',
+  [ErrorCode.JavaNotFound]: 'error',
+  [ErrorCode.PortInUse]: 'error',
+  [ErrorCode.Timeout]: 'warning',
+  [ErrorCode.DeployFailed]: 'error',
+  [ErrorCode.UndeployFailed]: 'warning',
+  [ErrorCode.SourceNotFound]: 'error',
+  [ErrorCode.TargetNotWritable]: 'error',
+  [ErrorCode.LogNotFound]: 'info',
+  [ErrorCode.HookFailed]: 'warning',
+  [ErrorCode.Cancelled]: 'info',
+  [ErrorCode.Unsupported]: 'error',
+  [ErrorCode.WorkspaceUntrusted]: 'warning',
+  [ErrorCode.SecurityPolicyViolation]: 'error',
+  [ErrorCode.Unknown]: 'error',
+};
+
+export function defaultSeverity(code: ErrorCode): ErrorSeverity {
+  return DEFAULT_SEVERITY[code];
 }

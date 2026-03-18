@@ -47,34 +47,18 @@
 </script>
 
 <div class="sidebar">
-  <div class="sidebar-header">
-    <div class="global-actions">
-      <button type="button" class="action-btn" title="Add Server" onclick={() => selectEntity({ type: 'new-server' })}>
-        <Icon name="add" size={14} />
-        <span>Add Server</span>
-      </button>
-    </div>
-  </div>
-
   <div class="sidebar-content">
-    <div class="section">
-      <div class="section-title">
-        <span class="section-label">
-          <Icon name="layout" size={14} />
-          <span>WORKSPACE</span>
-        </span>
-      </div>
-      <div class="section-list">
-        <button
-          type="button"
-          class="list-item"
-          class:active={currentEntity.type === 'welcome'}
-          onclick={() => selectEntity({ type: 'welcome' })}
-        >
-          <span class="item-name">Overview</span>
-        </button>
-      </div>
-    </div>
+    <button
+      type="button"
+      class="list-item overview-item"
+      class:active={currentEntity.type === 'welcome'}
+      onclick={() => selectEntity({ type: 'welcome' })}
+    >
+      <Icon name="layout" size={14} />
+      <span class="item-name">Overview</span>
+    </button>
+
+    <div class="sidebar-divider"></div>
 
     <!-- SERVERS -->
     <div class="section">
@@ -83,6 +67,9 @@
           <Icon name="server" size={14} />
           <span>SERVERS</span>
         </span>
+        <button type="button" class="icon-button" aria-label="Add server" title="Add Server" onclick={() => selectEntity({ type: 'new-server' })}>
+          <Icon name="add" size={14} />
+        </button>
       </div>
       <div class="section-list">
         {#each state.servers as server}
@@ -189,40 +176,42 @@
     background: var(--jsm-sidebar-bg);
     border-right: 1px solid var(--jsm-sidebar-border);
   }
-  .sidebar-header {
-    padding: var(--jsm-space-md);
-    border-bottom: 1px solid var(--jsm-color-border);
-  }
-  .global-actions {
-    display: flex;
-    gap: var(--jsm-space-sm);
-  }
-  .action-btn {
-    flex: 1;
-    background: var(--jsm-color-secondary);
-    color: var(--jsm-color-secondary-fg);
-    border: 1px solid var(--jsm-color-border-secondary);
-    padding: var(--jsm-space-xs) var(--jsm-space-sm);
-    border-radius: var(--jsm-radius-sm);
-    cursor: pointer;
-    font-size: var(--jsm-font-size-sm);
-    font-family: var(--jsm-font-family);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: var(--jsm-space-xs);
-    transition: background-color var(--jsm-transition-fast);
-  }
-  .action-btn:hover {
-    background: var(--jsm-color-secondary-hover);
-  }
   .sidebar-content {
     flex: 1;
     overflow-y: auto;
-    padding: var(--jsm-space-md) 0;
+    padding: var(--jsm-space-sm) 0;
+  }
+  .overview-item {
+    display: flex;
+    align-items: center;
+    gap: var(--jsm-space-sm);
+    padding: var(--jsm-space-sm) var(--jsm-space-md) var(--jsm-space-sm) var(--jsm-space-lg);
+    margin: 0 var(--jsm-space-sm);
+    border-radius: var(--jsm-radius-sm);
+    background: transparent;
+    border: none;
+    color: var(--jsm-color-fg);
+    font-family: var(--jsm-font-family);
+    font-size: var(--jsm-font-size-md);
+    cursor: pointer;
+    transition: background-color var(--jsm-transition-fast);
+    width: calc(100% - var(--jsm-space-sm) * 2);
+    text-align: left;
+  }
+  .overview-item:hover {
+    background: var(--jsm-color-bg-hover);
+  }
+  .overview-item.active {
+    background: var(--jsm-color-bg-active);
+    color: var(--vscode-list-activeSelectionForeground);
+  }
+  .sidebar-divider {
+    height: 1px;
+    background: var(--jsm-color-border);
+    margin: var(--jsm-space-sm) var(--jsm-space-md);
   }
   .section {
-    margin-bottom: var(--jsm-space-lg);
+    margin-bottom: var(--jsm-space-sm);
   }
   .section-title {
     display: flex;

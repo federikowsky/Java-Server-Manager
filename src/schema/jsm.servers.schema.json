@@ -1,0 +1,190 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "jsm.servers.schema.json",
+  "title": "JSM Workspace Config",
+  "description": "Schema for jsm.servers.json — Java Server Manager workspace configuration.",
+  "type": "object",
+  "required": ["servers"],
+  "additionalProperties": true,
+  "properties": {
+    "servers": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/ServerConfig" }
+    }
+  },
+  "definitions": {
+    "ServerConfig": {
+      "type": "object",
+      "required": ["id", "name", "type", "runtime", "instancePath", "javaHome", "host", "ports", "run", "debug", "deployments", "autosync", "hooks"],
+      "additionalProperties": true,
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "name": { "type": "string", "minLength": 1 },
+        "type": { "type": "string", "enum": ["tomcat"] },
+        "runtime": {
+          "type": "object",
+          "required": ["id", "homePath"],
+          "properties": {
+            "id": { "type": "string" },
+            "homePath": { "type": "string" },
+            "version": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        "instancePath": { "type": "string" },
+        "javaHome": { "type": "string" },
+        "host": { "type": "string", "default": "127.0.0.1" },
+        "ports": {
+          "type": "object",
+          "required": ["http"],
+          "properties": {
+            "http": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "debug": { "type": "integer", "minimum": 1, "maximum": 65535 }
+          },
+          "additionalProperties": false
+        },
+        "run": {
+          "type": "object",
+          "required": ["env", "vmArgs"],
+          "properties": {
+            "env": { "type": "object", "additionalProperties": { "type": "string" } },
+            "vmArgs": { "type": "array", "items": { "type": "string" } },
+            "cwd": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        "debug": {
+          "type": "object",
+          "required": ["enabled", "bind", "attachDelayMs"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "bind": { "type": "string", "enum": ["127.0.0.1", "localhost", "::1"] },
+            "attachDelayMs": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false
+        },
+        "deployments": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/DeploymentConfig" }
+        },
+        "autosync": {
+          "type": "object",
+          "required": ["enabled", "debounceMs", "maxBatchFiles", "maxBatchBytes", "stormBackoffMs", "ignoreGlobs"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "debounceMs": { "type": "integer", "minimum": 50 },
+            "maxBatchFiles": { "type": "integer", "minimum": 1 },
+            "maxBatchBytes": { "type": "integer", "minimum": 1 },
+            "stormBackoffMs": { "type": "integer", "minimum": 0 },
+            "ignoreGlobs": { "type": "array", "items": { "type": "string" } }
+          },
+          "additionalProperties": false
+        },
+        "hooks": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/HookConfig" }
+        },
+        "timeouts": {
+          "type": "object",
+          "properties": {
+            "startRunMs": { "type": "integer", "minimum": 1000 },
+            "startDebugMs": { "type": "integer", "minimum": 1000 },
+            "stopMs": { "type": "integer", "minimum": 1000 },
+            "deployFullMs": { "type": "integer", "minimum": 1000 }
+          },
+          "additionalProperties": false
+        },
+        "pluginConfig": { "$ref": "#/definitions/PluginConfig" }
+      }
+    },
+    "DeploymentConfig": {
+      "type": "object",
+      "required": ["id", "type", "sourcePath", "deployName", "syncMode", "hotReload", "ignoreGlobs", "hooks"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "type": { "type": "string", "enum": ["war", "exploded"] },
+        "sourcePath": { "type": "string" },
+        "deployName": { "type": "string", "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$" },
+        "syncMode": { "type": "string", "enum": ["manual", "auto"] },
+        "hotReload": { "type": "boolean", "default": false, "description": "Enable hot-reload for exploded deployments. Only applies to files outside WEB-INF/ and META-INF/." },
+        "ignoreGlobs": { "type": "array", "items": { "type": "string" } },
+        "healthCheckPath": { "type": "string", "description": "Optional GET path for deployment health (e.g. /myapp/health)." },
+        "healthCheckTimeoutMs": { "type": "integer", "minimum": 500, "description": "Timeout in ms for deployment health GET. Default 5000." },
+        "hooks": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/HookConfig" }
+        }
+      }
+    },
+    "HookConfig": {
+      "type": "object",
+      "required": ["id", "enabled", "phase", "event", "kind", "timeoutMs", "continueOnError"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "enabled": { "type": "boolean" },
+        "phase": { "type": "string", "enum": ["pre", "post", "onError"] },
+        "event": { "type": "string", "enum": ["lifecycle.start", "lifecycle.stop", "lifecycle.restart", "deploy.full", "deploy.incremental", "deploy.undeploy"] },
+        "kind": { "type": "string", "enum": ["command", "vscodeTask"] },
+        "timeoutMs": { "type": "integer", "minimum": 1000 },
+        "continueOnError": { "type": "boolean" },
+        "command": {
+          "type": "object",
+          "required": ["mode", "line"],
+          "properties": {
+            "mode": { "type": "string", "const": "shell" },
+            "line": { "type": "string" },
+            "cwd": { "type": "string" },
+            "env": { "type": "object", "additionalProperties": { "type": "string" } }
+          },
+          "additionalProperties": false
+        },
+        "vscodeTask": {
+          "type": "object",
+          "required": ["taskName"],
+          "properties": {
+            "taskName": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    "PluginConfig": {
+      "oneOf": [
+        { "$ref": "#/definitions/TomcatPluginConfig" }
+      ]
+    },
+    "TomcatPluginConfig": {
+      "type": "object",
+      "required": ["type", "shutdownPort", "disableAjp"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "type": "string", "const": "tomcat" },
+        "shutdownPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "disableAjp": { "type": "boolean" },
+        "ssl": { "$ref": "#/definitions/SslConfig" }
+      }
+    },
+    "SslConfig": {
+      "type": "object",
+      "required": ["enabled", "port", "keystorePath", "keystorePassword", "keystoreType", "clientAuth"],
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535, "default": 8443 },
+        "keystorePath": { "type": "string" },
+        "keystorePassword": { "type": "string" },
+        "keystoreType": { "type": "string", "enum": ["PKCS12", "JKS"], "default": "PKCS12" },
+        "keyAlias": { "type": "string" },
+        "keyPassword": { "type": "string" },
+        "clientAuth": { "type": "boolean", "default": false },
+        "truststorePath": { "type": "string" },
+        "truststorePassword": { "type": "string" },
+        "truststoreType": { "type": "string", "enum": ["PKCS12", "JKS"] },
+        "protocols": { "type": "array", "items": { "type": "string" } },
+        "ciphers": { "type": "string" }
+      }
+    }
+  }
+}

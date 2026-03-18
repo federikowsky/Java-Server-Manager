@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { createHash } from 'crypto';
-import workspaceSchemaDocument from '../data/jsm.servers.schema.json';
+import workspaceSchemaDocument from './schema/jsm.servers.schema.json';
 import type { HookConfig, ServerId, DeploymentId, FileChangeBatch, OperationContext, Logger as ILogger } from '@core/types';
 import type { Result } from '@core/result';
 import { ok, err } from '@core/result';

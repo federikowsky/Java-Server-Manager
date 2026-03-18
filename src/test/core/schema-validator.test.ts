@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { SchemaValidator } from '@core/validation/SchemaValidator';
-import schema from '../../../data/jsm.servers.schema.json';
+import schema from '../../schema/jsm.servers.schema.json';
 
 describe('SchemaValidator', () => {
   let validator: SchemaValidator;

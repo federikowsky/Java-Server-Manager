@@ -15,3 +15,6 @@ tools/tomcat-startup-listener/build/
 .env
 .DS_Store
 TODO
+docs/dev/configuration-rationalization-analysis-plan.md
+docs/dev/spa_webview_architecture_analysis.md
+docs/dev/vscode-marketplace-release-foundation.plan.md

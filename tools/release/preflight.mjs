@@ -183,15 +183,15 @@ async function main() {
   }
 
   try {
-    runGit(['rev-parse', '--verify', 'origin/main']);
+    runGit(['rev-parse', '--verify', 'origin/master']);
   } catch (error) {
-    throw new Error('origin/main is not available locally. Fetch the main branch before running preflight.');
+    throw new Error('origin/master is not available locally. Fetch the master branch before running preflight.');
   }
 
   try {
-    runGit(['merge-base', '--is-ancestor', commitSha, 'origin/main']);
+    runGit(['merge-base', '--is-ancestor', commitSha, 'origin/master']);
   } catch (error) {
-    throw new Error(`Tagged commit ${commitSha} is not reachable from origin/main.`);
+    throw new Error(`Tagged commit ${commitSha} is not reachable from origin/master.`);
   }
 
   const result = {

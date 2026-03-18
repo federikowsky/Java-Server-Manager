@@ -70,7 +70,7 @@ All invariants are blocking.
    - `CHANGELOG.md` contains a matching `## [<version>]` entry.
 2. Source invariant
    - Release commit is the tagged commit.
-   - Tagged commit is reachable from `origin/main`.
+   - Tagged commit is reachable from `origin/master`.
 3. Approval invariant
    - Publish job runs only in a protected environment.
    - `VSCE_PAT` is scoped to the protected environment only.
@@ -112,7 +112,7 @@ The workflow stages are fixed:
 
 1. `preflight`
    - resolve release metadata
-   - validate tag, version, changelog, release notes, publisher identity, and main ancestry
+   - validate tag, version, changelog, release notes, publisher identity, and master ancestry
 2. `quality`
    - execute Beta or Stable gate checks
 3. `package`

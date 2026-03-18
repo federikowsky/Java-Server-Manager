@@ -17,7 +17,7 @@ Each entry uses:
 
 - Date: March 18, 2026
 - Status: Approved
-- Decision: `main` is the only release source of truth and no long-lived release branch is introduced.
+- Decision: `master` is the only release source of truth and no long-lived release branch is introduced.
 - Rationale: keeps release ancestry deterministic and matches the approved foundation plan.
 - Alternatives considered: dedicated release branches for Beta and Stable. Rejected because they add branching overhead without solving the current release-foundation gaps.
 

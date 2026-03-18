@@ -247,6 +247,12 @@ jobs:
           RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
         run: npm run release:verify
 
+      - name: Verify OpenVSX version
+        env:
+          JSM_EXTENSION_NAME: ${{ needs.preflight.outputs.extension_name }}
+          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+        run: npm run release:verify:openvsx
+
       - name: Release summary
         run: |
           cat <<EOF >> "$GITHUB_STEP_SUMMARY"
@@ -261,4 +267,5 @@ jobs:
           - SHA-256: ${{ needs.package.outputs.vsix_sha256 }}
           - Release: ${{ needs.preflight.outputs.release_name }}
           - URL: ${{ needs.preflight.outputs.release_url }}
+          - Registry verification: VS Code Marketplace + OpenVSX
           EOF

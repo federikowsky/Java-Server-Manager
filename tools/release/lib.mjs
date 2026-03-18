@@ -3,6 +3,7 @@ import fs from 'node:fs';
 export const TAG_PATTERN = /^v(?<version>\d+\.\d+\.\d+)$/;
 export const MARKETPLACE_QUERY_URL = 'https://marketplace.visualstudio.com/_apis/public/gallery/extensionquery';
 export const MARKETPLACE_QUERY_FLAGS = 1 + 32 + 65536;
+export const OPENVSX_REGISTRY_URL = 'https://open-vsx.org';
 
 const REQUIRED_RELEASE_NOTE_SECTIONS = {
   beta: ['## Summary', '## Beta Disclaimer', '## Known Limitations'],
@@ -71,6 +72,46 @@ export function extractMarketplaceVersions(payload) {
 
 export function hasMarketplaceVersion(payload, version) {
   return extractMarketplaceVersions(payload).includes(version);
+}
+
+export function buildOpenVsxVersionsUrl(publisher, extensionName, baseUrl = OPENVSX_REGISTRY_URL) {
+  return `${baseUrl.replace(/\/$/, '')}/api/${encodeURIComponent(publisher)}/${encodeURIComponent(extensionName)}/versions`;
+}
+
+export function extractOpenVsxVersions(payload) {
+  if (!payload || typeof payload !== 'object') {
+    return [];
+  }
+
+  const versionCandidates = new Set();
+
+  if (Array.isArray(payload.versions)) {
+    for (const entry of payload.versions) {
+      if (typeof entry?.version === 'string' && entry.version.length > 0) {
+        versionCandidates.add(entry.version);
+      }
+    }
+  }
+
+  if (Array.isArray(payload.allVersions)) {
+    for (const entry of payload.allVersions) {
+      if (typeof entry?.version === 'string' && entry.version.length > 0) {
+        versionCandidates.add(entry.version);
+      }
+    }
+  }
+
+  for (const key of Object.keys(payload)) {
+    if (/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(key)) {
+      versionCandidates.add(key);
+    }
+  }
+
+  return [...versionCandidates];
+}
+
+export function hasOpenVsxVersion(payload, version) {
+  return extractOpenVsxVersions(payload).includes(version);
 }
 
 export function buildRetryDelaySchedule(attempts, baseDelayMs) {

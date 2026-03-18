@@ -126,8 +126,9 @@ The workflow stages are fixed:
    - publish the exact VSIX generated in `package` to OpenVSX with `OVSX_PAT`
    - keep reruns safe and auditable
 5. `verify`
-   - poll the Marketplace API with bounded retry
-   - confirm target version visibility
+   - poll the VS Code Marketplace API with bounded retry
+   - poll the OpenVSX API with bounded retry
+   - confirm target version visibility on both registries
    - emit the final release summary
 
 ## Security And Environment Model

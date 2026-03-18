@@ -3,10 +3,14 @@ import assert from 'node:assert/strict';
 
 import {
   MARKETPLACE_QUERY_FLAGS,
+  OPENVSX_REGISTRY_URL,
+  buildOpenVsxVersionsUrl,
   buildMarketplaceQuery,
   buildRetryDelaySchedule,
   changelogHasVersionEntry,
   extractMarketplaceVersions,
+  extractOpenVsxVersions,
+  hasOpenVsxVersion,
   hasMarketplaceVersion,
   missingReleaseNoteSections,
   parseVersionFromTag,
@@ -64,4 +68,23 @@ test('extractMarketplaceVersions returns published versions', () => {
 
 test('buildRetryDelaySchedule uses bounded exponential backoff', () => {
   assert.deepEqual(buildRetryDelaySchedule(4, 1000), [1000, 2000, 4000]);
+});
+
+test('buildOpenVsxVersionsUrl composes the versions endpoint', () => {
+  assert.equal(
+    buildOpenVsxVersionsUrl('publisher', 'extension'),
+    `${OPENVSX_REGISTRY_URL}/api/publisher/extension/versions`,
+  );
+});
+
+test('extractOpenVsxVersions parses versions map and detects target version', () => {
+  const payload = {
+    '0.1.0': { version: '0.1.0' },
+    '0.1.1': { version: '0.1.1' },
+    irrelevant: true,
+  };
+
+  assert.deepEqual(extractOpenVsxVersions(payload).sort(), ['0.1.0', '0.1.1']);
+  assert.equal(hasOpenVsxVersion(payload, '0.1.1'), true);
+  assert.equal(hasOpenVsxVersion(payload, '0.1.2'), false);
 });

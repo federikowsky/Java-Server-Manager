@@ -1,0 +1,147 @@
+/**
+ * JSM Design Tokens
+ * 
+ * Centralized design variables for consistent UI across all components.
+ * All values reference VS Code theme variables where possible.
+ */
+
+:root {
+  /* ── Spacing Scale ─────────────────────────────────────────────────────── */
+  --jsm-space-2xs: 2px;
+  --jsm-space-xs: 4px;
+  --jsm-space-sm: 8px;
+  --jsm-space-md: 12px;
+  --jsm-space-lg: 16px;
+  --jsm-space-xl: 24px;
+  --jsm-space-2xl: 32px;
+  --jsm-space-3xl: 48px;
+
+  /* ── Border Radius ─────────────────────────────────────────────────────── */
+  --jsm-radius-xs: 2px;
+  --jsm-radius-sm: 4px;
+  --jsm-radius-md: 6px;
+  --jsm-radius-lg: 8px;
+  --jsm-radius-xl: 12px;
+  --jsm-radius-full: 9999px;
+
+  /* ── Typography ────────────────────────────────────────────────────────── */
+  --jsm-font-family: var(--vscode-font-family);
+  --jsm-font-size-xs: 11px;
+  --jsm-font-size-sm: 12px;
+  --jsm-font-size-md: 13px;
+  --jsm-font-size-lg: 14px;
+  --jsm-font-size-xl: 16px;
+  --jsm-font-size-2xl: 20px;
+  --jsm-font-size-3xl: 24px;
+  --jsm-font-weight-normal: 400;
+  --jsm-font-weight-medium: 500;
+  --jsm-font-weight-semibold: 600;
+  --jsm-font-weight-bold: 700;
+  --jsm-line-height-tight: 1.2;
+  --jsm-line-height-normal: 1.5;
+  --jsm-line-height-relaxed: 1.6;
+
+  /* ── Shadows ───────────────────────────────────────────────────────────── */
+  --jsm-shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.08);
+  --jsm-shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.12), 0 1px 2px rgba(0, 0, 0, 0.08);
+  --jsm-shadow-md: 0 2px 8px rgba(0, 0, 0, 0.16), 0 1px 3px rgba(0, 0, 0, 0.1);
+  --jsm-shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.2), 0 2px 6px rgba(0, 0, 0, 0.12);
+  --jsm-shadow-focus: 0 0 0 2px color-mix(in srgb, var(--vscode-focusBorder) 30%, transparent);
+
+  /* ── Transitions ───────────────────────────────────────────────────────── */
+  --jsm-transition-fast: 0.1s ease;
+  --jsm-transition-normal: 0.15s ease;
+  --jsm-transition-slow: 0.25s ease;
+  --jsm-transition-slower: 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* ── Colors (Semantic) ─────────────────────────────────────────────────── */
+  --jsm-color-bg: var(--vscode-editor-background);
+  --jsm-color-bg-secondary: var(--vscode-sideBar-background, var(--vscode-editor-background));
+  --jsm-color-bg-tertiary: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  --jsm-color-bg-hover: var(--vscode-list-hoverBackground);
+  --jsm-color-bg-active: var(--vscode-list-activeSelectionBackground);
+
+  --jsm-color-fg: var(--vscode-foreground);
+  --jsm-color-fg-secondary: var(--vscode-descriptionForeground);
+  --jsm-color-fg-muted: var(--vscode-disabledForeground);
+
+  --jsm-color-border: var(--vscode-panel-border);
+  --jsm-color-border-secondary: var(--vscode-widget-border, var(--vscode-panel-border));
+  --jsm-color-border-focus: var(--vscode-focusBorder);
+
+  --jsm-color-primary: var(--vscode-button-background);
+  --jsm-color-primary-fg: var(--vscode-button-foreground);
+  --jsm-color-primary-hover: var(--vscode-button-hoverBackground);
+
+  --jsm-color-secondary: var(--vscode-button-secondaryBackground);
+  --jsm-color-secondary-fg: var(--vscode-button-secondaryForeground);
+  --jsm-color-secondary-hover: var(--vscode-button-secondaryHoverBackground);
+
+  --jsm-color-error: var(--vscode-errorForeground);
+  --jsm-color-warning: var(--vscode-editorWarning-foreground, var(--vscode-testing-iconQueued));
+  --jsm-color-success: var(--vscode-testing-iconPassed);
+  --jsm-color-info: var(--vscode-textLink-foreground);
+
+  /* ── Status Colors ─────────────────────────────────────────────────────── */
+  --jsm-status-running: var(--vscode-testing-iconPassed);
+  --jsm-status-starting: var(--vscode-testing-iconQueued);
+  --jsm-status-stopping: var(--vscode-testing-iconQueued);
+  --jsm-status-error: var(--vscode-testing-iconFailed);
+  --jsm-status-stopped: var(--vscode-testing-iconUnset);
+
+  /* ── Component: Sidebar ────────────────────────────────────────────────── */
+  --jsm-sidebar-width: 260px;
+  --jsm-sidebar-bg: var(--vscode-sideBar-background);
+  --jsm-sidebar-border: var(--vscode-sideBar-border, var(--vscode-panel-border));
+
+  /* ── Component: Card/Panel ─────────────────────────────────────────────── */
+  --jsm-card-bg: var(--vscode-sideBar-background, var(--vscode-editor-background));
+  --jsm-card-border: var(--vscode-widget-border, var(--vscode-panel-border));
+  --jsm-card-radius: var(--jsm-radius-lg);
+  --jsm-card-padding: var(--jsm-space-lg);
+  --jsm-card-shadow: var(--jsm-shadow-sm);
+
+  /* ── Component: Button ─────────────────────────────────────────────────── */
+  --jsm-btn-radius: var(--jsm-radius-sm);
+  --jsm-btn-padding-x: var(--jsm-space-md);
+  --jsm-btn-padding-y: var(--jsm-space-sm);
+  --jsm-btn-font-weight: var(--jsm-font-weight-semibold);
+
+  /* ── Component: Input ──────────────────────────────────────────────────── */
+  --jsm-input-bg: var(--vscode-input-background);
+  --jsm-input-fg: var(--vscode-input-foreground);
+  --jsm-input-border: var(--vscode-input-border, var(--vscode-widget-border));
+  --jsm-input-radius: var(--jsm-radius-md);
+  --jsm-input-padding-x: var(--jsm-space-md);
+  --jsm-input-padding-y: 7px;
+
+  /* ── Component: Badge ──────────────────────────────────────────────────── */
+  --jsm-badge-bg: var(--vscode-badge-background);
+  --jsm-badge-fg: var(--vscode-badge-foreground);
+  --jsm-badge-radius: var(--jsm-radius-full);
+  --jsm-badge-padding-x: var(--jsm-space-sm);
+  --jsm-badge-padding-y: var(--jsm-space-2xs);
+
+  /* ── Component: Table ──────────────────────────────────────────────────── */
+  --jsm-table-header-bg: transparent;
+  --jsm-table-border: var(--vscode-panel-border);
+  --jsm-table-row-hover: var(--vscode-list-hoverBackground);
+  --jsm-table-row-active: var(--vscode-list-activeSelectionBackground);
+
+  /* ── Component: Icon ───────────────────────────────────────────────────── */
+  --jsm-icon-size-xs: 12px;
+  --jsm-icon-size-sm: 14px;
+  --jsm-icon-size-md: 16px;
+  --jsm-icon-size-lg: 20px;
+  --jsm-icon-size-xl: 24px;
+  --jsm-icon-size-2xl: 32px;
+  --jsm-icon-size-3xl: 48px;
+
+  /* ── Z-Index Scale ─────────────────────────────────────────────────────── */
+  --jsm-z-base: 1;
+  --jsm-z-dropdown: 100;
+  --jsm-z-sticky: 200;
+  --jsm-z-modal: 300;
+  --jsm-z-tooltip: 400;
+  --jsm-z-toast: 500;
+}

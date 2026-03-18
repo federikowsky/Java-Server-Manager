@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main, refactor]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+      fail-fast: false
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type check
+        run: npm run check-types
+
+      - name: Unit & integration tests
+        run: npm test
+
+      - name: Build extension
+        run: npm run build
+
+      - name: Layer boundary audit
+        shell: bash
+        run: |
+          # Ensure core/app/plugins/infra layers don't import 'vscode'
+          violations=$(grep -rn "from 'vscode'" src/core/ src/app/ src/plugins/ src/infra/ || true)
+          if [ -n "$violations" ]; then
+            echo "::error::Layer boundary violation — vscode import in non-UI layer:"
+            echo "$violations"
+            exit 1
+          fi
+
+      - name: shell:true audit
+        shell: bash
+        run: |
+          # Ensure no shell:true in spawn/exec calls
+          violations=$(grep -rn 'shell:\s*true' src/ --include='*.ts' || true)
+          if [ -n "$violations" ]; then
+            echo "::error::Security violation — shell:true found:"
+            echo "$violations"
+            exit 1
+          fi

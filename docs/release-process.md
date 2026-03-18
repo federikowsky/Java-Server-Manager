@@ -1,10 +1,10 @@
-# VS Code Marketplace Release Process
+# Extension Registry Release Process
 
 ## Status
 
 This document is the canonical release operations policy for Java Server Manager as of March 18, 2026.
 
-- Scope: VS Code Marketplace publication only.
+- Scope: VS Code Marketplace and OpenVSX publication.
 - Product posture: advanced MVP, Tomcat-only implementation, plugin-ready architecture.
 - Planning baseline: [docs/vscode-marketplace-release-foundation.plan.md](./vscode-marketplace-release-foundation.plan.md).
 - Workflow implementation: [`.github/workflows/release-marketplace.yml`](../.github/workflows/release-marketplace.yml).
@@ -72,14 +72,15 @@ All invariants are blocking.
    - Release commit is the tagged commit.
    - Tagged commit is reachable from `origin/master`.
 3. Approval invariant
-   - Publish job runs only in a protected environment.
+   - Publish jobs run only in protected environments.
    - `VSCE_PAT` is scoped to the protected environment only.
+   - `OVSX_PAT` is scoped to the protected environment only.
 4. Identity invariant
    - Marketplace publisher is provided by repository variable `JSM_MARKETPLACE_PUBLISHER`.
    - If `package.json` later adds a `publisher`, it must match that variable.
 5. Idempotency invariant
    - Publish uses `--skip-duplicate`.
-   - Reruns must converge on the same tag, version, and Marketplace target.
+   - Reruns must converge on the same tag, version, and registry targets.
 6. Traceability invariant
    - Release summary records channel, tag, version, commit SHA, VSIX file name, and SHA-256 checksum.
 
@@ -121,9 +122,9 @@ The workflow stages are fixed:
    - create a VSIX and SHA-256 checksum
 4. `publish`
    - require environment approval
-   - publish the exact VSIX generated in `package`
-   - publish with `VSCE_PAT`
-   - keep reruns safe with `--skip-duplicate`
+   - publish the exact VSIX generated in `package` to VS Code Marketplace with `VSCE_PAT`
+   - publish the exact VSIX generated in `package` to OpenVSX with `OVSX_PAT`
+   - keep reruns safe and auditable
 5. `verify`
    - poll the Marketplace API with bounded retry
    - confirm target version visibility
@@ -137,9 +138,12 @@ The workflow stages are fixed:
 - Protected environments:
   - `marketplace-beta`
   - `marketplace-stable`
+   - `openvsx-beta`
+   - `openvsx-stable`
 - Environment secret:
   - `VSCE_PAT`
-- Publish secret access is limited to the `publish` job.
+   - `OVSX_PAT`
+- Publish secret access is limited to `publish` and `publish_openvsx` jobs.
 
 ## Go Or No-Go Checklists
 

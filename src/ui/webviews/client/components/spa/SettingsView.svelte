@@ -8,26 +8,10 @@
   let state = $state($spaState);
   const unsubscribeSpaState = spaState.subscribe(s => { state = s; });
 
-  let autoDiscovery = $state(true);
-  let scanEnvVars = $state(true);
-  let scanCommonPaths = $state(true);
   let defaultHttpPort = $state(8080);
   let defaultDebugPort = $state(5005);
   let defaultJavaHome = $state('');
   let showStatusInSidebar = $state(true);
-
-  let pluginMetaList = $derived(
-    Object.entries(state.capabilities)
-      .filter(([_, caps]) => (caps as any)?.supportsAutoDetect)
-      .map(([type, caps]) => ({
-        type,
-        displayName: (caps as any)?.displayName || type,
-        envVars: (caps as any)?.discoveryEnvVars || [],
-        paths: (caps as any)?.discoveryPaths || [],
-      }))
-  );
-  let allEnvVars = $derived(pluginMetaList.flatMap(p => p.envVars).join(', '));
-  let allPaths = $derived(pluginMetaList.flatMap(p => p.paths).slice(0, 4).join(', '));
 
   let settingsFingerprint = $state('');
   let saving = $state(false);
@@ -76,9 +60,6 @@
     }
 
     settingsFingerprint = nextFingerprint;
-    autoDiscovery = state.settings.autoDiscovery;
-    scanEnvVars = state.settings.scanEnvVars;
-    scanCommonPaths = state.settings.scanCommonPaths;
     defaultHttpPort = state.settings.defaultHttpPort;
     defaultDebugPort = state.settings.defaultDebugPort;
     defaultJavaHome = state.settings.defaultJavaHome;
@@ -114,9 +95,6 @@
       id: 'jsm.settings.save',
       requestId: pendingRequestId,
       args: [{
-        autoDiscovery,
-        scanEnvVars,
-        scanCommonPaths,
         defaultHttpPort,
         defaultDebugPort,
         defaultJavaHome,
@@ -126,9 +104,6 @@
   }
 
   function handleReset() {
-    autoDiscovery = true;
-    scanEnvVars = true;
-    scanCommonPaths = true;
     defaultHttpPort = 8080;
     defaultDebugPort = 5005;
     defaultJavaHome = '';
@@ -152,65 +127,13 @@
     <div class="header-main">
       <Icon name="settings" size={24} />
       <div class="header-text">
-        <h1>Global Settings</h1>
-        <p class="subtitle">Configure extension-wide preferences</p>
+        <h1>Preferences</h1>
+        <p class="subtitle">Configure creation defaults and interface preferences</p>
       </div>
     </div>
   </div>
 
   <div class="settings-content">
-    <!-- Autodiscovery Section -->
-    <div class="settings-section">
-      <h3 class="section-title">
-        <Icon name="search" size={16} />
-        <span>Autodiscovery</span>
-      </h3>
-
-      <div class="setting-row">
-        <label class="checkbox-label">
-          <input type="checkbox" class="field-checkbox" bind:checked={autoDiscovery} />
-          <div class="setting-info">
-            <span class="setting-name">Enable automatic server discovery</span>
-            <span class="setting-desc">
-              Automatically detect {pluginMetaList.map(p => p.displayName).join(', ')} installations on startup
-            </span>
-          </div>
-        </label>
-      </div>
-
-      <div class="setting-row" class:disabled={!autoDiscovery}>
-        <label class="checkbox-label">
-          <input type="checkbox" class="field-checkbox" bind:checked={scanEnvVars} disabled={!autoDiscovery} />
-          <div class="setting-info">
-            <span class="setting-name">Scan environment variables</span>
-            <span class="setting-desc">
-              {#if allEnvVars}
-                Check {allEnvVars}, and similar variables
-              {:else}
-                Check server-specific environment variables
-              {/if}
-            </span>
-          </div>
-        </label>
-      </div>
-
-      <div class="setting-row" class:disabled={!autoDiscovery}>
-        <label class="checkbox-label">
-          <input type="checkbox" class="field-checkbox" bind:checked={scanCommonPaths} disabled={!autoDiscovery} />
-          <div class="setting-info">
-            <span class="setting-name">Scan common installation paths</span>
-            <span class="setting-desc">
-              {#if allPaths}
-                Check {allPaths}, etc.
-              {:else}
-                Check common installation paths for registered server types
-              {/if}
-            </span>
-          </div>
-        </label>
-      </div>
-    </div>
-
     <!-- Defaults Section -->
     <div class="settings-section">
       <h3 class="section-title">
@@ -221,7 +144,7 @@
       <div class="setting-row">
         <div class="setting-info">
           <span class="setting-name">Default Java Home</span>
-          <span class="setting-desc">Pre-filled JAVA_HOME for new servers</span>
+          <span class="setting-desc">Pre-filled JAVA_HOME for newly created servers</span>
         </div>
         <div class="setting-control path-row">
           <input
@@ -239,7 +162,7 @@
       <div class="setting-row">
         <div class="setting-info">
           <span class="setting-name">Default HTTP Port</span>
-          <span class="setting-desc">Pre-filled HTTP port for new servers</span>
+          <span class="setting-desc">Pre-filled HTTP port for newly created servers</span>
         </div>
         <div class="setting-control">
           <input
@@ -255,7 +178,7 @@
       <div class="setting-row">
         <div class="setting-info">
           <span class="setting-name">Default Debug Port</span>
-          <span class="setting-desc">Pre-filled debug port for new servers</span>
+          <span class="setting-desc">Pre-filled debug port for newly created servers</span>
         </div>
         <div class="setting-control">
           <input

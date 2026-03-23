@@ -1,52 +1,46 @@
 import * as fs from 'fs/promises';
 import { v4 as uuid } from 'uuid';
+import type { CreateServerRequest } from '@core/authoring';
 import type { Result } from '@core/result';
 import { err, ok } from '@core/result';
 import { JsmError } from '@core/errors/JsmError';
 import { ErrorCode } from '@core/errors/codes';
-import type { HookConfig, Logger, PluginConfig, ServerConfig } from '@core/types';
+import type { Logger, ServerConfig, TrustGate } from '@core/types';
 import type { ConfigService } from '@app/config/ConfigService';
 import type { PluginRegistry } from '@plugins/registry/PluginRegistry';
 import { ManagedInstancePathResolver } from './ManagedInstancePathResolver';
+import { requireWorkspaceTrust } from '@core/policy';
 
 const DEFAULT_HTTP_PORT = 8080;
 const DEFAULT_DEBUG_PORT = 5005;
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_DEBUG_BIND = '127.0.0.1';
 
-export interface CreateServerRequest {
-  name: string;
-  type?: 'tomcat';
-  runtimeHomePath: string;
-  javaHome: string;
-  host?: string;
-  httpPort?: number;
-  debugPort?: number;
-  debugBind?: string;
-  vmArgs?: string[];
-  hooks?: HookConfig[];
-  pluginConfig?: PluginConfig;
-}
-
 export class ServerProvisioningService {
   private readonly configService: ConfigService;
   private readonly pluginRegistry: PluginRegistry;
   private readonly pathResolver: ManagedInstancePathResolver;
   private readonly logger: Logger;
+  private readonly trustGate?: TrustGate;
 
   constructor(deps: {
     configService: ConfigService;
     pluginRegistry: PluginRegistry;
     pathResolver: ManagedInstancePathResolver;
     logger: Logger;
+    trustGate?: TrustGate;
   }) {
     this.configService = deps.configService;
     this.pluginRegistry = deps.pluginRegistry;
     this.pathResolver = deps.pathResolver;
     this.logger = deps.logger;
+    this.trustGate = deps.trustGate;
   }
 
   async createServer(request: CreateServerRequest): Promise<Result<ServerConfig, JsmError>> {
+    const trustResult = requireWorkspaceTrust(this.trustGate, 'provision managed servers');
+    if (!trustResult.ok) return trustResult;
+
     const type = request.type ?? 'tomcat';
     const plugin = this.pluginRegistry.get(type);
     if (!plugin) {
@@ -126,6 +120,9 @@ export class ServerProvisioningService {
     source: ServerConfig,
     options?: { keepName?: boolean },
   ): Promise<Result<ServerConfig, JsmError>> {
+    const trustResult = requireWorkspaceTrust(this.trustGate, 'provision managed servers');
+    if (!trustResult.ok) return trustResult;
+
     const keepName = options?.keepName ?? false;
     const plugin = this.pluginRegistry.get(source.type);
     if (!plugin) {
@@ -183,6 +180,9 @@ export class ServerProvisioningService {
   }
 
   async removeServer(serverId: string): Promise<Result<void, JsmError>> {
+    const trustResult = requireWorkspaceTrust(this.trustGate, 'remove managed servers');
+    if (!trustResult.ok) return trustResult;
+
     const existing = this.configService.getServer(serverId);
     if (!existing) {
       return err(new JsmError({

@@ -1,6 +1,10 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
-import type { OperationContext, ServerConfig } from '@core/types';
+import {
+  serverDraftToCreateServerRequest,
+} from '@core/authoring';
+import type { ServerAuthoringDraft } from '@core/authoring';
+import type { ServerConfig } from '@core/types';
 import type { Result } from '@core/result';
 import { ok, err } from '@core/result';
 import { JsmError } from '@core/errors/JsmError';
@@ -14,11 +18,10 @@ import type { ConfigSource } from '@plugins/interfaces/IServerPlugin';
 import type { SchemaValidator } from '@core/validation/SchemaValidator';
 import { exists } from '@infra/fs';
 import type { ServerTreeViewProvider } from '@ui/tree/ServerTreeViewProvider';
-import type { ServerFormPanel } from '@ui/webviews/panels/ServerFormPanel';
-import { formDataToCreateServerRequest } from '@ui/webviews/panels/ServerFormPanel';
 import {
   isServerNode,
   registerMany,
+  runWithOperationProgress,
   showErr,
   showSuccess,
 } from './shared';
@@ -39,11 +42,6 @@ export interface ServerCommandsDeps {
   discoveryService?: ServerDiscoveryService;
   treeProvider: ServerTreeViewProvider;
   schemaValidator?: SchemaValidator;
-  serverFormPanel: ServerFormPanel | {
-    open?(mode: 'create' | 'edit', serverId?: string): void;
-    openCreate?(workspaceFolderUri: string, initialData?: Record<string, unknown>): void;
-    openEdit?(locator: { workspaceFolderUri: string; serverId: string }): void;
-  };
 }
 
 async function pickWorkspaceScope(scopes: WorkspaceScope[]): Promise<WorkspaceScope | undefined> {
@@ -61,19 +59,6 @@ async function pickWorkspaceScope(scopes: WorkspaceScope[]): Promise<WorkspaceSc
       ignoreFocusOut: true,
     },
   ).then(selection => selection?.scope);
-}
-
-function makeOpCtx(serverId: string, kind: OperationContext['kind']): OperationContext {
-  return {
-    operationId: `cmd-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    serverId,
-    kind,
-    startedAt: Date.now(),
-    timeoutMs: 60_000,
-    cancel: { isCancelled: false, onCancelled: () => ({ dispose: () => {} }) },
-    progress: { report: () => {} },
-    output: { append: () => {}, appendLine: () => {}, clear: () => {} },
-  };
 }
 
 async function revealFolder(targetPath: string): Promise<void> {
@@ -124,19 +109,24 @@ export function registerServerCommands(
 
   return registerMany([
     ['jsm.server.add', async (arg: unknown) => {
-      if (arg && typeof arg === 'object' && 'formData' in arg && 'workspaceFolderUri' in arg) {
-        const spaArg = arg as { formData: Record<string, unknown>; workspaceFolderUri: string };
+      if (arg && typeof arg === 'object' && 'workspaceFolderUri' in arg) {
+        const draftArg = arg as { draft?: unknown; workspaceFolderUri: string };
         if (!workspaceRegistry) {
           return { ok: false, message: 'Workspace registry not available' };
         }
-        const entry = workspaceRegistry.getEntry(spaArg.workspaceFolderUri);
+        const entry = workspaceRegistry.getEntry(draftArg.workspaceFolderUri);
         if (!entry) {
           return { ok: false, message: 'Workspace not found.' };
         }
 
-        const result = await entry.provisioningService.createServer(
-          formDataToCreateServerRequest(spaArg.formData),
-        );
+        const request = draftArg.draft && typeof draftArg.draft === 'object'
+          ? serverDraftToCreateServerRequest(draftArg.draft as ServerAuthoringDraft)
+          : undefined;
+        if (!request) {
+          return { ok: false, message: 'Invalid server draft payload.' };
+        }
+
+        const result = await entry.provisioningService.createServer(request);
         if (!result.ok) {
           return { ok: false, message: result.error.message };
         }
@@ -147,23 +137,9 @@ export function registerServerCommands(
           message: `Server "${result.value.name}" created.`,
           data: {
             serverId: result.value.id,
-            workspaceFolderUri: spaArg.workspaceFolderUri,
+            workspaceFolderUri: draftArg.workspaceFolderUri,
           },
         };
-      }
-
-      // Backward-compatible raw config path.
-      if (arg && typeof arg === 'object' && 'config' in arg && 'workspaceFolderUri' in arg) {
-        const spaArg = arg as { config: any; workspaceFolderUri: string };
-        if (!workspaceRegistry) {
-          return { ok: false, message: 'Workspace registry not available' };
-        }
-        const result = await workspaceRegistry.addServer(spaArg.workspaceFolderUri, spaArg.config);
-        if (!result.ok) {
-          return { ok: false, message: result.error.message };
-        }
-        treeProvider.requestRefresh();
-        return { ok: true, message: `Server "${spaArg.config.name}" created.` };
       }
       
       void vscode.commands.executeCommand('jsm.dashboard.open', { type: 'new-server' });
@@ -175,8 +151,13 @@ export function registerServerCommands(
       const config = resolveServer(arg.workspaceFolderUri, arg.serverId);
       if (config?.deployments?.length) {
         try {
-          const ctx = makeOpCtx(arg.serverKey, 'RedeployAll');
-          await deployService.deployUndeployed(ctx, config);
+          await runWithOperationProgress({
+            title: `Preparing deployments for ${arg.serverConfig.name}...`,
+            serverId: arg.serverKey,
+            kind: 'RedeployAll',
+          }, async ctx => {
+            await deployService.deployUndeployed(ctx, config);
+          });
         } catch (e) {
           showErr(JsmError.fromUnknown(e));
           return;
@@ -191,8 +172,13 @@ export function registerServerCommands(
       const config = resolveServer(arg.workspaceFolderUri, arg.serverId);
       if (config?.deployments?.length) {
         try {
-          const ctx = makeOpCtx(arg.serverKey, 'RedeployAll');
-          await deployService.deployUndeployed(ctx, config);
+          await runWithOperationProgress({
+            title: `Preparing deployments for ${arg.serverConfig.name}...`,
+            serverId: arg.serverKey,
+            kind: 'RedeployAll',
+          }, async ctx => {
+            await deployService.deployUndeployed(ctx, config);
+          });
         } catch (e) {
           showErr(JsmError.fromUnknown(e));
           return;
@@ -370,8 +356,13 @@ export function registerServerCommands(
       if (!isServerNode(arg)) return;
       const config = resolveServer(arg.workspaceFolderUri, arg.serverId);
       if (!config || config.deployments.length === 0) return;
-      const ctx = makeOpCtx(arg.serverKey, 'RedeployAll');
-      await deployService.redeployAll(ctx, config);
+      await runWithOperationProgress({
+        title: `Redeploying all applications on ${arg.serverConfig.name}...`,
+        serverId: arg.serverKey,
+        kind: 'RedeployAll',
+      }, async ctx => {
+        await deployService.redeployAll(ctx, config);
+      });
       showSuccess(`Redeploy All completed for "${arg.serverConfig.name}".`);
     }],
 

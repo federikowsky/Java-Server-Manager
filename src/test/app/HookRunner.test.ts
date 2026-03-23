@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { HookRunner, type HookExecutor } from '@app/hooks/HookRunner';
 import type { Logger } from '@core/types/logger';
 import type { HookConfig } from '@core/types/domain';
+import type { OperationContext } from '@core/types';
 import { ok, err } from '@core/result';
 import { JsmError } from '@core/errors/JsmError';
 import { ErrorCode } from '@core/errors/codes';
@@ -24,6 +25,27 @@ function makeHook(overrides: Partial<HookConfig> = {}): HookConfig {
   };
 }
 
+function makeParent(overrides: Partial<OperationContext> = {}): OperationContext {
+  return {
+    operationId: 'op-1',
+    serverId: 's1',
+    kind: 'LifecycleStart',
+    startedAt: Date.now(),
+    timeoutMs: 60_000,
+    cancel: {
+      isCancelled: false,
+      onCancelled: () => ({ dispose: () => {} }),
+    },
+    progress: { report: vi.fn() },
+    output: {
+      append: vi.fn(),
+      appendLine: vi.fn(),
+      clear: vi.fn(),
+    },
+    ...overrides,
+  };
+}
+
 describe('HookRunner', () => {
   let executor: HookExecutor;
   let runner: HookRunner;
@@ -38,7 +60,12 @@ describe('HookRunner', () => {
 
   it('runs matching hooks and returns count', async () => {
     const hooks = [makeHook()];
-    const result = await runner.runHooks('s1', 'pre', 'lifecycle.start', hooks);
+    const result = await runner.runHooks({
+      parent: makeParent(),
+      phase: 'pre',
+      event: 'lifecycle.start',
+      hooks,
+    });
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.value.executed).toBe(1);
@@ -50,7 +77,12 @@ describe('HookRunner', () => {
 
   it('skips disabled hooks', async () => {
     const hooks = [makeHook({ enabled: false })];
-    const result = await runner.runHooks('s1', 'pre', 'lifecycle.start', hooks);
+    const result = await runner.runHooks({
+      parent: makeParent(),
+      phase: 'pre',
+      event: 'lifecycle.start',
+      hooks,
+    });
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.value.executed).toBe(0);
@@ -63,7 +95,12 @@ describe('HookRunner', () => {
       makeHook({ phase: 'post' }),
       makeHook({ event: 'lifecycle.stop' }),
     ];
-    const result = await runner.runHooks('s1', 'pre', 'lifecycle.start', hooks);
+    const result = await runner.runHooks({
+      parent: makeParent(),
+      phase: 'pre',
+      event: 'lifecycle.start',
+      hooks,
+    });
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.value.executed).toBe(0);
@@ -79,7 +116,12 @@ describe('HookRunner', () => {
       makeHook({ id: 'h2' }),
     ];
 
-    const result = await runner.runHooks('s1', 'pre', 'lifecycle.start', hooks);
+    const result = await runner.runHooks({
+      parent: makeParent(),
+      phase: 'pre',
+      event: 'lifecycle.start',
+      hooks,
+    });
     expect(result.ok).toBe(false);
     // Only the first hook should have been attempted
     expect(executor.runCommand).toHaveBeenCalledOnce();
@@ -95,7 +137,12 @@ describe('HookRunner', () => {
       makeHook({ id: 'h2', continueOnError: true }),
     ];
 
-    const result = await runner.runHooks('s1', 'pre', 'lifecycle.start', hooks);
+    const result = await runner.runHooks({
+      parent: makeParent(),
+      phase: 'pre',
+      event: 'lifecycle.start',
+      hooks,
+    });
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.value.executed).toBe(1);
@@ -107,8 +154,66 @@ describe('HookRunner', () => {
 
   it('uses vscodeTask executor for vscodeTask kind', async () => {
     const hooks = [makeHook({ kind: 'vscodeTask', vscodeTask: { taskName: 'build' } })];
-    await runner.runHooks('s1', 'pre', 'lifecycle.start', hooks);
+    await runner.runHooks({
+      parent: makeParent(),
+      phase: 'pre',
+      event: 'lifecycle.start',
+      hooks,
+    });
     expect(executor.runVscodeTask).toHaveBeenCalledOnce();
+    expect(executor.runCommand).not.toHaveBeenCalled();
+  });
+
+  it('clamps hook timeout to the remaining parent operation budget', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-22T00:00:00Z'));
+    executor.runCommand = vi.fn().mockImplementation(
+      async () => new Promise<Result<void, JsmError>>(() => {}),
+    );
+    runner = new HookRunner({ executor, logger: mockLogger() });
+
+    const promise = runner.runHooks({
+      parent: makeParent({
+        startedAt: Date.now(),
+        timeoutMs: 10,
+      }),
+      phase: 'pre',
+      event: 'lifecycle.start',
+      hooks: [makeHook({ timeoutMs: 60_000 })],
+    });
+
+    await vi.advanceTimersByTimeAsync(11);
+    const result = await promise;
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCode.HookFailed);
+      expect(result.error.cause).toBeInstanceOf(JsmError);
+      expect((result.error.cause as JsmError).code).toBe(ErrorCode.Timeout);
+    }
+
+    vi.useRealTimers();
+  });
+
+  it('skips remaining hooks when parent operation is already cancelled', async () => {
+    const result = await runner.runHooks({
+      parent: makeParent({
+        cancel: {
+          isCancelled: true,
+          onCancelled: () => ({ dispose: () => {} }),
+        },
+      }),
+      phase: 'pre',
+      event: 'lifecycle.start',
+      hooks: [makeHook(), makeHook({ id: 'hook-2' })],
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.executed).toBe(0);
+      expect(result.value.failed).toBe(0);
+      expect(result.value.skipped).toBe(2);
+    }
     expect(executor.runCommand).not.toHaveBeenCalled();
   });
 
@@ -120,7 +225,12 @@ describe('HookRunner', () => {
         trustGate: { isTrusted: () => false },
       });
       const hooks = [makeHook()];
-      const result = await untrustedRunner.runHooks('s1', 'pre', 'lifecycle.start', hooks);
+      const result = await untrustedRunner.runHooks({
+        parent: makeParent(),
+        phase: 'pre',
+        event: 'lifecycle.start',
+        hooks,
+      });
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error.code).toBe(ErrorCode.WorkspaceUntrusted);
       expect(executor.runCommand).not.toHaveBeenCalled();

@@ -1,5 +1,7 @@
 import * as vscode from 'vscode';
+import { createCancellationTokenSource } from '@core/ops';
 import type { JsmError } from '@core/errors/JsmError';
+import type { OperationContext } from '@core/types';
 import { ServerNode, DeploymentNode } from '@ui/tree/ServerTreeViewProvider';
 
 // ── Error / Success display ─────────────────────────────────────────────────
@@ -10,6 +12,53 @@ export function showErr(e: JsmError): void {
 
 export function showSuccess(msg: string): void {
   void vscode.window.showInformationMessage(msg);
+}
+
+interface ProgressOperationOptions {
+  title: string;
+  serverId: string;
+  kind: OperationContext['kind'];
+  timeoutMs?: number;
+  targetDeploymentId?: string;
+}
+
+export async function runWithOperationProgress<T>(
+  options: ProgressOperationOptions,
+  operation: (ctx: OperationContext) => Promise<T>,
+): Promise<T> {
+  return vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: options.title,
+      cancellable: true,
+    },
+    async (progress, cancellationToken) => {
+      const cancellation = createCancellationTokenSource();
+      const subscription = cancellationToken.onCancellationRequested(() => cancellation.cancel());
+
+      try {
+        return await operation({
+          operationId: `cmd-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          serverId: options.serverId,
+          kind: options.kind,
+          targetDeploymentId: options.targetDeploymentId,
+          startedAt: Date.now(),
+          timeoutMs: options.timeoutMs ?? 60_000,
+          cancel: cancellation.token,
+          progress: {
+            report: (message: string) => progress.report({ message }),
+          },
+          output: {
+            append: () => {},
+            appendLine: () => {},
+            clear: () => {},
+          },
+        });
+      } finally {
+        subscription.dispose();
+      }
+    },
+  );
 }
 
 // ── Deferred command stub ───────────────────────────────────────────────────

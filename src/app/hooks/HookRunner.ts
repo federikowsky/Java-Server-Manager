@@ -2,8 +2,9 @@ import type {
   HookConfig,
   HookPhase,
   HookEvent,
-  ServerId,
+  DeploymentId,
   Logger,
+  OperationContext,
   TrustGate,
 } from '@core/types';
 import type { Result } from '@core/result';
@@ -18,9 +19,17 @@ import { HOOK_PHASE_BUDGET_MS } from '../../constants';
  * Abstraction for running a single hook.
  * Implemented by ui/adapters (command → ProcessSpawner, vscodeTask → tasks.executeTask).
  */
+export interface HookExecutionRequest {
+  parent: OperationContext;
+  phase: HookPhase;
+  event: HookEvent;
+  hook: HookConfig;
+  targetDeploymentId?: DeploymentId;
+}
+
 export interface HookExecutor {
-  runCommand(hook: HookConfig): Promise<Result<void, JsmError>>;
-  runVscodeTask(hook: HookConfig): Promise<Result<void, JsmError>>;
+  runCommand(request: HookExecutionRequest): Promise<Result<void, JsmError>>;
+  runVscodeTask(request: HookExecutionRequest): Promise<Result<void, JsmError>>;
 }
 
 // ── Hook Result ─────────────────────────────────────────────────────────────
@@ -32,9 +41,18 @@ export interface HookRunResult {
   errors: JsmError[];
 }
 
+export interface HookRunArgs {
+  parent: OperationContext;
+  phase: HookPhase;
+  event: HookEvent;
+  hooks: readonly HookConfig[];
+  targetDeploymentId?: DeploymentId;
+}
+
 /**
- * Config-driven hook execution (§10.6).
- * Enforces per-hook timeout, phase aggregate budget (120s), and continueOnError.
+ * Config-driven hook execution as a subordinate phase of a parent operation.
+ * Enforces per-hook timeout, phase aggregate budget, parent-operation budget,
+ * and continueOnError semantics.
  */
 export class HookRunner {
   private readonly executor: HookExecutor;
@@ -50,14 +68,9 @@ export class HookRunner {
   /**
    * Run all hooks matching the given phase and event.
    * Merges server-level and deployment-level hooks.
-   * Respects `enabled`, `continueOnError`, and phase budget.
+   * Respects `enabled`, `continueOnError`, parent cancellation, and time budgets.
    */
-  async runHooks(
-    serverId: ServerId,
-    phase: HookPhase,
-    event: HookEvent,
-    hooks: readonly HookConfig[],
-  ): Promise<Result<HookRunResult, JsmError>> {
+  async runHooks(args: HookRunArgs): Promise<Result<HookRunResult, JsmError>> {
     if (this.trustGate && !this.trustGate.isTrusted()) {
       return err(new JsmError({
         code: ErrorCode.WorkspaceUntrusted,
@@ -65,7 +78,8 @@ export class HookRunner {
       }));
     }
 
-    const matching = hooks.filter(h => h.enabled && h.phase === phase && h.event === event);
+    const { parent, phase, event } = args;
+    const matching = args.hooks.filter(h => h.enabled && h.phase === phase && h.event === event);
 
     const result: HookRunResult = {
       executed: 0,
@@ -80,35 +94,62 @@ export class HookRunner {
 
     const phaseStart = Date.now();
 
-    for (const hook of matching) {
-      // Check phase budget (§10.6: 120s aggregate)
-      const elapsed = Date.now() - phaseStart;
-      if (elapsed >= HOOK_PHASE_BUDGET_MS) {
-        this.logger.warn(
-          `HookRunner[${serverId}]: phase budget exceeded (${elapsed}ms >= ${HOOK_PHASE_BUDGET_MS}ms), skipping remaining hooks`,
+    for (let index = 0; index < matching.length; index++) {
+      const hook = matching[index];
+      const remainingHooks = matching.length - index;
+
+      if (parent.cancel.isCancelled) {
+        this.logger.info(
+          `HookRunner[${parent.serverId}]: parent operation '${parent.kind}' cancelled, skipping remaining hooks for ${event}`,
         );
-        result.skipped += matching.length - result.executed - result.failed;
+        parent.output.appendLine(`Skipping ${remainingHooks} hook(s) for ${event}: parent operation cancelled.`);
+        result.skipped += remainingHooks;
         break;
       }
 
-      const hookResult = await this.executeOneHook(hook);
+      const elapsed = Date.now() - phaseStart;
+      const remainingPhaseBudget = HOOK_PHASE_BUDGET_MS - elapsed;
+      if (remainingPhaseBudget <= 0) {
+        this.logger.warn(
+          `HookRunner[${parent.serverId}]: phase budget exceeded (${elapsed}ms >= ${HOOK_PHASE_BUDGET_MS}ms), skipping remaining hooks`,
+        );
+        parent.output.appendLine(`Skipping ${remainingHooks} hook(s) for ${event}: phase budget exceeded.`);
+        result.skipped += remainingHooks;
+        break;
+      }
+
+      const remainingParentBudget = this.remainingParentBudgetMs(parent);
+      const requestedTimeoutMs = hook.timeoutMs || 60_000;
+      const effectiveTimeoutMs = Math.min(
+        requestedTimeoutMs,
+        remainingPhaseBudget,
+        remainingParentBudget,
+      );
+
+      if (effectiveTimeoutMs <= 0) {
+        const timeoutError = new JsmError({
+          code: ErrorCode.Timeout,
+          message: `Hook '${hook.id}' timed out before it could start within the parent operation budget`,
+        });
+        return this.handleHookFailure(result, matching.length, index, hook, timeoutError);
+      }
+
+      parent.output.appendLine(`Running hook '${hook.id}' (${phase} ${event})`);
+      const hookResult = await this.executeOneHook({
+        parent,
+        phase,
+        event,
+        hook,
+        targetDeploymentId: args.targetDeploymentId ?? parent.targetDeploymentId,
+      }, effectiveTimeoutMs);
 
       if (hookResult.ok) {
         result.executed++;
       } else {
-        result.failed++;
-        result.errors.push(hookResult.error);
-        this.logger.warn(`HookRunner[${serverId}]: hook '${hook.id}' failed`, hookResult.error);
-
-        if (!hook.continueOnError) {
-          // Remaining hooks are skipped
-          const remaining = matching.length - result.executed - result.failed;
-          result.skipped += remaining;
-          return err(new JsmError({
-            code: ErrorCode.HookFailed,
-            message: `Hook '${hook.id}' failed and continueOnError is false`,
-            cause: hookResult.error,
-          }));
+        parent.output.appendLine(`Hook '${hook.id}' failed: ${hookResult.error.message}`);
+        const failure = this.handleHookFailure(result, matching.length, index, hook, hookResult.error);
+        if (!failure.ok) {
+          return failure;
         }
       }
     }
@@ -119,24 +160,52 @@ export class HookRunner {
   /**
    * Execute a single hook with its per-hook timeout.
    */
-  private async executeOneHook(hook: HookConfig): Promise<Result<void, JsmError>> {
-    const timeoutMs = hook.timeoutMs || 60_000;
-
+  private async executeOneHook(
+    request: HookExecutionRequest,
+    timeoutMs: number,
+  ): Promise<Result<void, JsmError>> {
     try {
       const resultPromise =
-        hook.kind === 'command'
-          ? this.executor.runCommand(hook)
-          : this.executor.runVscodeTask(hook);
+        request.hook.kind === 'command'
+          ? this.executor.runCommand(request)
+          : this.executor.runVscodeTask(request);
 
       const result = await Promise.race([
         resultPromise,
-        this.timeoutPromise(timeoutMs, hook.id),
+        this.timeoutPromise(timeoutMs, request.hook.id),
       ]);
 
       return result;
     } catch (cause) {
       return err(cause instanceof JsmError ? cause : JsmError.fromUnknown(cause));
     }
+  }
+
+  private handleHookFailure(
+    result: HookRunResult,
+    totalHooks: number,
+    index: number,
+    hook: HookConfig,
+    error: JsmError,
+  ): Result<HookRunResult, JsmError> {
+    result.failed++;
+    result.errors.push(error);
+    this.logger.warn(`HookRunner: hook '${hook.id}' failed`, error);
+
+    if (hook.continueOnError) {
+      return ok(result);
+    }
+
+    result.skipped += totalHooks - index - 1;
+    return err(new JsmError({
+      code: ErrorCode.HookFailed,
+      message: `Hook '${hook.id}' failed and continueOnError is false`,
+      cause: error,
+    }));
+  }
+
+  private remainingParentBudgetMs(parent: OperationContext): number {
+    return Math.max(0, parent.timeoutMs - (Date.now() - parent.startedAt));
   }
 
   private timeoutPromise(ms: number, hookId: string): Promise<Result<void, JsmError>> {

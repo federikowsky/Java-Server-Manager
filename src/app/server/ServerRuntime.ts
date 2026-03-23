@@ -15,7 +15,7 @@ const TRANSITIONS: Record<ServerState, ReadonlySet<ServerState>> = {
   stopped:  new Set<ServerState>(['starting']),
   starting: new Set<ServerState>(['running', 'error', 'stopped']),
   running:  new Set<ServerState>(['stopping', 'error']),
-  stopping: new Set<ServerState>(['stopped']),
+  stopping: new Set<ServerState>(['stopped', 'error']),
   error:    new Set<ServerState>(['starting', 'stopped']),
 };
 

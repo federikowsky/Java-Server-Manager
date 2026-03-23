@@ -89,16 +89,20 @@ describe('ConfigService', () => {
   let validator: ReturnType<typeof mockValidator>;
   let bus: ReturnType<typeof mockBus>;
   let service: ConfigService;
+  let trustGate: { isTrusted: ReturnType<typeof vi.fn> };
 
   beforeEach(() => {
     repo = mockRepo();
     validator = mockValidator();
     bus = mockBus();
+    trustGate = { isTrusted: vi.fn(() => true) };
     service = new ConfigService({
       repo: repo as never,
       validator: validator as never,
       bus: bus as never,
       logger: mockLogger(),
+      workspaceFolderUri: 'file:///ws',
+      trustGate,
     });
   });
 
@@ -155,7 +159,10 @@ describe('ConfigService', () => {
       expect(result.ok).toBe(true);
       expect(validator.validate).toHaveBeenCalledWith(srv, 'server-config');
       expect(repo.save).toHaveBeenCalledWith(srv);
-      expect(bus.emit).toHaveBeenCalledWith('ServerAdded', { serverId: 'srv-1' });
+      expect(bus.emit).toHaveBeenCalledWith('ServerAdded', {
+        serverId: 'srv-1',
+        workspaceFolderUri: 'file:///ws',
+      });
     });
 
     it('rejects duplicate id', async () => {
@@ -204,6 +211,53 @@ describe('ConfigService', () => {
     });
   });
 
+  describe('trust enforcement', () => {
+    beforeEach(() => {
+      trustGate.isTrusted.mockReturnValue(false);
+    });
+
+    it('blocks server inventory writes when workspace is untrusted', async () => {
+      repo._seed(makeServer());
+
+      const addResult = await service.addServer(makeServer('srv-2'));
+      const updateResult = await service.updateServer(makeServer());
+      const removeResult = await service.removeServer('srv-1');
+
+      expect(addResult.ok).toBe(false);
+      expect(updateResult.ok).toBe(false);
+      expect(removeResult.ok).toBe(false);
+      expect(repo.save).not.toHaveBeenCalled();
+      expect(repo.delete).not.toHaveBeenCalled();
+      expect(bus.emit).not.toHaveBeenCalled();
+
+      for (const result of [addResult, updateResult, removeResult]) {
+        if (!result.ok) {
+          expect(result.error.code).toBe(ErrorCode.WorkspaceUntrusted);
+        }
+      }
+    });
+
+    it('blocks deployment config writes when workspace is untrusted', async () => {
+      const server = makeServer();
+      server.deployments = [makeDeployment()];
+      repo._seed(server);
+
+      const addResult = await service.addDeployment('srv-1', makeDeployment('dep-2'));
+      const removeResult = await service.removeDeployment('srv-1', 'dep-1');
+
+      expect(addResult.ok).toBe(false);
+      expect(removeResult.ok).toBe(false);
+      expect(repo.save).not.toHaveBeenCalled();
+      expect(bus.emit).not.toHaveBeenCalled();
+
+      for (const result of [addResult, removeResult]) {
+        if (!result.ok) {
+          expect(result.error.code).toBe(ErrorCode.WorkspaceUntrusted);
+        }
+      }
+    });
+  });
+
   /* ── updateServer ────────────────────────────────────────────────────── */
 
   describe('updateServer', () => {
@@ -213,7 +267,10 @@ describe('ConfigService', () => {
       const result = await service.updateServer(updated);
 
       expect(result.ok).toBe(true);
-      expect(bus.emit).toHaveBeenCalledWith('ServerUpdated', { serverId: 'srv-1' });
+      expect(bus.emit).toHaveBeenCalledWith('ServerUpdated', {
+        serverId: 'srv-1',
+        workspaceFolderUri: 'file:///ws',
+      });
     });
 
     it('rejects unknown server', async () => {
@@ -241,7 +298,10 @@ describe('ConfigService', () => {
 
       expect(result.ok).toBe(true);
       expect(repo.delete).toHaveBeenCalledWith('srv-1');
-      expect(bus.emit).toHaveBeenCalledWith('ServerDeleted', { serverId: 'srv-1' });
+      expect(bus.emit).toHaveBeenCalledWith('ServerDeleted', {
+        serverId: 'srv-1',
+        workspaceFolderUri: 'file:///ws',
+      });
     });
 
     it('rejects unknown server', async () => {
@@ -268,7 +328,11 @@ describe('ConfigService', () => {
       const result = await service.addDeployment('srv-1', dep);
 
       expect(result.ok).toBe(true);
-      expect(bus.emit).toHaveBeenCalledWith('DeploymentAdded', { serverId: 'srv-1', deploymentId: 'dep-1' });
+      expect(bus.emit).toHaveBeenCalledWith('DeploymentAdded', {
+        serverId: 'srv-1',
+        deploymentId: 'dep-1',
+        workspaceFolderUri: 'file:///ws',
+      });
       // repo.save should have received the updated config with the deployment
       const savedCfg = repo.save.mock.calls[0][0] as ServerConfig;
       expect(savedCfg.deployments).toHaveLength(1);
@@ -301,7 +365,11 @@ describe('ConfigService', () => {
       const result = await service.removeDeployment('srv-1', 'dep-1');
 
       expect(result.ok).toBe(true);
-      expect(bus.emit).toHaveBeenCalledWith('DeploymentRemoved', { serverId: 'srv-1', deploymentId: 'dep-1' });
+      expect(bus.emit).toHaveBeenCalledWith('DeploymentRemoved', {
+        serverId: 'srv-1',
+        deploymentId: 'dep-1',
+        workspaceFolderUri: 'file:///ws',
+      });
       const savedCfg = repo.save.mock.calls[0][0] as ServerConfig;
       expect(savedCfg.deployments).toHaveLength(0);
     });
@@ -333,7 +401,10 @@ describe('ConfigService', () => {
       const result = await service.reload();
 
       expect(result.ok).toBe(true);
-      expect(bus.emit).toHaveBeenCalledWith('ConfigChanged', { source: 'external' });
+      expect(bus.emit).toHaveBeenCalledWith('ConfigChanged', {
+        source: 'external',
+        workspaceFolderUri: 'file:///ws',
+      });
     });
 
     it('does not emit when reload fails', async () => {

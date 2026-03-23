@@ -274,25 +274,10 @@ vi.mock('@ui/tree', () => ({
   },
 }));
 
-// Panels
-vi.mock('@ui/webviews/panels/ServerFormPanel', () => ({
-  ServerFormPanel: class {
-    open = vi.fn();
-    dispose = vi.fn();
-  },
-}));
-vi.mock('@ui/webviews/panels/DeploymentFormPanel', () => ({
-  DeploymentFormPanel: class {
-    open = vi.fn();
-    dispose = vi.fn();
-  },
-}));
-
 // Commands
 vi.mock('@ui/commands', () => ({
   registerServerCommands: vi.fn(() => [{ dispose: vi.fn() }]),
   registerDeploymentCommands: vi.fn(() => [{ dispose: vi.fn() }]),
-  registerTemplateCommands: vi.fn(() => [{ dispose: vi.fn() }]),
 }));
 
 // SchemaValidator

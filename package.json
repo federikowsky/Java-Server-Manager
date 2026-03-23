@@ -333,21 +333,6 @@
     "configuration": {
       "title": "Java Server Manager",
       "properties": {
-        "jsm.autoDiscovery.enabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "Enable automatic server discovery on startup."
-        },
-        "jsm.autoDiscovery.scanEnvVars": {
-          "type": "boolean",
-          "default": true,
-          "description": "Scan environment variables (CATALINA_HOME, TOMCAT_HOME, etc.) for server installations."
-        },
-        "jsm.autoDiscovery.scanCommonPaths": {
-          "type": "boolean",
-          "default": true,
-          "description": "Scan common installation paths (/opt/tomcat, /usr/local/tomcat, etc.)."
-        },
         "jsm.defaults.httpPort": {
           "type": "number",
           "default": 8080,
@@ -393,7 +378,8 @@
     "test:watch": "vitest",
     "release:preflight": "node tools/release/preflight.mjs",
     "release:verify": "node tools/release/verify-marketplace.mjs",
-    "release:verify:openvsx": "node tools/release/verify-openvsx.mjs"
+    "release:verify:openvsx": "node tools/release/verify-openvsx.mjs",
+    "release:prepare": "node tools/release/prepare-release.mjs"
   },
   "devDependencies": {
     "@types/glob": "^8.1.0",

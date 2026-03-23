@@ -60,26 +60,10 @@ export function sendCancel(): void {
   postToHost({ v: WEBVIEW_PROTOCOL_VERSION, command: 'cancel' });
 }
 
-export function sendLoadData(id?: string): void {
-  postToHost({ v: WEBVIEW_PROTOCOL_VERSION, command: 'loadData', id });
-}
-
-export function sendRequestDefaults(pluginType: string): void {
-  postToHost({ v: WEBVIEW_PROTOCOL_VERSION, command: 'requestDefaults', pluginType });
-}
-
 // ── SPA Command Helpers ─────────────────────────────────────────────────────
 
 export function sendExecuteCommand(id: string, args?: unknown[], requestId?: string): void {
   postToHost({ v: WEBVIEW_PROTOCOL_VERSION, command: 'executeCommand', id, args, requestId });
-}
-
-export function sendUpdateServer(serverId: string, config: unknown, workspaceFolderUri: string): void {
-  postToHost({ v: WEBVIEW_PROTOCOL_VERSION, command: 'updateServer', serverId, config, workspaceFolderUri });
-}
-
-export function sendCreateServer(config: unknown, workspaceFolderUri: string): void {
-  postToHost({ v: WEBVIEW_PROTOCOL_VERSION, command: 'createServer', config, workspaceFolderUri });
 }
 
 export function sendDeleteServer(serverId: string, workspaceFolderUri: string): void {

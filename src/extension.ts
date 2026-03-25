@@ -402,7 +402,7 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
       const serverKey = makeWorkspaceServerKey(workspaceFolderUri, serverId);
       lifecycle.unregister(serverKey);
       logChannel.detach(serverKey);
-      autoSyncService.suspend(serverKey);
+      autoSyncService.purgeServerWatchState(serverKey);
       treeProvider.requestRefresh();
     }),
     eventBus.on('DeploymentAdded', ({ serverId, workspaceFolderUri }) => {
@@ -448,6 +448,7 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
         if (config) autoSyncService.rebindWatchers(serverId, config);
       } else if (state === 'stopped' || state === 'error') {
         autoSyncService.suspend(serverId);
+        autoSyncService.disable(serverId);
       }
 
       treeProvider.requestRefresh();

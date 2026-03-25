@@ -291,7 +291,7 @@
         },
         {
           "command": "jsm.deployment.toggleAutosync",
-          "when": "view == javaServerManagerView && viewItem =~ /jsm\\.deployment\\.exploded\\..*/",
+          "when": "view == javaServerManagerView && viewItem =~ /jsm\\.deployment\\.(exploded|war)\\..*/",
           "group": "autosync@1"
         },
         {

@@ -199,4 +199,42 @@ describe('AutoSyncService', () => {
     service.rebindWatchers('s1', config);
     expect(watcherFactory.watch).toHaveBeenCalledTimes(2);
   });
+
+  it('rebindWatchers clears suspend so sync works after stop-style suspend+disable', () => {
+    const config = makeConfig();
+    service.enable(config);
+    service.suspend('s1');
+    service.disable('s1');
+
+    service.rebindWatchers('s1', config);
+    expect(watcherFactory.watch).toHaveBeenCalledTimes(2);
+
+    const change: FileChange = {
+      type: 'change',
+      path: '/src/app/Main.java',
+      relativePath: 'Main.java',
+      sizeBytes: 10,
+    };
+    capturedOnChange!(change);
+    vi.advanceTimersByTime(500);
+    expect(onSyncRequest).toHaveBeenCalledOnce();
+  });
+
+  it('purgeServerWatchState removes watchers and clears suspend for a later enable', () => {
+    const config = makeConfig();
+    service.enable(config);
+    service.suspend('s1');
+    service.purgeServerWatchState('s1');
+
+    service.enable(config);
+    const change: FileChange = {
+      type: 'change',
+      path: '/src/app/Main.java',
+      relativePath: 'Main.java',
+      sizeBytes: 10,
+    };
+    capturedOnChange!(change);
+    vi.advanceTimersByTime(500);
+    expect(onSyncRequest).toHaveBeenCalledOnce();
+  });
 });

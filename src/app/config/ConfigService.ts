@@ -15,6 +15,10 @@ import type { ConfigRepo } from '@infra/fs/ConfigRepo';
 import { requireWorkspaceTrust, validateSecurityPolicy } from '@core/policy';
 import type { TrustGate } from '@core/types/runtime';
 
+function deploymentPersistedChanged(before: DeploymentConfig, after: DeploymentConfig): boolean {
+  return JSON.stringify(before) !== JSON.stringify(after);
+}
+
 /**
  * Application-level config service (§5.5).
  * Orchestrates ConfigRepo + SchemaValidator + EventBus for server CRUD.
@@ -100,7 +104,8 @@ export class ConfigService {
     const trustResult = requireWorkspaceTrust(this.trustGate, 'modify server inventory');
     if (!trustResult.ok) return trustResult;
 
-    if (!this.repo.get(config.id)) {
+    const previous = this.repo.get(config.id);
+    if (!previous) {
       return err(new JsmError({
         code: ErrorCode.InvalidConfig,
         message: `Server '${config.id}' not found`,
@@ -117,6 +122,16 @@ export class ConfigService {
     if (!saveResult.ok) return saveResult;
 
     this.bus.emit('ServerUpdated', { serverId: config.id, workspaceFolderUri: this.workspaceFolderUri });
+    for (const dep of config.deployments) {
+      const prevDep = previous.deployments.find(d => d.id === dep.id);
+      if (prevDep !== undefined && deploymentPersistedChanged(prevDep, dep)) {
+        this.bus.emit('DeploymentUpdated', {
+          serverId: config.id,
+          deploymentId: dep.id,
+          workspaceFolderUri: this.workspaceFolderUri,
+        });
+      }
+    }
     this.logger.info(`ConfigService: updated server '${config.name}'`);
     return ok(undefined);
   }

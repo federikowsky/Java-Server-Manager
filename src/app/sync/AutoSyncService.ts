@@ -113,8 +113,10 @@ export class AutoSyncService {
   /**
    * Drop all watchers for this server and recreate from `config`.
    * Use after persisted config changes while the server is running so paths/syncMode stay aligned.
+   * Clears {@link suspended} first so file events are not ignored after a prior stop/error.
    */
   rebindWatchers(serverKey: ServerId, config: ServerConfig): void {
+    this.resume(serverKey);
     this.disable(serverKey);
     this.enable(config, serverKey);
   }
@@ -149,6 +151,15 @@ export class AutoSyncService {
   resume(serverId: ServerId): void {
     this.suspended.delete(serverId);
     this.logger.debug(`AutoSyncService: resumed '${serverId}'`);
+  }
+
+  /**
+   * Tear down watchers and clear suspend state when a server is removed from config.
+   * Prefer this over {@link suspend} alone so the suspended set does not retain stale keys.
+   */
+  purgeServerWatchState(serverId: ServerId): void {
+    this.disable(serverId);
+    this.suspended.delete(serverId);
   }
 
   /** Record a sync failure for cooldown tracking (§10.5). */

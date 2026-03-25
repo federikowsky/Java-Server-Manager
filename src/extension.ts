@@ -276,6 +276,9 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
     deployService,
   });
 
+  // Forward ref: onSyncRequest runs inside AutoSyncService ctor and must call recordFailure on sync errors.
+  const autoSyncRef: { current?: InstanceType<typeof AutoSyncService> } = {};
+
   const autoSyncService = new AutoSyncService({
     bus: eventBus,
     watcherFactory: fileWatcherAdapter,
@@ -307,9 +310,17 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
         progress: { report: () => {} },
         output: { append: () => {}, appendLine: () => {}, clear: () => {} },
       };
-      await deployService.sync(opCtx, config, deployment, batch);
+      try {
+        const result = await deployService.sync(opCtx, config, deployment, batch);
+        if (!result.ok) {
+          autoSyncRef.current?.recordFailure(serverId, _deploymentId);
+        }
+      } catch {
+        autoSyncRef.current?.recordFailure(serverId, _deploymentId);
+      }
     },
   });
+  autoSyncRef.current = autoSyncService;
   disposables.push(autoSyncService);
 
   const templateService = new TemplateService({

@@ -302,6 +302,14 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
   autoSyncRef.current = autoSyncService;
   disposables.push(autoSyncService);
 
+  /** Recreate autosync watchers from latest saved config when the server is running. */
+  function refreshAutosyncIfRunning(serverKey: ServerId): void {
+    if (lifecycle.getRuntime(serverKey)?.getState().state !== 'running') return;
+    const cfg = workspaceServiceRegistry.getServerRecordByKey(serverKey)?.config;
+    if (!cfg) return;
+    autoSyncService.rebindWatchers(serverKey, cfg);
+  }
+
   const templateService = new TemplateService({
     globalStore,
     workspaceStore,
@@ -383,8 +391,10 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
     }),
     eventBus.on('ServerUpdated', ({ serverId, workspaceFolderUri }) => {
       const config = workspaceServiceRegistry.getServer({ workspaceFolderUri, serverId });
+      const serverKey = makeWorkspaceServerKey(workspaceFolderUri, serverId);
       if (config) {
-        lifecycle.updateConfig(makeWorkspaceServerKey(workspaceFolderUri, serverId), config);
+        lifecycle.updateConfig(serverKey, config);
+        refreshAutosyncIfRunning(serverKey);
       }
       treeProvider.requestRefresh();
     }),
@@ -397,22 +407,28 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
     }),
     eventBus.on('DeploymentAdded', ({ serverId, workspaceFolderUri }) => {
       const config = workspaceServiceRegistry.getServer({ workspaceFolderUri, serverId });
+      const serverKey = makeWorkspaceServerKey(workspaceFolderUri, serverId);
       if (config) {
-        lifecycle.updateConfig(makeWorkspaceServerKey(workspaceFolderUri, serverId), config);
+        lifecycle.updateConfig(serverKey, config);
+        refreshAutosyncIfRunning(serverKey);
       }
       treeProvider.requestRefresh();
     }),
     eventBus.on('DeploymentUpdated', ({ serverId, workspaceFolderUri }) => {
       const config = workspaceServiceRegistry.getServer({ workspaceFolderUri, serverId });
+      const serverKey = makeWorkspaceServerKey(workspaceFolderUri, serverId);
       if (config) {
-        lifecycle.updateConfig(makeWorkspaceServerKey(workspaceFolderUri, serverId), config);
+        lifecycle.updateConfig(serverKey, config);
+        refreshAutosyncIfRunning(serverKey);
       }
       treeProvider.requestRefresh();
     }),
     eventBus.on('DeploymentRemoved', ({ serverId, workspaceFolderUri }) => {
       const config = workspaceServiceRegistry.getServer({ workspaceFolderUri, serverId });
+      const serverKey = makeWorkspaceServerKey(workspaceFolderUri, serverId);
       if (config) {
-        lifecycle.updateConfig(makeWorkspaceServerKey(workspaceFolderUri, serverId), config);
+        lifecycle.updateConfig(serverKey, config);
+        refreshAutosyncIfRunning(serverKey);
       }
       treeProvider.requestRefresh();
     }),
@@ -429,7 +445,7 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
         const channel = logChannel.getChannel(serverId, name);
         channel.clear();
         logChannel.showLogs(serverId, name);
-        if (config) autoSyncService.enable(config, serverId);
+        if (config) autoSyncService.rebindWatchers(serverId, config);
       } else if (state === 'stopped' || state === 'error') {
         autoSyncService.suspend(serverId);
       }

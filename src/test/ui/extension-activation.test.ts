@@ -213,6 +213,7 @@ vi.mock('@app/deployment', () => ({
 vi.mock('@app/sync', () => ({
   AutoSyncService: class {
     enable = vi.fn();
+    rebindWatchers = vi.fn();
     suspend = mockAutoSyncSuspend;
     dispose = vi.fn();
   },

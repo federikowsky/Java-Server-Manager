@@ -190,4 +190,13 @@ describe('AutoSyncService', () => {
     service.enable(config);
     expect(watcherFactory.watch).toHaveBeenCalledTimes(2);
   });
+
+  it('rebindWatchers disables then enables (fresh watch registration)', () => {
+    const config = makeConfig();
+    service.enable(config);
+    expect(watcherFactory.watch).toHaveBeenCalledOnce();
+
+    service.rebindWatchers('s1', config);
+    expect(watcherFactory.watch).toHaveBeenCalledTimes(2);
+  });
 });

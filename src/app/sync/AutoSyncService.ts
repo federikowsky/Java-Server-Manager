@@ -110,6 +110,15 @@ export class AutoSyncService {
     }
   }
 
+  /**
+   * Drop all watchers for this server and recreate from `config`.
+   * Use after persisted config changes while the server is running so paths/syncMode stay aligned.
+   */
+  rebindWatchers(serverKey: ServerId, config: ServerConfig): void {
+    this.disable(serverKey);
+    this.enable(config, serverKey);
+  }
+
   /** Disable autosync for all deployments of a server. */
   disable(serverId: ServerId): void {
     const prefix = `${serverId}::`;

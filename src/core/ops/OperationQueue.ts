@@ -17,6 +17,8 @@ const PRIORITY: Record<OperationKind, number> = {
   SyncAll:            3,
   RedeployAll:        3,
   Undeploy:           3,
+  DeployUndeployed:   3,
+  RunDeploymentHealthChecks: 3,
   StatusRefresh:      3,
 };
 
@@ -190,6 +192,9 @@ export class OperationQueue {
   private running: QueueEntry | null = null;
   private executor: Executor | null = null;
   private draining = false;
+  private readonly idleWaiters: Array<() => void> = [];
+  /** First executor error in the current drain pass; cleared when read after idle. */
+  private drainFailure: unknown = undefined;
 
   constructor(serverId: ServerId, logger: Logger) {
     this.serverId = serverId;
@@ -243,6 +248,16 @@ export class OperationQueue {
     this.pending.length = 0;
   }
 
+  /**
+   * Returns the first error thrown by the executor during the last completed drain pass, then clears it.
+   * Call after `waitUntilIdle` resolves to surface failures to UI.
+   */
+  getAndClearDrainFailure(): unknown | undefined {
+    const e = this.drainFailure;
+    this.drainFailure = undefined;
+    return e;
+  }
+
   /** Whether an operation is currently executing. */
   get isRunning(): boolean {
     return this.running !== null;
@@ -258,11 +273,38 @@ export class OperationQueue {
     return this.running?.kind ?? null;
   }
 
+  /** True when no operation is running and nothing is pending. */
+  get isIdle(): boolean {
+    return !this.draining && this.running === null && this.pending.length === 0;
+  }
+
+  /**
+   * Resolves when the queue finishes draining (no running op, no pending).
+   * Safe to call when already idle.
+   */
+  waitUntilIdle(): Promise<void> {
+    if (this.isIdle) {
+      return Promise.resolve();
+    }
+    return new Promise(resolve => {
+      this.idleWaiters.push(resolve);
+    });
+  }
+
   // ── Internal ────────────────────────────────────────────────────────────
+
+  private flushIdleWaiters(): void {
+    if (!this.isIdle) return;
+    const waiters = this.idleWaiters.splice(0);
+    for (const w of waiters) {
+      w();
+    }
+  }
 
   private async drain(): Promise<void> {
     if (this.draining || !this.executor) return;
     this.draining = true;
+    this.drainFailure = undefined;
     try {
       while (this.pending.length > 0) {
         const entry = this.pending.shift()!;
@@ -271,12 +313,16 @@ export class OperationQueue {
           await this.executor(entry);
         } catch (err) {
           this.logger.error(`Queue[${this.serverId}]: executor error for ${entry.kind}`, err);
+          if (this.drainFailure === undefined) {
+            this.drainFailure = err;
+          }
         } finally {
           this.running = null;
         }
       }
     } finally {
       this.draining = false;
+      this.flushIdleWaiters();
     }
   }
 }

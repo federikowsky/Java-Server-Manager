@@ -328,6 +328,7 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
     })),
     getServers: (workspaceFolderUri: string) => workspaceServiceRegistry.getServers(workspaceFolderUri),
     getRuntimeState: (sid: ServerId) => lifecycle.getRuntime(sid)?.getState(),
+    isQueueBusy: (sid: ServerId) => lifecycle.isQueueBusy(sid),
     getDeploymentState: (sid: ServerId, did: DeploymentId) =>
       deployService.getDeploymentState(sid, did),
     getDeploymentHealth: (sid: ServerId, did: DeploymentId) =>
@@ -339,6 +340,18 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
     showCollapseAll: true,
   });
   disposables.push(treeView);
+
+  disposables.push(
+    eventBus.on('OperationStarted', () => {
+      treeProvider.requestRefresh();
+    }),
+    eventBus.on('OperationCompleted', () => {
+      treeProvider.requestRefresh();
+    }),
+    eventBus.on('OperationFailed', () => {
+      treeProvider.requestRefresh();
+    }),
+  );
 
   const dashboardPanel = new DashboardPanel({
     extensionUri: ctx.extensionUri,
@@ -364,7 +377,6 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
       lifecycle,
       pluginRegistry,
       workspaceRegistry: workspaceServiceRegistry,
-      deployService,
       discoveryService,
       treeProvider,
       schemaValidator: validator,
@@ -372,7 +384,7 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
     ...registerDeploymentCommands({
       workspaceRegistry: workspaceServiceRegistry,
       pluginRegistry,
-      deployService,
+      lifecycle,
       treeProvider,
     }),
   );

@@ -27,6 +27,7 @@ export interface TreeDataSource {
   getWorkspaceFolders(): Array<{ workspaceFolderUri: string; workspaceFolderName: string }>;
   getServers(workspaceFolderUri: string): WorkspaceServerRecord[];
   getRuntimeState(serverKey: ServerId): ServerRuntimeState | undefined;
+  isQueueBusy?(serverKey: ServerId): boolean;
   getDeploymentState(serverKey: ServerId, deploymentId: DeploymentId): DeploymentState;
   getDeploymentHealth?(serverKey: ServerId, deploymentId: DeploymentId): HealthReport | undefined;
 }
@@ -58,6 +59,7 @@ export class ServerNode extends vscode.TreeItem {
     state: ServerState,
     showWorkspaceLabel = false,
     debugAttached = false,
+    queueBusy = false,
   ) {
     const normalizedRecord = 'config' in record
       ? record
@@ -87,7 +89,8 @@ export class ServerNode extends vscode.TreeItem {
     this.serverConfig = config;
     // Include debugAttached suffix for menu visibility
     const debugSuffix = debugAttached ? '.debugAttached' : '';
-    this.contextValue = `${SERVER_CONTEXT[state]}${debugSuffix}`;
+    const busySuffix = queueBusy ? '.opBusy' : '';
+    this.contextValue = `${SERVER_CONTEXT[state]}${debugSuffix}${busySuffix}`;
     // Generic SSL detection via pluginConfig (works for any plugin that supports SSL)
     const pluginConfig = config.pluginConfig as Record<string, unknown> | undefined;
     const ssl = pluginConfig?.ssl as { enabled?: boolean; port?: number } | undefined;
@@ -268,7 +271,14 @@ export class ServerTreeViewProvider
     return records.map(record => {
       const runtimeState = this.dataSource.getRuntimeState(record.serverKey);
       const state: ServerState = runtimeState?.state ?? 'stopped';
-      return new ServerNode(record, state, showWorkspaceLabel, runtimeState?.debugAttached ?? false);
+      const queueBusy = this.dataSource.isQueueBusy?.(record.serverKey) ?? false;
+      return new ServerNode(
+        record,
+        state,
+        showWorkspaceLabel,
+        runtimeState?.debugAttached ?? false,
+        queueBusy,
+      );
     });
   }
 

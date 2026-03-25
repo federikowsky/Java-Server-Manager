@@ -121,10 +121,17 @@ function createServerNodeWithWorkspace(
 function mockDeps() {
   return {
     lifecycle: {
-      start: vi.fn(),
-      stop: vi.fn(),
-      restart: vi.fn(),
+      start: vi.fn(() => ok(undefined)),
+      stop: vi.fn(() => ok(undefined)),
+      restart: vi.fn(() => ok(undefined)),
       cancel: vi.fn(),
+      enqueueDeployUndeployed: vi.fn(() => ok(undefined)),
+      enqueueRedeployAll: vi.fn(() => ok(undefined)),
+      enqueueRunDeploymentHealthChecks: vi.fn(() => ok(undefined)),
+      waitUntilQueueIdle: vi.fn(async () => {}),
+      getAndClearQueueDrainFailure: vi.fn(() => undefined),
+      refreshStatus: vi.fn(() => ok(undefined)),
+      getServerKeysInState: vi.fn(() => []),
     },
     pluginRegistry: {
       get: vi.fn(() => ({
@@ -144,9 +151,6 @@ function mockDeps() {
     },
     provisioningService: {
       removeServer: vi.fn(),
-    },
-    deployService: {
-      redeployAll: vi.fn(),
     },
     diagnosticsService: {
       generateBundleText: vi.fn(() => 'diag'),

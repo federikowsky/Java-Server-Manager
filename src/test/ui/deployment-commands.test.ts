@@ -124,9 +124,12 @@ function mockDeps() {
     pluginRegistry: {
       get: vi.fn(() => ({ getLogSources })),
     },
-    deployService: {
-      fullRedeploy: vi.fn(async () => ok(undefined)),
-      undeploy: vi.fn(async () => ok(undefined)),
+    lifecycle: {
+      enqueueDeployFull: vi.fn(() => ok(undefined)),
+      enqueueUndeploy: vi.fn(() => ok(undefined)),
+      cancel: vi.fn(),
+      waitUntilQueueIdle: vi.fn(async () => {}),
+      getAndClearQueueDrainFailure: vi.fn(() => undefined),
     },
     treeProvider: {
       requestRefresh: vi.fn(),
@@ -256,7 +259,7 @@ describe('Deployment Commands', () => {
       expect(deps.treeProvider.requestRefresh).not.toHaveBeenCalled();
     });
 
-    it('jsm.deployment.redeploy should call deployService.fullRedeploy', async () => {
+    it('jsm.deployment.redeploy should enqueue DeployFull on lifecycle', async () => {
       const dep = makeDeployment();
       const server = makeServer();
       server.deployments = [dep];
@@ -265,13 +268,13 @@ describe('Deployment Commands', () => {
       const node = createDeploymentNode('srv-1', dep);
       await invoke('jsm.deployment.redeploy', node);
 
-      expect(deps.deployService.fullRedeploy).toHaveBeenCalled();
+      expect(deps.lifecycle.enqueueDeployFull).toHaveBeenCalledWith('srv-1', 'dep-1');
       expect(mockShowInfoMessage).toHaveBeenCalledWith(
         expect.stringContaining('Redeploy completed'),
       );
     });
 
-    it('jsm.deployment.undeploy should call deployService.undeploy', async () => {
+    it('jsm.deployment.undeploy should enqueue Undeploy on lifecycle', async () => {
       const dep = makeDeployment();
       const server = makeServer();
       server.deployments = [dep];
@@ -280,7 +283,7 @@ describe('Deployment Commands', () => {
       const node = createDeploymentNode('srv-1', dep);
       await invoke('jsm.deployment.undeploy', node);
 
-      expect(deps.deployService.undeploy).toHaveBeenCalled();
+      expect(deps.lifecycle.enqueueUndeploy).toHaveBeenCalledWith('srv-1', 'dep-1');
       expect(mockShowInfoMessage).toHaveBeenCalledWith(
         expect.stringContaining('Undeployed'),
       );
@@ -401,7 +404,7 @@ describe('Deployment Commands', () => {
       deps.configService.getServer.mockReturnValue(undefined);
       const node = createDeploymentNode();
       await invoke('jsm.deployment.redeploy', node);
-      expect(deps.deployService.fullRedeploy).not.toHaveBeenCalled();
+      expect(deps.lifecycle.enqueueDeployFull).not.toHaveBeenCalled();
     });
 
     it('redeploy should silently return when deployment not found in server', async () => {
@@ -411,16 +414,16 @@ describe('Deployment Commands', () => {
 
       const node = createDeploymentNode();
       await invoke('jsm.deployment.redeploy', node);
-      expect(deps.deployService.fullRedeploy).not.toHaveBeenCalled();
+      expect(deps.lifecycle.enqueueDeployFull).not.toHaveBeenCalled();
     });
 
-    it('redeploy should show error when fullRedeploy fails', async () => {
+    it('redeploy should show error when queued deploy fails', async () => {
       const dep = makeDeployment();
       const server = makeServer();
       server.deployments = [dep];
       deps.configService.getServer.mockReturnValue(server);
-      deps.deployService.fullRedeploy.mockResolvedValue(
-        err(new JsmError({ code: ErrorCode.DeployFailed, message: 'Deploy error' })),
+      deps.lifecycle.getAndClearQueueDrainFailure.mockReturnValue(
+        new JsmError({ code: ErrorCode.DeployFailed, message: 'Deploy error' }),
       );
 
       const node = createDeploymentNode('srv-1', dep);

@@ -8,7 +8,7 @@ import type { Result } from '@core/result';
 import { JsmError } from '@core/errors/JsmError';
 import { ErrorCode } from '@core/errors/codes';
 import type { WorkspaceServiceRegistry } from '@app/config';
-import type { DeploymentService } from '@app/deployment/DeploymentService';
+import type { ServerLifecycle } from '@app/server/ServerLifecycle';
 import type { ServerTreeViewProvider } from '@ui/tree/ServerTreeViewProvider';
 import type { PluginRegistry } from '@plugins/registry/PluginRegistry';
 import type { LogSources } from '@plugins/interfaces/IServerPlugin';
@@ -19,7 +19,7 @@ import {
   isDeploymentNode,
   isServerNode,
   registerMany,
-  runWithOperationProgress,
+  runUntilQueueIdleWithProgressResult,
 } from './shared';
 
 // ── Dependency contract ─────────────────────────────────────────────────────
@@ -32,7 +32,7 @@ export interface DeploymentCommandsDeps {
     removeDeployment(serverId: string, deploymentId: string): Promise<Result<void, JsmError>>;
   };
   pluginRegistry: PluginRegistry;
-  deployService: DeploymentService;
+  lifecycle: ServerLifecycle;
   treeProvider: ServerTreeViewProvider;
 }
 
@@ -64,7 +64,7 @@ function nextSyncMode(current: SyncMode): SyncMode {
 export function registerDeploymentCommands(
   deps: DeploymentCommandsDeps,
 ): vscode.Disposable[] {
-  const { workspaceRegistry, configService, pluginRegistry, deployService, treeProvider } = deps;
+  const { workspaceRegistry, configService, pluginRegistry, lifecycle, treeProvider } = deps;
   const resolveServer = (workspaceFolderUri: string, serverId: string) => workspaceRegistry
     ? workspaceRegistry.getServer({ workspaceFolderUri, serverId })
     : configService?.getServer(serverId);
@@ -132,13 +132,19 @@ export function registerDeploymentCommands(
       const config = resolveServer(arg.workspaceFolderUri, arg.serverId);
       const dep = config?.deployments.find((d: DeploymentConfig) => d.id === arg.deploymentId);
       if (!config || !dep) return;
-      const result = await runWithOperationProgress({
-        title: `Redeploying ${dep.deployName}...`,
-        serverId: arg.serverKey,
-        kind: 'DeployFull',
-        targetDeploymentId: arg.deploymentId,
-      }, async ctx => deployService.fullRedeploy(ctx, config, dep));
-      if (!result.ok) { showErr(result.error); return; }
+      const enq = lifecycle.enqueueDeployFull(arg.serverKey, arg.deploymentId);
+      if (!enq.ok) {
+        showErr(enq.error);
+        return;
+      }
+      const done = await runUntilQueueIdleWithProgressResult(
+        { title: `Redeploying ${dep.deployName}...`, serverKey: arg.serverKey },
+        lifecycle,
+      );
+      if (!done.ok) {
+        showErr(done.error);
+        return;
+      }
       showSuccess(`Redeploy completed for "${dep.deployName}".`);
     }],
 
@@ -148,13 +154,19 @@ export function registerDeploymentCommands(
       const config = resolveServer(arg.workspaceFolderUri, arg.serverId);
       const dep = config?.deployments.find((d: DeploymentConfig) => d.id === arg.deploymentId);
       if (!config || !dep) return;
-      const result = await runWithOperationProgress({
-        title: `Undeploying ${dep.deployName}...`,
-        serverId: arg.serverKey,
-        kind: 'Undeploy',
-        targetDeploymentId: arg.deploymentId,
-      }, async ctx => deployService.undeploy(ctx, config, dep));
-      if (!result.ok) { showErr(result.error); return; }
+      const enq = lifecycle.enqueueUndeploy(arg.serverKey, arg.deploymentId);
+      if (!enq.ok) {
+        showErr(enq.error);
+        return;
+      }
+      const done = await runUntilQueueIdleWithProgressResult(
+        { title: `Undeploying ${dep.deployName}...`, serverKey: arg.serverKey },
+        lifecycle,
+      );
+      if (!done.ok) {
+        showErr(done.error);
+        return;
+      }
       showSuccess(`Undeployed "${dep.deployName}".`);
     }],
 

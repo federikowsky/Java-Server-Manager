@@ -9,6 +9,19 @@ The format follows Keep a Changelog and this project adheres to Semantic Version
 ### Added
 - ongoing improvements after the first public beta release
 
+## [0.1.2] - 2026-03-25
+
+### Autosync
+
+- File-change batches are submitted through the per-server operation queue on `ServerLifecycle` (`enqueueDeploySync`) instead of bypassing core orchestration.
+- When a sync cannot be enqueued or the queue executor reports a deploy-sync failure, `AutoSyncService.recordFailure` runs so storm protection and failure-window cooldown behave as intended.
+
+### Unified per-server operation queue (tree and commands)
+
+- Tree-driven server lifecycle (start/stop/restart/debug), pre-start deploy of undeployed apps, redeploy-all, deployment redeploy/undeploy, and refresh-driven deployment health checks are scheduled on the same per-server `OperationQueue` under `ServerLifecycle`.
+- Progress notification **Cancel** calls `lifecycle.cancel` (aligned with **Cancel Operation** on busy servers), not a separate VS Code–only cancellation path.
+- The server tree exposes a busy context when the queue has work so cancel is discoverable; queue drain errors can surface back to the UI after the queue goes idle.
+
 ## [0.1.1] - 2026-03-18
 
 ### Summary

@@ -44,6 +44,8 @@ export type OperationKind =
   | 'SyncAll'
   | 'RedeployAll'
   | 'Undeploy'
+  | 'DeployUndeployed'
+  | 'RunDeploymentHealthChecks'
   | 'StatusRefresh';
 
 // ── Infrastructure Interfaces ───────────────────────────────────────────────

@@ -3,7 +3,7 @@
   "publisher": "federikowsky",
   "displayName": "Java Server Manager",
   "description": "Tomcat-first VS Code extension for managing local Java application servers.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -232,6 +232,11 @@
         {
           "command": "jsm.server.cancelOperation",
           "when": "view == javaServerManagerView && viewItem == jsm.server.stopping",
+          "group": "inline@1"
+        },
+        {
+          "command": "jsm.server.cancelOperation",
+          "when": "view == javaServerManagerView && viewItem =~ /jsm\\.server\\..*\\.opBusy/",
           "group": "inline@1"
         },
         {

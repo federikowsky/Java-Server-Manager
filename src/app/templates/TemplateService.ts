@@ -7,7 +7,8 @@ import type { Result } from '@core/result';
 import { ok, err } from '@core/result';
 import { JsmError } from '@core/errors/JsmError';
 import { ErrorCode } from '@core/errors/codes';
-import type { KeyValueStore } from '@core/types/runtime';
+import type { KeyValueStore, TrustGate } from '@core/types/runtime';
+import { requireWorkspaceTrust } from '@core/policy';
 
 const GLOBAL_TEMPLATES_KEY = 'jsm.templates.global';
 const WORKSPACE_TEMPLATES_KEY = 'jsm.templates.workspace';
@@ -27,15 +28,18 @@ export class TemplateService {
   private readonly globalStore: KeyValueStore;
   private readonly workspaceStore: KeyValueStore;
   private readonly logger: Logger;
+  private readonly trustGate?: TrustGate;
 
   constructor(deps: {
     globalStore: KeyValueStore;
     workspaceStore: KeyValueStore;
     logger: Logger;
+    trustGate?: TrustGate;
   }) {
     this.globalStore = deps.globalStore;
     this.workspaceStore = deps.workspaceStore;
     this.logger = deps.logger;
+    this.trustGate = deps.trustGate;
   }
 
   // ── Read ──────────────────────────────────────────────────────────
@@ -98,18 +102,30 @@ export class TemplateService {
     template: ServerTemplate,
     scope: 'global' | 'workspace',
   ): Promise<Result<void, JsmError>> {
-    const store = scope === 'global' ? this.globalStore : this.workspaceStore;
-    const key = scope === 'global' ? GLOBAL_TEMPLATES_KEY : WORKSPACE_TEMPLATES_KEY;
+    const trustResult = requireWorkspaceTrust(this.trustGate, 'modify templates');
+    if (!trustResult.ok) return trustResult;
+
+    const targetStore = scope === 'global' ? this.globalStore : this.workspaceStore;
+    const targetKey = scope === 'global' ? GLOBAL_TEMPLATES_KEY : WORKSPACE_TEMPLATES_KEY;
+    const otherStore = scope === 'global' ? this.workspaceStore : this.globalStore;
+    const otherKey = scope === 'global' ? WORKSPACE_TEMPLATES_KEY : GLOBAL_TEMPLATES_KEY;
 
     try {
-      const existing = store.get<ServerTemplate[]>(key) ?? [];
-      const idx = existing.findIndex(t => t.id === template.id);
-      if (idx >= 0) {
-        existing[idx] = template;
-      } else {
-        existing.push(template);
+      const existingTarget = targetStore.get<ServerTemplate[]>(targetKey) ?? [];
+      const existingOther = otherStore.get<ServerTemplate[]>(otherKey) ?? [];
+
+      const nextTarget = existingTarget.filter(item => item.id !== template.id);
+      nextTarget.push(template);
+      const nextOther = existingOther.filter(item => item.id !== template.id);
+
+      await targetStore.set(targetKey, nextTarget);
+      try {
+        await otherStore.set(otherKey, nextOther);
+      } catch (cause) {
+        await targetStore.set(targetKey, existingTarget);
+        throw cause;
       }
-      await store.set(key, existing);
+
       this.logger.info(`TemplateService: saved template '${template.name}' to ${scope}`);
       return ok(undefined);
     } catch (cause) {
@@ -122,6 +138,9 @@ export class TemplateService {
     id: TemplateId,
     scope: 'global' | 'workspace',
   ): Promise<Result<void, JsmError>> {
+    const trustResult = requireWorkspaceTrust(this.trustGate, 'modify templates');
+    if (!trustResult.ok) return trustResult;
+
     const store = scope === 'global' ? this.globalStore : this.workspaceStore;
     const key = scope === 'global' ? GLOBAL_TEMPLATES_KEY : WORKSPACE_TEMPLATES_KEY;
 

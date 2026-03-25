@@ -21,6 +21,15 @@ const mockShowWarningMessage = vi.fn();
 const mockOpenTextDocument = vi.fn();
 const mockShowTextDocument = vi.fn();
 const mockExecuteCommand = vi.fn();
+const mockWithProgress = vi.fn(async (_options: unknown, task: (progress: { report: ReturnType<typeof vi.fn> }, token: { isCancellationRequested: boolean; onCancellationRequested: (listener: () => void) => { dispose: ReturnType<typeof vi.fn> } }) => unknown) =>
+  task(
+    { report: vi.fn() },
+    {
+      isCancellationRequested: false,
+      onCancellationRequested: () => ({ dispose: vi.fn() }),
+    },
+  ),
+);
 const registeredHandlers: Record<string, (...args: unknown[]) => unknown> = {};
 
 vi.mock('vscode', () => ({
@@ -29,6 +38,7 @@ vi.mock('vscode', () => ({
     showInformationMessage: mockShowInfoMessage,
     showWarningMessage: mockShowWarningMessage,
     showTextDocument: mockShowTextDocument,
+    withProgress: mockWithProgress,
     createTreeView: vi.fn(() => ({ dispose: vi.fn() })),
   },
   workspace: {
@@ -44,6 +54,7 @@ vi.mock('vscode', () => ({
   Uri: {
     file: (p: string) => ({ fsPath: p, path: p }),
   },
+  ProgressLocation: { Notification: 15 },
   ViewColumn: { One: 1 },
   TreeItemCollapsibleState: { None: 0, Collapsed: 1, Expanded: 2 },
   TreeItem: class {
@@ -187,7 +198,16 @@ describe('Deployment Commands', () => {
         serverId: 'srv-1',
         serverKey: 'srv-1',
         workspaceFolderUri: '',
-        deployment: makeDeployment('dep-2'),
+        draft: {
+          id: 'dep-2',
+          type: 'exploded',
+          sourcePath: '/src/app',
+          deployName: 'myapp',
+          syncMode: 'auto',
+          hotReload: false,
+          ignoreGlobs: [],
+          hooks: [],
+        },
       });
 
       expect(deps.configService.updateServer).toHaveBeenCalledWith(
@@ -203,6 +223,37 @@ describe('Deployment Commands', () => {
           deploymentId: 'dep-2',
         },
       }));
+    });
+
+    it('jsm.deployment.add should surface untrusted-workspace errors from config writes', async () => {
+      deps.configService.updateServer.mockResolvedValue(
+        err(new JsmError({
+          code: ErrorCode.WorkspaceUntrusted,
+          message: 'Grant workspace trust to modify deployment configuration.',
+        })),
+      );
+
+      const result = await invoke('jsm.deployment.add', {
+        serverId: 'srv-1',
+        serverKey: 'srv-1',
+        workspaceFolderUri: '',
+        draft: {
+          id: 'dep-2',
+          type: 'exploded',
+          sourcePath: '/src/app',
+          deployName: 'myapp',
+          syncMode: 'auto',
+          hotReload: false,
+          ignoreGlobs: [],
+          hooks: [],
+        },
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        message: 'Grant workspace trust to modify deployment configuration.',
+      });
+      expect(deps.treeProvider.requestRefresh).not.toHaveBeenCalled();
     });
 
     it('jsm.deployment.redeploy should call deployService.fullRedeploy', async () => {

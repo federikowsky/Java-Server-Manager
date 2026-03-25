@@ -64,9 +64,6 @@ export interface DashboardNavigationTarget {
 }
 
 export interface SpaSettings {
-  autoDiscovery: boolean;
-  scanEnvVars: boolean;
-  scanCommonPaths: boolean;
   defaultHttpPort: number;
   defaultDebugPort: number;
   defaultJavaHome: string;
@@ -95,12 +92,8 @@ export type WebviewToHost =
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'browse'; field: string; kind: 'file' | 'directory'; filters?: Record<string, string[]> }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'invokeFieldAction'; field: string; actionId: string }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'cancel' }
-  | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'loadData'; id?: string }
-  | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'requestDefaults'; pluginType: string }
   // SPA Commands
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'executeCommand'; id: string; args?: unknown[]; requestId?: string }
-  | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'updateServer'; serverId: string; config: unknown; workspaceFolderUri: string }
-  | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'createServer'; config: unknown; workspaceFolderUri: string }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'deleteServer'; serverId: string; workspaceFolderUri: string }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'saveTemplate'; template: unknown; scope: 'global' | 'workspace' }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'deleteTemplate'; templateId: string; scope: 'global' | 'workspace' }
@@ -116,17 +109,14 @@ export type HostToWebview =
       mode: 'create' | 'edit'; 
       data?: Record<string, unknown>; 
       schema: FormSchema;
-      templates?: Array<{ id: string; name: string; defaults: Record<string, unknown> }>;
       targetId?: string;
       targetWorkspaceFolderUri?: string;
       targetScope?: 'global' | 'workspace';
     }
-  | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'loaded'; data: Record<string, unknown> }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'validationErrors'; errors: FieldError[] }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'fieldValidationResult'; field: string; error?: string }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'browsed'; field: string; path: string }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'fieldActionResult'; field: string; value: unknown }
-  | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'defaults'; data: Record<string, unknown> }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'hookOptions'; fields: string[]; taskOptions: { value: string; label: string }[] }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'error'; message: string; details?: string }
   // SPA Events

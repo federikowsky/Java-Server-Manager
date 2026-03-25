@@ -2,40 +2,46 @@
 
 All notable changes to the Java Server Manager extension will be documented in this file.
 
+The format follows Keep a Changelog and this project adheres to Semantic Versioning.
+
 ## [Unreleased]
 
-### Repository cleanup
-- moved the canonical product specification to [docs/specs.md](./docs/specs.md)
-- moved the extended specification to [docs/specs-extended.md](./docs/specs-extended.md)
-- added a [docs/README.md](./docs/README.md) index for project documentation
-- removed stale scaffold and placeholder files from the active project surface
+### Added
+- ongoing improvements after the first public beta release
 
-### AI customization
-- normalized custom agent tool usage to avoid obsolete `usages` references
-- added dedicated security and performance review agents
-- added supporting security-review and performance-review skills
+## [0.1.1] - 2026-03-18
 
-### Documentation
-- rewrote [README.md](./README.md) to reflect the current MVP status instead of production-ready claims
-- aligned reconciliation prompts and skills with the new docs layout
+### Summary
+- added explicit manifest licensing metadata required by OpenVSX validation
+- aligned release metadata for dual publication (VS Code Marketplace and OpenVSX)
 
----
+### Beta Disclaimer
+- this is a beta prerelease intended for validation and feedback
+- behavior and feature surface may change before the first stable release
 
-## [0.0.1] - Initial Release
+### Known Limitations
+- only Tomcat is supported in this release
+- some advanced workflows and hardening tasks are still in progress
 
 ### Added
-- Basic extension structure and VS Code integration
-- Command system for server and deployment management
-- Tree view for server visualization
-- Basic server lifecycle management
-- Event bus and error handling system
-- Configuration service and validation
-- Basic Tomcat runtime (stub implementation)
+- added MIT license declaration and repository license file for registry compliance
+- added publisher field to the extension manifest for deterministic release identity checks
 
-### Features
-- Server CRUD operations
-- Deployment management
-- Auto-sync service
-- Debug manager integration
-- Global template system
-- Extension activation and lifecycle management
+## [0.1.0] - 2026-03-18
+
+### Summary
+- first public beta release of Java Server Manager
+- Tomcat-first extension architecture with plugin-oriented foundations
+
+### Beta Disclaimer
+- this is a beta prerelease intended for validation and feedback
+- behavior and feature surface may change before the first stable release
+
+### Known Limitations
+- only Tomcat is supported in this release
+- some advanced workflows and hardening tasks are still in progress
+
+### Added
+- server discovery and local server lifecycle operations for Tomcat
+- deployment and auto-sync foundations with runtime safety gates
+- release governance, deterministic preflight checks, and Marketplace release workflow

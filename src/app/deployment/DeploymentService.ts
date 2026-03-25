@@ -16,6 +16,7 @@ import { ok, err } from '@core/result';
 import { JsmError } from '@core/errors/JsmError';
 import { ErrorCode } from '@core/errors/codes';
 import type { EventBus } from '@core/events/EventBus';
+import { throwIfCancelled } from '@core/ops';
 import type { HealthReport } from '@plugins/interfaces/IServerPlugin';
 import type { IServerPlugin } from '@plugins/interfaces/IServerPlugin';
 import type { PluginRegistry } from '@plugins/registry/PluginRegistry';
@@ -281,21 +282,23 @@ export class DeploymentService {
 
     // undeploy from error or synced → undeployed
     if (currentState !== 'undeployed') {
-      await this.runDeploymentHooks(ctx.serverId, config, dep, 'pre', 'deploy.undeploy');
+      this.ensureNotCancelled(ctx, dep, 'before undeploy.');
+      await this.runDeploymentHooks(ctx, config, dep, 'pre', 'deploy.undeploy');
+      this.ensureNotCancelled(ctx, dep, 'before executing undeploy.');
 
       try {
         const result = await plugin.undeploy(ctx, config, dep);
         if (!result.ok) {
-          await this.runDeploymentOnErrorHooks(ctx.serverId, config, dep, 'deploy.undeploy');
+          await this.runDeploymentOnErrorHooks(ctx, config, dep, 'deploy.undeploy');
           return result;
         }
       } catch (cause) {
-        await this.runDeploymentOnErrorHooks(ctx.serverId, config, dep, 'deploy.undeploy');
+        await this.runDeploymentOnErrorHooks(ctx, config, dep, 'deploy.undeploy');
         return err(cause instanceof JsmError ? cause : JsmError.fromUnknown(cause));
       }
 
       this.transitionDeploy(ctx.serverId, dep.id, 'undeployed');
-      await this.runDeploymentHooks(ctx.serverId, config, dep, 'post', 'deploy.undeploy');
+      await this.runDeploymentHooks(ctx, config, dep, 'post', 'deploy.undeploy');
     }
 
     return ok(undefined);
@@ -309,6 +312,7 @@ export class DeploymentService {
     changesMap: Map<DeploymentId, FileChangeBatch>,
   ): Promise<void> {
     for (const dep of config.deployments) {
+      this.ensureNotCancelled(ctx, dep, 'before syncing the next deployment.');
       const changes = changesMap.get(dep.id);
       if (changes) {
         await this.sync(ctx, config, dep, changes);
@@ -323,6 +327,7 @@ export class DeploymentService {
     config: ServerConfig,
   ): Promise<void> {
     for (const dep of config.deployments) {
+      this.ensureNotCancelled(ctx, dep, 'before redeploying the next deployment.');
       await this.fullRedeploy(ctx, config, dep);
     }
   }
@@ -339,6 +344,7 @@ export class DeploymentService {
       dep => this.getDeploymentState(ctx.serverId, dep.id) === 'undeployed',
     );
     for (const dep of undeployed) {
+      this.ensureNotCancelled(ctx, dep, 'before deploying the next undeployed application.');
       const deployCtx: OperationContext = {
         ...ctx,
         kind: 'DeployFull',
@@ -418,27 +424,40 @@ export class DeploymentService {
     const trustCheck = this.checkTrust();
     if (!trustCheck.ok) return trustCheck;
 
+    this.ensureNotCancelled(ctx, dep, `before ${event}.`);
     const plugin = this.getPlugin(config);
     this.transitionDeploy(ctx.serverId, dep.id, 'deploying');
 
     try {
-      await this.runDeploymentHooks(ctx.serverId, config, dep, 'pre', event);
+      await this.runDeploymentHooks(ctx, config, dep, 'pre', event);
+      this.ensureNotCancelled(ctx, dep, `before executing ${event}.`);
       const result = await operation(plugin);
       if (!result.ok) {
-        await this.runDeploymentOnErrorHooks(ctx.serverId, config, dep, event);
+        await this.runDeploymentOnErrorHooks(ctx, config, dep, event);
         this.transitionDeploy(ctx.serverId, dep.id, 'error', { error: result.error });
         return result;
       }
 
       this.transitionDeploy(ctx.serverId, dep.id, 'synced');
-      await this.runDeploymentHooks(ctx.serverId, config, dep, 'post', event);
+      await this.runDeploymentHooks(ctx, config, dep, 'post', event);
       return ok(undefined);
     } catch (cause) {
       const error = cause instanceof JsmError ? cause : JsmError.fromUnknown(cause);
-      await this.runDeploymentOnErrorHooks(ctx.serverId, config, dep, event);
+      await this.runDeploymentOnErrorHooks(ctx, config, dep, event);
       this.transitionDeploy(ctx.serverId, dep.id, 'error', { error });
       return err(error);
     }
+  }
+
+  private ensureNotCancelled(
+    ctx: OperationContext,
+    dep: DeploymentConfig,
+    stage: string,
+  ): void {
+    throwIfCancelled(
+      ctx.cancel,
+      `Deployment operation '${ctx.kind}' for '${dep.deployName}' was cancelled ${stage}`,
+    );
   }
 
   private mergedHooks(config: ServerConfig, dep: DeploymentConfig): HookConfig[] {
@@ -446,27 +465,39 @@ export class DeploymentService {
   }
 
   private async runDeploymentHooks(
-    serverId: ServerId,
+    ctx: OperationContext,
     config: ServerConfig,
     dep: DeploymentConfig,
     phase: 'pre' | 'post' | 'onError',
     event: HookEvent,
   ): Promise<void> {
     if (!this.hookRunner) return;
-    const result = await this.hookRunner.runHooks(serverId, phase, event, this.mergedHooks(config, dep));
+    const result = await this.hookRunner.runHooks({
+      parent: ctx,
+      phase,
+      event,
+      hooks: this.mergedHooks(config, dep),
+      targetDeploymentId: dep.id,
+    });
     if (!result.ok) {
       throw result.error;
     }
   }
 
   private async runDeploymentOnErrorHooks(
-    serverId: ServerId,
+    ctx: OperationContext,
     config: ServerConfig,
     dep: DeploymentConfig,
     event: HookEvent,
   ): Promise<void> {
     if (!this.hookRunner) return;
-    const result = await this.hookRunner.runHooks(serverId, 'onError', event, this.mergedHooks(config, dep));
+    const result = await this.hookRunner.runHooks({
+      parent: ctx,
+      phase: 'onError',
+      event,
+      hooks: this.mergedHooks(config, dep),
+      targetDeploymentId: dep.id,
+    });
     if (!result.ok) {
       this.logger.warn(`DeploymentService: onError hook failed for '${dep.deployName}'`, result.error);
     }

@@ -6,6 +6,7 @@ import type { ChildProcess } from 'child_process';
 import { ok, err, type Result } from '@core/result';
 import { JsmError } from '@core/errors/JsmError';
 import { ErrorCode } from '@core/errors/codes';
+import { throwIfCancelled } from '@core/ops';
 import type {
   ServerConfig,
   DeploymentConfig,
@@ -488,6 +489,7 @@ export class TomcatPlugin implements IServerPlugin {
     ctx: OperationContext,
     config: ServerConfig,
   ): Promise<Result<void, JsmError>> {
+    this.throwIfCancelled(ctx, `Stop operation for '${config.name}' was cancelled before Tomcat shutdown.`);
     ctx.progress.report('Stopping Tomcat...');
 
     // Try graceful stop via catalina.sh stop
@@ -543,10 +545,11 @@ export class TomcatPlugin implements IServerPlugin {
   // ── Deploy: Plan (§10.1, §10.2) ────────────────────────────────────
 
   async planDeploy(
-    _ctx: OperationContext,
+    ctx: OperationContext,
     config: ServerConfig,
     dep: DeploymentConfig,
   ): Promise<Result<DeployPlan, JsmError>> {
+    this.throwIfCancelled(ctx, `Deployment planning for '${dep.deployName}' was cancelled.`);
     const targetRoot = path.join(config.instancePath, 'webapps');
     let strategy: DeployPlan['strategy'];
     let targetPath: string;
@@ -573,6 +576,7 @@ export class TomcatPlugin implements IServerPlugin {
     dep: DeploymentConfig,
     plan: DeployPlan,
   ): Promise<Result<DeployResult, JsmError>> {
+    this.throwIfCancelled(ctx, `Full deployment for '${dep.deployName}' was cancelled before copying artifacts.`);
     ctx.progress.report(`Deploying ${dep.deployName}...`);
 
     const sourcePath = dep.sourcePath;
@@ -598,6 +602,8 @@ export class TomcatPlugin implements IServerPlugin {
       } else {
         await copyDir(sourcePath, stagingPath);
       }
+
+      this.throwIfCancelled(ctx, `Full deployment for '${dep.deployName}' was cancelled before activating the staged artifact.`);
 
       // Step 2: Backup existing target
       const targetExists = await exists(plan.targetPath);
@@ -667,6 +673,7 @@ export class TomcatPlugin implements IServerPlugin {
 
     try {
       for (const change of changes.changes) {
+        this.throwIfCancelled(ctx, `Incremental deployment for '${dep.deployName}' was cancelled.`);
         const targetFile = path.join(plan.targetPath, change.relativePath);
 
         switch (change.type) {
@@ -714,6 +721,7 @@ export class TomcatPlugin implements IServerPlugin {
     // Step 1: Copy changed files (same as incremental deploy)
     try {
       for (const change of changes.changes) {
+        this.throwIfCancelled(ctx, `Hot reload for '${dep.deployName}' was cancelled.`);
         const targetFile = path.join(plan.targetPath, change.relativePath);
 
         switch (change.type) {
@@ -738,6 +746,7 @@ export class TomcatPlugin implements IServerPlugin {
     }
 
     // Step 2: Trigger Tomcat reload via Manager API or context.xml touch
+    this.throwIfCancelled(ctx, `Hot reload for '${dep.deployName}' was cancelled before triggering the reload step.`);
     const reloadResult = await this.triggerContextReload(config, dep);
     if (!reloadResult.ok) {
       return reloadResult;
@@ -879,6 +888,7 @@ export class TomcatPlugin implements IServerPlugin {
     config: ServerConfig,
     dep: DeploymentConfig,
   ): Promise<Result<void, JsmError>> {
+    this.throwIfCancelled(ctx, `Undeploy for '${dep.deployName}' was cancelled before removing artifacts.`);
     ctx.progress.report(`Undeploying ${dep.deployName}...`);
 
     const targetRoot = path.join(config.instancePath, 'webapps');
@@ -889,6 +899,7 @@ export class TomcatPlugin implements IServerPlugin {
 
     try {
       for (const target of targets) {
+        this.throwIfCancelled(ctx, `Undeploy for '${dep.deployName}' was cancelled.`);
         if (await exists(target)) {
           await fs.rm(target, { recursive: true, force: true });
           this.logger.info(`TomcatPlugin: removed ${target}`);
@@ -903,6 +914,10 @@ export class TomcatPlugin implements IServerPlugin {
         cause,
       }));
     }
+  }
+
+  private throwIfCancelled(ctx: OperationContext, message: string): void {
+    throwIfCancelled(ctx.cancel, message);
   }
 
   // ── Status ──────────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { activeEntity, schema, mode, formId, formData, fieldErrors, submitting, globalError, templates, spaState, browseResult, hostError, lastCommandResult } from './stores';
+  import { activeEntity, schema, mode, formId, formData, fieldErrors, submitting, globalError, spaState, browseResult, hostError, lastCommandResult } from './stores';
   import { sendReady, onHostMessage } from './bridge';
   import type { HostToWebview, FormSchema } from '../protocol';
   import FormHeader from './components/FormHeader.svelte';
@@ -59,9 +59,6 @@
 
   function handleHostMessage(msg: HostToWebview): void {
     switch (msg.command) {
-      case 'loaded':
-        formData.update(d => ({ ...d, ...msg.data }));
-        break;
       case 'validationErrors': {
         const errs: Record<string, string> = {};
         for (const e of msg.errors) {
@@ -88,9 +85,6 @@
         break;
       case 'fieldActionResult':
         formData.update(d => ({ ...d, [msg.field]: msg.value }));
-        break;
-      case 'defaults':
-        formData.update(d => ({ ...d, ...msg.data }));
         break;
       case 'syncState':
         spaState.update(state => ({
@@ -144,9 +138,6 @@
           ...collectSchemaDefaults(msg.schema),
           ...(msg.data ?? {}),
         });
-        if (msg.templates) {
-          templates.set(msg.templates);
-        }
         break;
       case 'hookOptions':
         schema.update(current => current ? applyHookTaskOptions(current, msg.fields, msg.taskOptions) : current);

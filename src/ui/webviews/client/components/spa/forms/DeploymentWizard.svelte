@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
+  import { formDataToDeploymentDraft } from '@core/authoring';
   import { spaState, activeEntity, browseResult, lastCommandResult } from '../../../stores';
   import { postToHost } from '../../../bridge';
   import { WEBVIEW_PROTOCOL_VERSION } from '../../../../protocol';
@@ -204,8 +205,7 @@
       return;
     }
 
-    const deployment = {
-      id: existingDeployment?.id || crypto.randomUUID(),
+    const formData: Record<string, unknown> = {
       type: formType,
       sourcePath: sourcePath.trim(),
       deployName: deployName.trim(),
@@ -218,6 +218,7 @@
       ignoreGlobs: [...ignoreGlobs],
       hooks: [],
     };
+    const draft = formDataToDeploymentDraft(formData, { id: existingDeployment?.id });
 
     submitState = 'submitting';
     submitError = '';
@@ -234,8 +235,8 @@
         serverKey: serverRecord.serverKey,
         workspaceFolderUri: serverRecord.workspaceFolderUri,
         workspaceFolderName: serverRecord.workspaceFolderName,
-        deploymentId: deployment.id,
-        deployment,
+        deploymentId: draft.id,
+        draft,
       }],
     });
   }

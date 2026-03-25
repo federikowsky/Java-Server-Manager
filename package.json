@@ -1,8 +1,18 @@
 {
   "name": "java-server-manager",
+  "publisher": "federikowsky",
   "displayName": "Java Server Manager",
-  "description": "A simple, modern alternative to RSP UI for managing Java servers (Tomcat, Jetty, and more) inside VSCode.",
-  "version": "0.0.1",
+  "description": "Tomcat-first VS Code extension for managing local Java application servers.",
+  "version": "0.1.1",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/federikowsky/Java-Server-Manager.git"
+  },
+  "homepage": "https://github.com/federikowsky/Java-Server-Manager#readme",
+  "bugs": {
+    "url": "https://github.com/federikowsky/Java-Server-Manager/issues"
+  },
   "engines": {
     "vscode": "^1.100.0"
   },
@@ -323,21 +333,6 @@
     "configuration": {
       "title": "Java Server Manager",
       "properties": {
-        "jsm.autoDiscovery.enabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "Enable automatic server discovery on startup."
-        },
-        "jsm.autoDiscovery.scanEnvVars": {
-          "type": "boolean",
-          "default": true,
-          "description": "Scan environment variables (CATALINA_HOME, TOMCAT_HOME, etc.) for server installations."
-        },
-        "jsm.autoDiscovery.scanCommonPaths": {
-          "type": "boolean",
-          "default": true,
-          "description": "Scan common installation paths (/opt/tomcat, /usr/local/tomcat, etc.)."
-        },
         "jsm.defaults.httpPort": {
           "type": "number",
           "default": 8080,
@@ -369,6 +364,7 @@
   },
   "scripts": {
     "build:tomcat-listener": "node tools/tomcat-startup-listener/build.mjs",
+    "build": "npm run package",
     "compile": "npm run build:tomcat-listener && npm run check-types && npm run lint && node esbuild.js",
     "watch": "npm-run-all -p watch:*",
     "watch:esbuild": "node esbuild.js --watch",
@@ -377,7 +373,13 @@
     "check-types": "tsc --noEmit --skipLibCheck",
     "lint": "eslint src --ignore-pattern 'src-legacy'",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:smoke": "vitest run src/test/ui/extension-activation.test.ts src/test/core/security-policy.test.ts src/test/app/ServerRuntime.test.ts",
+    "test:release": "node --test tools/release/*.test.mjs",
+    "test:watch": "vitest",
+    "release:preflight": "node tools/release/preflight.mjs",
+    "release:verify": "node tools/release/verify-marketplace.mjs",
+    "release:verify:openvsx": "node tools/release/verify-openvsx.mjs",
+    "release:prepare": "node tools/release/prepare-release.mjs"
   },
   "devDependencies": {
     "@types/glob": "^8.1.0",

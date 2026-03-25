@@ -1,12 +1,15 @@
 import * as vscode from 'vscode';
-import type { SyncMode, OperationContext, ServerConfig, DeploymentConfig } from '@core/types';
+import {
+  deploymentDraftToConfig,
+} from '@core/authoring';
+import type { DeploymentAuthoringDraft } from '@core/authoring';
+import type { SyncMode, ServerConfig, DeploymentConfig } from '@core/types';
 import type { Result } from '@core/result';
 import { JsmError } from '@core/errors/JsmError';
 import { ErrorCode } from '@core/errors/codes';
 import type { WorkspaceServiceRegistry } from '@app/config';
 import type { DeploymentService } from '@app/deployment/DeploymentService';
 import type { ServerTreeViewProvider } from '@ui/tree/ServerTreeViewProvider';
-import type { DeploymentFormPanel } from '@ui/webviews/panels/DeploymentFormPanel';
 import type { PluginRegistry } from '@plugins/registry/PluginRegistry';
 import type { LogSources } from '@plugins/interfaces/IServerPlugin';
 import {
@@ -16,6 +19,7 @@ import {
   isDeploymentNode,
   isServerNode,
   registerMany,
+  runWithOperationProgress,
 } from './shared';
 
 // ── Dependency contract ─────────────────────────────────────────────────────
@@ -30,11 +34,6 @@ export interface DeploymentCommandsDeps {
   pluginRegistry: PluginRegistry;
   deployService: DeploymentService;
   treeProvider: ServerTreeViewProvider;
-  deploymentFormPanel: DeploymentFormPanel | {
-    open?(mode: 'create' | 'edit', serverId: string, deploymentId?: string): void;
-    openCreate?(locator: { workspaceFolderUri: string; serverId: string }): void;
-    openEdit?(locator: { workspaceFolderUri: string; serverId: string }, deploymentId: string): void;
-  };
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -60,20 +59,6 @@ function nextSyncMode(current: SyncMode): SyncMode {
   return cycle[(cycle.indexOf(current) + 1) % cycle.length];
 }
 
-function makeOpCtx(serverId: string, kind: OperationContext['kind'], deploymentId?: string): OperationContext {
-  return {
-    operationId: `cmd-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    serverId,
-    kind,
-    targetDeploymentId: deploymentId,
-    startedAt: Date.now(),
-    timeoutMs: 60_000,
-    cancel: { isCancelled: false, onCancelled: () => ({ dispose: () => {} }) },
-    progress: { report: () => {} },
-    output: { append: () => {}, appendLine: () => {}, clear: () => {} },
-  };
-}
-
 // ── Registration ────────────────────────────────────────────────────────────
 
 export function registerDeploymentCommands(
@@ -90,26 +75,44 @@ export function registerDeploymentCommands(
 
     // §8.2 — jsm.deployment.add
     ['jsm.deployment.add', async (arg: unknown) => {
-      // Check if this is a SPA form submission (has deployment data)
-      if (arg && typeof arg === 'object' && 'deployment' in arg) {
-        const spaArg = arg as { serverId: string; serverKey: string; workspaceFolderUri: string; deployment: DeploymentConfig };
+      if (
+        arg
+        && typeof arg === 'object'
+        && 'serverId' in arg
+        && 'workspaceFolderUri' in arg
+        && 'draft' in arg
+      ) {
+        const spaArg = arg as {
+          serverId: string;
+          serverKey: string;
+          workspaceFolderUri: string;
+          draft?: unknown;
+        };
         const config = resolveServer(spaArg.workspaceFolderUri, spaArg.serverId);
         if (!config) {
           return { ok: false, message: 'Server not found' };
         }
-        
+
+        const draft = spaArg.draft && typeof spaArg.draft === 'object'
+          ? (spaArg.draft as DeploymentAuthoringDraft)
+          : undefined;
+        if (!draft) {
+          return { ok: false, message: 'Invalid deployment draft payload.' };
+        }
+
+        const deployment = deploymentDraftToConfig(draft, draft.id ?? crypto.randomUUID());
         const result = workspaceRegistry
-          ? await workspaceRegistry.addDeployment({ workspaceFolderUri: spaArg.workspaceFolderUri, serverId: spaArg.serverId }, spaArg.deployment)
-          : await configService?.updateServer({ ...config, deployments: [...config.deployments, spaArg.deployment] });
+          ? await workspaceRegistry.addDeployment({ workspaceFolderUri: spaArg.workspaceFolderUri, serverId: spaArg.serverId }, deployment)
+          : await configService?.updateServer({ ...config, deployments: [...config.deployments, deployment] });
         if (!result) return { ok: false, message: 'Unable to add deployment.' };
         if (!result.ok) return { ok: false, message: result.error.message };
         treeProvider.requestRefresh();
         return {
           ok: true,
-          message: `Deployment "${spaArg.deployment.deployName}" added.`,
+          message: `Deployment "${deployment.deployName}" added.`,
           data: {
             serverId: spaArg.serverId,
-            deploymentId: spaArg.deployment.id,
+            deploymentId: deployment.id,
           },
         };
       }
@@ -129,8 +132,12 @@ export function registerDeploymentCommands(
       const config = resolveServer(arg.workspaceFolderUri, arg.serverId);
       const dep = config?.deployments.find((d: DeploymentConfig) => d.id === arg.deploymentId);
       if (!config || !dep) return;
-      const ctx = makeOpCtx(arg.serverKey, 'DeployFull', arg.deploymentId);
-      const result = await deployService.fullRedeploy(ctx, config, dep);
+      const result = await runWithOperationProgress({
+        title: `Redeploying ${dep.deployName}...`,
+        serverId: arg.serverKey,
+        kind: 'DeployFull',
+        targetDeploymentId: arg.deploymentId,
+      }, async ctx => deployService.fullRedeploy(ctx, config, dep));
       if (!result.ok) { showErr(result.error); return; }
       showSuccess(`Redeploy completed for "${dep.deployName}".`);
     }],
@@ -141,8 +148,12 @@ export function registerDeploymentCommands(
       const config = resolveServer(arg.workspaceFolderUri, arg.serverId);
       const dep = config?.deployments.find((d: DeploymentConfig) => d.id === arg.deploymentId);
       if (!config || !dep) return;
-      const ctx = makeOpCtx(arg.serverKey, 'Undeploy', arg.deploymentId);
-      const result = await deployService.undeploy(ctx, config, dep);
+      const result = await runWithOperationProgress({
+        title: `Undeploying ${dep.deployName}...`,
+        serverId: arg.serverKey,
+        kind: 'Undeploy',
+        targetDeploymentId: arg.deploymentId,
+      }, async ctx => deployService.undeploy(ctx, config, dep));
       if (!result.ok) { showErr(result.error); return; }
       showSuccess(`Undeployed "${dep.deployName}".`);
     }],
@@ -185,21 +196,40 @@ export function registerDeploymentCommands(
 
     // §8.2 — jsm.deployment.edit
     ['jsm.deployment.edit', async (arg: unknown) => {
-      // Check if this is a SPA form submission (has deployment data)
-      if (arg && typeof arg === 'object' && 'deployment' in arg) {
-        const spaArg = arg as { serverId: string; serverKey: string; workspaceFolderUri: string; deployment: DeploymentConfig };
+      if (
+        arg
+        && typeof arg === 'object'
+        && 'serverId' in arg
+        && 'workspaceFolderUri' in arg
+        && 'draft' in arg
+      ) {
+        const spaArg = arg as {
+          serverId: string;
+          serverKey: string;
+          workspaceFolderUri: string;
+          draft?: unknown;
+          deploymentId?: string;
+        };
         const config = resolveServer(spaArg.workspaceFolderUri, spaArg.serverId);
         if (!config) {
           return { ok: false, message: 'Server not found' };
         }
-        
+
+        const draft = spaArg.draft && typeof spaArg.draft === 'object'
+          ? { ...(spaArg.draft as DeploymentAuthoringDraft), id: spaArg.deploymentId }
+          : undefined;
+        if (!draft?.id) {
+          return { ok: false, message: 'Invalid deployment draft payload.' };
+        }
+
+        const deployment = deploymentDraftToConfig(draft, draft.id);
         const updatedServer = {
           ...config,
           deployments: config.deployments.map((d: DeploymentConfig) =>
-            d.id === spaArg.deployment.id ? spaArg.deployment : d,
+            d.id === deployment.id ? deployment : d,
           ),
         };
-        
+
         const result = workspaceRegistry
           ? await workspaceRegistry.updateServer({ workspaceFolderUri: spaArg.workspaceFolderUri, serverId: spaArg.serverId }, updatedServer)
           : await configService?.updateServer(updatedServer);
@@ -208,10 +238,10 @@ export function registerDeploymentCommands(
         treeProvider.requestRefresh();
         return {
           ok: true,
-          message: `Deployment "${spaArg.deployment.deployName}" updated.`,
+          message: `Deployment "${deployment.deployName}" updated.`,
           data: {
             serverId: spaArg.serverId,
-            deploymentId: spaArg.deployment.id,
+            deploymentId: deployment.id,
           },
         };
       }

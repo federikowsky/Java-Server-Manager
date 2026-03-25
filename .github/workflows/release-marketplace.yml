@@ -1,0 +1,271 @@
+name: Release Marketplace
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing Git tag to publish or verify
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: marketplace-release
+  cancel-in-progress: false
+
+env:
+  JSM_MARKETPLACE_PUBLISHER: ${{ vars.JSM_MARKETPLACE_PUBLISHER }}
+  VSCE_VERSION: 3.6.2
+  OVSX_VERSION: 0.10.5
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    outputs:
+      channel: ${{ steps.preflight.outputs.channel }}
+      environment_name: ${{ steps.preflight.outputs.environmentName }}
+      tag: ${{ steps.preflight.outputs.tag }}
+      version: ${{ steps.preflight.outputs.version }}
+      commit_sha: ${{ steps.preflight.outputs.commitSha }}
+      publisher: ${{ steps.preflight.outputs.publisher }}
+      extension_name: ${{ steps.preflight.outputs.extensionName }}
+      extension_id: ${{ steps.preflight.outputs.extensionId }}
+      release_name: ${{ steps.preflight.outputs.releaseName }}
+      release_url: ${{ steps.preflight.outputs.releaseUrl }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 20
+
+      - name: Refresh master ancestry
+        run: git fetch --no-tags origin +refs/heads/master:refs/remotes/origin/master
+
+      - name: Preflight
+        id: preflight
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: npm run release:preflight
+
+  quality:
+    runs-on: ubuntu-latest
+    needs: preflight
+    steps:
+      - name: Checkout tagged commit
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          ref: ${{ needs.preflight.outputs.commit_sha }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type check
+        run: npm run check-types
+
+      - name: Release helper tests
+        run: npm run test:release
+
+      - name: Beta smoke suite
+        if: ${{ needs.preflight.outputs.channel == 'beta' }}
+        run: npm run test:smoke
+
+      - name: Stable test suite
+        if: ${{ needs.preflight.outputs.channel == 'stable' }}
+        run: npm test
+
+      - name: Layer boundary audit
+        shell: bash
+        run: |
+          violations=$(grep -rn "from 'vscode'" src/core/ src/app/ src/plugins/ src/infra/ || true)
+          if [ -n "$violations" ]; then
+            echo "::error::Layer boundary violation — vscode import in non-UI layer:"
+            echo "$violations"
+            exit 1
+          fi
+
+      - name: shell:true audit
+        shell: bash
+        run: |
+          violations=$(grep -rn 'shell:\s*true' src/ --include='*.ts' || true)
+          if [ -n "$violations" ]; then
+            echo "::error::Security violation — shell:true found:"
+            echo "$violations"
+            exit 1
+          fi
+
+  package:
+    runs-on: ubuntu-latest
+    needs: [preflight, quality]
+    outputs:
+      vsix_name: ${{ steps.package.outputs.vsix_name }}
+      vsix_sha256: ${{ steps.package.outputs.vsix_sha256 }}
+    steps:
+      - name: Checkout tagged commit
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          ref: ${{ needs.preflight.outputs.commit_sha }}
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Inject publisher identity
+        run: node tools/release/inject-publisher.mjs
+
+      - name: Build production package
+        run: npm run package
+
+      - name: Create VSIX
+        id: package
+        shell: bash
+        run: |
+          vsix_name="${{ needs.preflight.outputs.extension_name }}-${{ needs.preflight.outputs.version }}.vsix"
+          extra_args=()
+          if [ "${{ needs.preflight.outputs.channel }}" = "beta" ]; then
+            extra_args+=(--pre-release)
+          fi
+
+          npx --yes @vscode/vsce@${VSCE_VERSION} package "${extra_args[@]}" --out "${vsix_name}"
+          sha256sum "${vsix_name}" | awk '{print $1}' | tee "${vsix_name}.sha256"
+          vsix_sha256=$(cat "${vsix_name}.sha256")
+
+          echo "vsix_name=${vsix_name}" >> "$GITHUB_OUTPUT"
+          echo "vsix_sha256=${vsix_sha256}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-package-${{ needs.preflight.outputs.tag }}
+          path: |
+            ${{ steps.package.outputs.vsix_name }}
+            ${{ steps.package.outputs.vsix_name }}.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    runs-on: ubuntu-latest
+    needs: [preflight, package]
+    environment:
+      name: ${{ needs.preflight.outputs.environment_name }}
+    steps:
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 20
+
+      - name: Download release artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: release-package-${{ needs.preflight.outputs.tag }}
+          path: ${{ runner.temp }}/release-package
+
+      - name: Publish to Marketplace
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        shell: bash
+        run: |
+          extra_args=()
+          if [ "${{ needs.preflight.outputs.channel }}" = "beta" ]; then
+            extra_args+=(--pre-release)
+          fi
+
+          npx --yes @vscode/vsce@${VSCE_VERSION} publish \
+            --packagePath "${{ runner.temp }}/release-package/${{ needs.package.outputs.vsix_name }}" \
+            --skip-duplicate \
+            "${extra_args[@]}"
+
+  publish_openvsx:
+    runs-on: ubuntu-latest
+    needs: [preflight, package]
+    environment:
+      name: ${{ needs.preflight.outputs.channel == 'beta' && 'openvsx-beta' || 'openvsx-stable' }}
+    steps:
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 20
+
+      - name: Download release artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: release-package-${{ needs.preflight.outputs.tag }}
+          path: ${{ runner.temp }}/release-package
+
+      - name: Publish to OpenVSX
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        shell: bash
+        run: |
+          npx --yes ovsx@${OVSX_VERSION} publish \
+            "${{ runner.temp }}/release-package/${{ needs.package.outputs.vsix_name }}" \
+            --pat "${OVSX_PAT}"
+
+  verify:
+    runs-on: ubuntu-latest
+    needs: [preflight, package, publish, publish_openvsx]
+    steps:
+      - name: Checkout tagged commit
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          ref: ${{ needs.preflight.outputs.commit_sha }}
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 20
+
+      - name: Verify Marketplace version
+        env:
+          JSM_EXTENSION_NAME: ${{ needs.preflight.outputs.extension_name }}
+          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+        run: npm run release:verify
+
+      - name: Verify OpenVSX version
+        env:
+          JSM_EXTENSION_NAME: ${{ needs.preflight.outputs.extension_name }}
+          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+        run: npm run release:verify:openvsx
+
+      - name: Release summary
+        run: |
+          cat <<EOF >> "$GITHUB_STEP_SUMMARY"
+          ## Release Summary
+
+          - Channel: ${{ needs.preflight.outputs.channel }}
+          - Tag: ${{ needs.preflight.outputs.tag }}
+          - Version: ${{ needs.preflight.outputs.version }}
+          - Extension: ${{ needs.preflight.outputs.extension_id }}
+          - Commit: ${{ needs.preflight.outputs.commit_sha }}
+          - VSIX: ${{ needs.package.outputs.vsix_name }}
+          - SHA-256: ${{ needs.package.outputs.vsix_sha256 }}
+          - Release: ${{ needs.preflight.outputs.release_name }}
+          - URL: ${{ needs.preflight.outputs.release_url }}
+          - Registry verification: VS Code Marketplace + OpenVSX
+          EOF

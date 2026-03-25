@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { DeploymentService } from '@app/deployment/DeploymentService';
 import { EventBus } from '@core/events/EventBus';
+import { createCancellationTokenSource } from '@core/ops';
 import type { Logger } from '@core/types/logger';
 import type { PluginRegistry } from '@plugins/registry/PluginRegistry';
 import type { IServerPlugin } from '@plugins/interfaces/IServerPlugin';
@@ -81,6 +82,28 @@ function makeCtx(serverId = 's1', deploymentId = 'd1', kind: OperationContext['k
     cancel: { isCancelled: false, onCancelled: () => ({ dispose: () => {} }) },
     progress: { report: () => {} },
     output: { append: () => {}, appendLine: () => {}, clear: () => {} },
+  };
+}
+
+function makeCancellableCtx(
+  serverId = 's1',
+  deploymentId = 'd1',
+  kind: OperationContext['kind'] = 'DeployFull',
+): { ctx: OperationContext; cancel: () => void } {
+  const cancellation = createCancellationTokenSource();
+  return {
+    ctx: {
+      operationId: 'op-cancellable',
+      serverId,
+      kind,
+      targetDeploymentId: deploymentId,
+      startedAt: Date.now(),
+      timeoutMs: 60_000,
+      cancel: cancellation.token,
+      progress: { report: () => {} },
+      output: { append: () => {}, appendLine: () => {}, clear: () => {} },
+    },
+    cancel: () => cancellation.cancel(),
   };
 }
 
@@ -166,20 +189,25 @@ describe('DeploymentService', () => {
     const result = await service.fullRedeploy(makeCtx(), config, dep);
 
     expect(result.ok).toBe(true);
-    expect(hookRunner.runHooks).toHaveBeenNthCalledWith(
-      1,
-      's1',
-      'pre',
-      'deploy.full',
-      [...config.hooks, ...dep.hooks],
-    );
-    expect(hookRunner.runHooks).toHaveBeenNthCalledWith(
-      2,
-      's1',
-      'post',
-      'deploy.full',
-      [...config.hooks, ...dep.hooks],
-    );
+    const [preCall, postCall] = hookRunner.runHooks.mock.calls;
+    expect(preCall[0]).toEqual(expect.objectContaining({
+      phase: 'pre',
+      event: 'deploy.full',
+      hooks: [...config.hooks, ...dep.hooks],
+      targetDeploymentId: dep.id,
+      parent: expect.objectContaining({
+        serverId: 's1',
+        kind: 'DeployFull',
+        targetDeploymentId: dep.id,
+      }),
+    }));
+    expect(postCall[0]).toEqual(expect.objectContaining({
+      phase: 'post',
+      event: 'deploy.full',
+      hooks: [...config.hooks, ...dep.hooks],
+      targetDeploymentId: dep.id,
+    }));
+    expect(postCall[0].parent).toBe(preCall[0].parent);
   });
 
   it('fullRedeploy transitions to error on plan failure', async () => {
@@ -189,6 +217,31 @@ describe('DeploymentService', () => {
 
     const result = await service.fullRedeploy(makeCtx(), makeConfig(), makeDep());
     expect(result.ok).toBe(false);
+    expect(service.getDeploymentState('s1', 'd1')).toBe('error');
+  });
+
+  it('cancels fullRedeploy after pre-hooks and before plugin execution', async () => {
+    const config = {
+      ...makeConfig(),
+      hooks: [makeHook('deploy.full', 'pre', 'server-pre')],
+    };
+    const dep = makeDep();
+    const { ctx, cancel } = makeCancellableCtx();
+
+    hookRunner.runHooks.mockImplementation(async ({ phase }) => {
+      if (phase === 'pre') {
+        cancel();
+      }
+      return ok({ executed: 0, skipped: 0, failed: 0, errors: [] });
+    });
+
+    const result = await service.fullRedeploy(ctx, config, dep);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCode.Cancelled);
+    }
+    expect(mockPlugin.planDeploy).not.toHaveBeenCalled();
     expect(service.getDeploymentState('s1', 'd1')).toBe('error');
   });
 

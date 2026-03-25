@@ -1,6 +1,9 @@
 import type { ServerId, DeploymentId, OperationKind } from '../types';
 import type { Logger } from '../types/logger';
 
+/** `QueueEntry.meta` key for `DeploySync` — value is `FileChangeBatch`. */
+export const QUEUE_META_FILE_CHANGE_BATCH = 'fileChangeBatch';
+
 // ── Priority Map (§9.4) ────────────────────────────────────────────────────
 
 const PRIORITY: Record<OperationKind, number> = {
@@ -9,6 +12,7 @@ const PRIORITY: Record<OperationKind, number> = {
   LifecycleStart:     2,
   DeployFull:         3,
   DeployIncremental:  3,
+  DeploySync:         3,
   DeployHotReload:    3,
   SyncAll:            3,
   RedeployAll:        3,
@@ -51,6 +55,22 @@ function coalesce(existing: QueueEntry, incoming: QueueEntry): CoalesceAction {
       : 'queue';
   }
 
+  // DeploySync(dep) + DeploySync(dep) → keep last (autosync coalescing)
+  if (ek === 'DeploySync' && ik === 'DeploySync') {
+    return sameDeployment(existing.targetDeploymentId, incoming.targetDeploymentId)
+      ? 'keep-last'
+      : 'queue';
+  }
+
+  // DeploySync ↔ DeployIncremental same dep → keep last (same autosync family)
+  if (
+    (ek === 'DeploySync' && ik === 'DeployIncremental' ||
+      ek === 'DeployIncremental' && ik === 'DeploySync') &&
+    sameDeployment(existing.targetDeploymentId, incoming.targetDeploymentId)
+  ) {
+    return 'keep-last';
+  }
+
   // DeployHotReload(dep) + DeployHotReload(dep) → keep last
   if (ek === 'DeployHotReload' && ik === 'DeployHotReload') {
     return sameDeployment(existing.targetDeploymentId, incoming.targetDeploymentId)
@@ -66,6 +86,18 @@ function coalesce(existing: QueueEntry, incoming: QueueEntry): CoalesceAction {
 
   // DeployIncremental(dep) + DeployHotReload(dep) → replace with hot-reload
   if (ek === 'DeployIncremental' && ik === 'DeployHotReload' &&
+      sameDeployment(existing.targetDeploymentId, incoming.targetDeploymentId)) {
+    return 'replace';
+  }
+
+  // DeployHotReload(dep) + DeploySync(dep) → keep last
+  if (ek === 'DeployHotReload' && ik === 'DeploySync' &&
+      sameDeployment(existing.targetDeploymentId, incoming.targetDeploymentId)) {
+    return 'keep-last';
+  }
+
+  // DeploySync(dep) + DeployHotReload(dep) → replace with hot-reload
+  if (ek === 'DeploySync' && ik === 'DeployHotReload' &&
       sameDeployment(existing.targetDeploymentId, incoming.targetDeploymentId)) {
     return 'replace';
   }
@@ -94,8 +126,23 @@ function coalesce(existing: QueueEntry, incoming: QueueEntry): CoalesceAction {
     return 'replace';
   }
 
+  // DeployFull(dep) + DeploySync(dep) → drop incoming sync (explicit full wins)
+  if (ek === 'DeployFull' && ik === 'DeploySync' &&
+      sameDeployment(existing.targetDeploymentId, incoming.targetDeploymentId)) {
+    return 'drop';
+  }
+
+  // DeploySync(dep) + DeployFull(dep) → replace pending sync with full
+  if (ek === 'DeploySync' && ik === 'DeployFull' &&
+      sameDeployment(existing.targetDeploymentId, incoming.targetDeploymentId)) {
+    return 'replace';
+  }
+
   // SyncAll + DeployIncremental(any) → drop
   if (ek === 'SyncAll' && ik === 'DeployIncremental') return 'drop';
+
+  // SyncAll + DeploySync(any) → drop
+  if (ek === 'SyncAll' && ik === 'DeploySync') return 'drop';
 
   // SyncAll + DeployFull(any) → queue (explicit full takes precedence)
   if (ek === 'SyncAll' && ik === 'DeployFull') return 'queue';
@@ -103,11 +150,18 @@ function coalesce(existing: QueueEntry, incoming: QueueEntry): CoalesceAction {
   // DeployIncremental(any) + SyncAll → replace pending incrementals
   if (ek === 'DeployIncremental' && ik === 'SyncAll') return 'replace';
 
-  // RedeployAll + DeployFull/SyncAll → drop
-  if (ek === 'RedeployAll' && (ik === 'DeployFull' || ik === 'SyncAll')) return 'drop';
+  // DeploySync(any) + SyncAll → replace pending sync
+  if (ek === 'DeploySync' && ik === 'SyncAll') return 'replace';
 
-  // DeployFull/SyncAll + RedeployAll → replace
-  if ((ek === 'DeployFull' || ek === 'SyncAll') && ik === 'RedeployAll') return 'replace';
+  // RedeployAll + DeployFull/SyncAll/DeploySync → drop
+  if (ek === 'RedeployAll' && (ik === 'DeployFull' || ik === 'SyncAll' || ik === 'DeploySync')) {
+    return 'drop';
+  }
+
+  // DeployFull/SyncAll/DeploySync + RedeployAll → replace
+  if ((ek === 'DeployFull' || ek === 'SyncAll' || ek === 'DeploySync') && ik === 'RedeployAll') {
+    return 'replace';
+  }
 
   // Lifecycle start + same start → ignore (drop)
   if (ek === 'LifecycleStart' && ik === 'LifecycleStart') {

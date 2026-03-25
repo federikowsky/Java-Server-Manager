@@ -62,7 +62,7 @@ describe('AutoSync sync error → recordFailure pattern (extended)', () => {
     bus = new EventBus(mockLogger());
     capturedOnChange = undefined;
     watcherFactory = {
-      watch: vi.fn((_p: string, _ig: string[], onChange: (c: FileChange) => void) => {
+      watch: vi.fn((_spec: unknown, onChange: (c: FileChange) => void) => {
         capturedOnChange = onChange;
         return { dispose: vi.fn() };
       }),
@@ -95,13 +95,13 @@ describe('AutoSync sync error → recordFailure pattern (extended)', () => {
 
     service.enable(makeConfig());
 
-    capturedOnChange!({ path: '/src/app/x.java', type: 'change', sizeBytes: 10 });
+    capturedOnChange!({ path: '/src/app/x.java', type: 'change', relativePath: 'x.java', sizeBytes: 10 });
     await vi.advanceTimersByTimeAsync(500);
     await vi.runOnlyPendingTimersAsync();
     expect(syncMock).toHaveBeenCalledTimes(1);
     expect(service.isInCooldown('s1', 'd1')).toBe(false);
 
-    capturedOnChange!({ path: '/src/app/y.java', type: 'change', sizeBytes: 10 });
+    capturedOnChange!({ path: '/src/app/y.java', type: 'change', relativePath: 'y.java', sizeBytes: 10 });
     await vi.advanceTimersByTimeAsync(500);
     await vi.runOnlyPendingTimersAsync();
     expect(syncMock).toHaveBeenCalledTimes(2);
@@ -128,7 +128,7 @@ describe('AutoSync sync error → recordFailure pattern (extended)', () => {
     service.enable(makeConfig());
 
     for (let i = 0; i < 2; i++) {
-      capturedOnChange!({ path: `/src/app/e${i}.java`, type: 'change', sizeBytes: 10 });
+      capturedOnChange!({ path: `/src/app/e${i}.java`, type: 'change', relativePath: `e${i}.java`, sizeBytes: 10 });
       await vi.advanceTimersByTimeAsync(500);
       await vi.runOnlyPendingTimersAsync();
     }

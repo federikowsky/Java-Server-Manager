@@ -1,6 +1,7 @@
 import type {
   ServerConfig,
   ServerId,
+  DeploymentId,
   ServerState,
   StartMode,
   OperationContext,
@@ -11,6 +12,7 @@ import type {
   OutputSink,
   HookEvent,
 } from '@core/types';
+import type { FileChangeBatch } from '@core/types/events';
 import type { Result } from '@core/result';
 import { ok, err } from '@core/result';
 import { JsmError } from '@core/errors/JsmError';
@@ -23,6 +25,7 @@ import {
   throwIfCancelled,
 } from '@core/ops';
 import type { OperationQueue, QueueEntry } from '@core/ops/OperationQueue';
+import { QUEUE_META_FILE_CHANGE_BATCH } from '@core/ops/OperationQueue';
 import type { CancellationTokenSource } from '@core/ops';
 import type { IServerPlugin } from '@plugins/interfaces/IServerPlugin';
 import type { PluginRegistry } from '@plugins/registry/PluginRegistry';
@@ -50,6 +53,8 @@ export interface ServerLifecycleDeps {
   hookRunner?: Pick<HookRunner, 'runHooks'>;
   getOutputSink?: (serverKey: ServerId, serverName: string) => OutputSink;
   deployService?: DeploymentService;
+  resolveServerConfig?: (serverKey: ServerId) => ServerConfig | undefined;
+  onDeploySyncFailure?: (serverKey: ServerId, deploymentId: DeploymentId) => void;
 }
 
 interface ServerEntry {
@@ -260,6 +265,28 @@ export class ServerLifecycle {
     return ok(undefined);
   }
 
+  /**
+   * Enqueue filesystem-triggered deploy sync (autosync).
+   * Executes `DeploymentService.sync` on the queue with fresh config when `resolveServerConfig` is set.
+   */
+  enqueueDeploySync(
+    serverId: ServerId,
+    deploymentId: DeploymentId,
+    batch: FileChangeBatch,
+  ): Result<void, JsmError> {
+    if (!this.checkTrust()) return this.untrustedErr();
+
+    const entry = this.servers.get(serverId);
+    if (!entry) return this.notFound(serverId);
+
+    entry.queue.enqueue({
+      kind: 'DeploySync',
+      targetDeploymentId: deploymentId,
+      meta: { [QUEUE_META_FILE_CHANGE_BATCH]: batch },
+    });
+    return ok(undefined);
+  }
+
   /** Attach debugger to an already-running server. */
   async attachDebug(serverId: ServerId): Promise<Result<void, JsmError>> {
     if (!this.checkTrust()) return this.untrustedErr();
@@ -378,6 +405,9 @@ export class ServerLifecycle {
         }
         case 'StatusRefresh':
           await this.doStatusRefresh(server, cancellation.token);
+          break;
+        case 'DeploySync':
+          await this.doDeploySync(server, entry, cancellation.token);
           break;
         default:
           this.deps.logger.warn(`ServerLifecycle: unhandled operation kind '${kind}'`);
@@ -655,6 +685,59 @@ export class ServerLifecycle {
         await this.runServerOnErrorHooks(server, ctx, hookEvent, error);
       }
       throw error;
+    }
+  }
+
+  // ── Deploy sync (autosync) ──────────────────────────────────────
+
+  private async doDeploySync(
+    server: ServerEntry,
+    entry: QueueEntry,
+    cancel: OperationContext['cancel'],
+  ): Promise<void> {
+    const deployService = this.deps.deployService;
+    if (!deployService) {
+      this.deps.logger.warn('ServerLifecycle: DeploySync skipped — deployService not configured');
+      return;
+    }
+
+    const deploymentId = entry.targetDeploymentId;
+    if (!deploymentId) {
+      this.deps.logger.warn('ServerLifecycle: DeploySync missing targetDeploymentId');
+      return;
+    }
+
+    const batch = entry.meta?.[QUEUE_META_FILE_CHANGE_BATCH] as FileChangeBatch | undefined;
+    if (!batch || !Array.isArray(batch.changes)) {
+      this.deps.logger.warn('ServerLifecycle: DeploySync missing fileChangeBatch meta');
+      return;
+    }
+
+    const serverKey = server.serverKey;
+    const config = this.deps.resolveServerConfig?.(serverKey) ?? server.config;
+    const dep = config.deployments.find(d => d.id === deploymentId);
+    if (!dep) {
+      this.deps.logger.warn(`ServerLifecycle: DeploySync deployment '${deploymentId}' not found`);
+      return;
+    }
+
+    const ctx = makeCtx(
+      serverKey,
+      'DeploySync',
+      30_000,
+      cancel,
+      this.deps.getOutputSink?.(serverKey, config.name),
+    );
+    ctx.targetDeploymentId = deploymentId;
+
+    try {
+      const result = await deployService.sync(ctx, config, dep, batch);
+      if (!result.ok) {
+        this.deps.onDeploySyncFailure?.(serverKey, deploymentId);
+      }
+    } catch (cause) {
+      this.deps.onDeploySyncFailure?.(serverKey, deploymentId);
+      throw cause;
     }
   }
 

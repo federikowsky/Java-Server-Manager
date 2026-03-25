@@ -170,8 +170,6 @@ export function registerDeploymentCommands(
 
       const dep = server.deployments.find((d: DeploymentConfig) => d.id === arg.deploymentId);
       if (!dep) return;
-      if (dep.type !== 'exploded') return;
-
       const newMode = nextSyncMode(dep.syncMode);
       const updatedDep = { ...dep, syncMode: newMode };
       const updatedServer = {

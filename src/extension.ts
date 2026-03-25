@@ -2,13 +2,12 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { createHash } from 'crypto';
 import workspaceSchemaDocument from './schema/jsm.servers.schema.json';
-import type { ServerId, DeploymentId, FileChangeBatch, OperationContext, Logger as ILogger } from '@core/types';
+import type { ServerId, DeploymentId, FileChangeBatch, Logger as ILogger } from '@core/types';
 import type { Result } from '@core/result';
 import { ok, err } from '@core/result';
 import { JsmError } from '@core/errors/JsmError';
 import { ErrorCode } from '@core/errors/codes';
 import { EventBus } from '@core/events/EventBus';
-import { createCancellationTokenSource } from '@core/ops';
 import { OperationQueue } from '@core/ops/OperationQueue';
 import { SchemaValidator } from '@core/validation/SchemaValidator';
 import { Logger, RingBuffer } from '@infra/logging';
@@ -253,6 +252,8 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
     hookRunner,
   });
 
+  const autoSyncRef: { current?: InstanceType<typeof AutoSyncService> } = {};
+
   const lifecycle = new ServerLifecycle({
     pluginRegistry,
     bus: eventBus,
@@ -274,10 +275,12 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
       },
     }),
     deployService,
+    resolveServerConfig: serverKey =>
+      workspaceServiceRegistry.getServerRecordByKey(serverKey)?.config,
+    onDeploySyncFailure: (serverKey, deploymentId) => {
+      autoSyncRef.current?.recordFailure(serverKey, deploymentId);
+    },
   });
-
-  // Forward ref: onSyncRequest runs inside AutoSyncService ctor and must call recordFailure on sync errors.
-  const autoSyncRef: { current?: InstanceType<typeof AutoSyncService> } = {};
 
   const autoSyncService = new AutoSyncService({
     bus: eventBus,
@@ -286,37 +289,13 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
     trustGate,
     onSyncRequest: async (
       serverId: ServerId,
-      _deploymentId: DeploymentId,
+      deploymentId: DeploymentId,
       batch: FileChangeBatch,
     ) => {
-      const record = workspaceServiceRegistry.getServerRecordByKey(serverId);
-      const config = record?.config;
-      if (!config) return;
-      const deployment = config.deployments?.find(
-        d => d.id === _deploymentId,
-      );
-      if (!deployment) return;
-      const runtime = lifecycle.getRuntime(serverId);
-      if (!runtime) return;
-      const cancellation = createCancellationTokenSource();
-      const opCtx: OperationContext = {
-        operationId: `autosync-${Date.now()}`,
-        serverId,
-        kind: 'DeployIncremental',
-        targetDeploymentId: _deploymentId,
-        startedAt: Date.now(),
-        timeoutMs: 30_000,
-        cancel: cancellation.token,
-        progress: { report: () => {} },
-        output: { append: () => {}, appendLine: () => {}, clear: () => {} },
-      };
-      try {
-        const result = await deployService.sync(opCtx, config, deployment, batch);
-        if (!result.ok) {
-          autoSyncRef.current?.recordFailure(serverId, _deploymentId);
-        }
-      } catch {
-        autoSyncRef.current?.recordFailure(serverId, _deploymentId);
+      if (!lifecycle.getRuntime(serverId)) return;
+      const enqueued = lifecycle.enqueueDeploySync(serverId, deploymentId, batch);
+      if (!enqueued.ok) {
+        autoSyncRef.current?.recordFailure(serverId, deploymentId);
       }
     },
   });

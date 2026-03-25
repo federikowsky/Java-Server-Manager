@@ -59,7 +59,7 @@ describe('AutoSyncService', () => {
     capturedOnChange = undefined;
 
     watcherFactory = {
-      watch: vi.fn((_sourcePath: string, _ignoreGlobs: string[], onChange: (change: FileChange) => void) => {
+      watch: vi.fn((_spec: unknown, onChange: (change: FileChange) => void) => {
         capturedOnChange = onChange;
         return { dispose: vi.fn() };
       }),
@@ -98,9 +98,23 @@ describe('AutoSyncService', () => {
     expect(watcherFactory.watch).not.toHaveBeenCalled();
   });
 
-  it('does not create watcher for war deployments', () => {
+  it('creates a file watcher for war deployments when syncMode is auto', () => {
     const config = makeConfig();
     config.deployments[0].type = 'war';
+    config.deployments[0].sourcePath = '/build/app.war';
+    service.enable(config);
+    expect(watcherFactory.watch).toHaveBeenCalledOnce();
+    expect(watcherFactory.watch).toHaveBeenCalledWith(
+      { kind: 'file', path: '/build/app.war' },
+      expect.any(Function),
+    );
+  });
+
+  it('does not create watcher for war when syncMode is manual', () => {
+    const config = makeConfig();
+    config.deployments[0].type = 'war';
+    config.deployments[0].sourcePath = '/build/app.war';
+    config.deployments[0].syncMode = 'manual';
     service.enable(config);
     expect(watcherFactory.watch).not.toHaveBeenCalled();
   });

@@ -332,8 +332,8 @@ describe('Deployment Commands', () => {
       );
     });
 
-    it('should do nothing for war deployments', async () => {
-      const dep = makeDeployment('dep-1', 'auto', 'war');
+    it('should cycle sync mode for war deployments', async () => {
+      const dep = makeDeployment('dep-1', 'manual', 'war');
       const server = makeServer();
       server.deployments = [dep];
       deps.configService.getServer.mockReturnValue(server);
@@ -341,7 +341,11 @@ describe('Deployment Commands', () => {
       const node = createDeploymentNode('srv-1', dep);
       await invoke('jsm.deployment.toggleAutosync', node);
 
-      expect(deps.configService.updateServer).not.toHaveBeenCalled();
+      expect(deps.configService.updateServer).toHaveBeenCalledWith(
+        expect.objectContaining({
+          deployments: [expect.objectContaining({ type: 'war', syncMode: 'auto' })],
+        }),
+      );
     });
 
     it('should show error when updateServer fails', async () => {

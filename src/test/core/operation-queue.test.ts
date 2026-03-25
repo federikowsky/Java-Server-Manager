@@ -1,5 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
-import { OperationQueue, type QueueEntry, type Executor } from '@core/ops/OperationQueue';
+import {
+  OperationQueue,
+  QUEUE_META_FILE_CHANGE_BATCH,
+  type QueueEntry,
+  type Executor,
+} from '@core/ops/OperationQueue';
 import type { Logger } from '@core/types/logger';
 
 function mockLogger(): Logger {
@@ -127,5 +132,77 @@ describe('OperationQueue', () => {
     const q = new OperationQueue('s1', mockLogger());
     expect(q.isRunning).toBe(false);
     expect(q.size).toBe(0);
+  });
+
+  it('coalesces DeploySync for same deployment to a single pending entry', async () => {
+    const q = new OperationQueue('s1', mockLogger());
+    let resolve: (() => void) | undefined;
+    const blocking = new Promise<void>(r => { resolve = r; });
+    const order: string[] = [];
+
+    q.setExecutor(async (e) => {
+      order.push(e.kind + (e.targetDeploymentId ? `(${e.targetDeploymentId})` : ''));
+      if (order.length === 1) await blocking;
+    });
+
+    q.enqueue(entry('LifecycleStart'));
+    await new Promise(r => setTimeout(r, 10));
+    q.enqueue({
+      kind: 'DeploySync',
+      targetDeploymentId: 'd1',
+      meta: {
+        [QUEUE_META_FILE_CHANGE_BATCH]: {
+          changes: [{ type: 'change', path: '/a', relativePath: 'a' }],
+          totalFiles: 1,
+          totalBytes: 1,
+        },
+      },
+    });
+    q.enqueue({
+      kind: 'DeploySync',
+      targetDeploymentId: 'd1',
+      meta: {
+        [QUEUE_META_FILE_CHANGE_BATCH]: {
+          changes: [{ type: 'change', path: '/b', relativePath: 'b' }],
+          totalFiles: 1,
+          totalBytes: 1,
+        },
+      },
+    });
+
+    resolve!();
+    await new Promise(r => setTimeout(r, 50));
+    expect(order).toEqual(['LifecycleStart', 'DeploySync(d1)']);
+  });
+
+  it('drops DeploySync when DeployFull is pending for same deployment', async () => {
+    const q = new OperationQueue('s1', mockLogger());
+    let resolve: (() => void) | undefined;
+    const blocking = new Promise<void>(r => { resolve = r; });
+    const order: string[] = [];
+
+    q.setExecutor(async (e) => {
+      order.push(e.kind + (e.targetDeploymentId ? `(${e.targetDeploymentId})` : ''));
+      if (order.length === 1) await blocking;
+    });
+
+    q.enqueue(entry('LifecycleStart'));
+    await new Promise(r => setTimeout(r, 10));
+    q.enqueue(entry('DeployFull', 'd1'));
+    q.enqueue({
+      kind: 'DeploySync',
+      targetDeploymentId: 'd1',
+      meta: {
+        [QUEUE_META_FILE_CHANGE_BATCH]: {
+          changes: [],
+          totalFiles: 0,
+          totalBytes: 0,
+        },
+      },
+    });
+
+    resolve!();
+    await new Promise(r => setTimeout(r, 50));
+    expect(order).toEqual(['LifecycleStart', 'DeployFull(d1)']);
   });
 });

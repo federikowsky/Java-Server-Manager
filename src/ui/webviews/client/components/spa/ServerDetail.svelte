@@ -278,7 +278,7 @@
         <div class="config-view">
           {#if isConfigFormReady}
             <div class="form-surface">
-              <FormBody sections={$spaState.currentFormSchema?.sections || []} />
+              <FormBody sections={$spaState.currentFormSchema?.sections || []} layout="spa" />
             </div>
             <FormActions
               mode="edit"

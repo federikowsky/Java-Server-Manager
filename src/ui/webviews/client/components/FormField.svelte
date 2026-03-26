@@ -70,6 +70,10 @@
     currentFormId = f;
   });
 
+  let useHooksEditorPage = $derived(
+    currentFormId === 'jsm.serverForm' || currentFormId === 'jsm.templateForm',
+  );
+
   function openHooksEditor(): void {
     const hooks = Array.isArray(value) ? [...(value as unknown[])] : [];
     const ent = get(activeEntity);
@@ -111,7 +115,7 @@
     {:else if def.type === 'number'}
       <NumberInput {def} value={value as number | undefined} onChange={handleChange} id={fieldId} />
     {:else if def.type === 'hooks'}
-      {#if currentFormId === 'jsm.serverForm'}
+      {#if useHooksEditorPage}
         <p class="hooks-inline-summary">
           {Array.isArray(value) && value.length > 0
             ? `${value.length} hook(s) configured`

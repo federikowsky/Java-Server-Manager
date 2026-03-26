@@ -6,6 +6,7 @@
   import PageState from '../ds/PageState.svelte';
   import TemplateReadonlyPage from './TemplateReadonlyPage.svelte';
   import TemplateEditorPage from './TemplateEditorPage.svelte';
+  import HooksEditorPage from './HooksEditorPage.svelte';
 
   let state = $state($spaState);
   const unsubState = spaState.subscribe(s => {
@@ -67,7 +68,9 @@
   }
 </script>
 
-{#if currentEntity.type === 'template' && currentEntity.id}
+{#if currentEntity.type === 'hooks-editor'}
+  <HooksEditorPage />
+{:else if currentEntity.type === 'template' && currentEntity.id}
   <TemplateReadonlyPage templateId={currentEntity.id} />
 {:else if currentEntity.type === 'new-template'}
   <TemplateEditorPage />

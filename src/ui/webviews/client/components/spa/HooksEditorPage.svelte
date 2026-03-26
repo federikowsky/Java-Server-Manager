@@ -47,9 +47,22 @@
     activeEntity.set(s.returnTarget);
   }
 
-  const backLabel = $derived(
-    session?.returnTarget?.type === 'new-server' ? 'Add Server' : 'Server Configuration',
-  );
+  const backLabel = $derived.by(() => {
+    const t = session?.returnTarget?.type;
+    if (t === 'new-server') {
+      return 'Add Server';
+    }
+    if (t === 'new-template') {
+      return 'Create Template';
+    }
+    if (t === 'edit-template') {
+      return 'Edit Template';
+    }
+    if (t === 'server') {
+      return 'Server Configuration';
+    }
+    return 'Back';
+  });
 </script>
 
 {#if session}

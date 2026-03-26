@@ -1,4 +1,6 @@
 <script lang="ts">
+  import Icon from '../Icon.svelte';
+
   const { title, defaultOpen = false }: { title: string; defaultOpen?: boolean } = $props();
   let open = $state(defaultOpen);
   const tid = `adv-${Math.random().toString(36).slice(2, 9)}`;
@@ -12,7 +14,9 @@
     aria-controls={tid}
     onclick={() => (open = !open)}
   >
-    <span class="jsm-adv-chevron" aria-hidden="true">{open ? '▾' : '▸'}</span>
+    <span class="jsm-adv-chevron" class:expanded={open} aria-hidden="true">
+      <Icon name="chevron-right" size={16} />
+    </span>
     {title}
   </button>
   {#if open}
@@ -48,9 +52,15 @@
     outline-offset: -2px;
   }
   .jsm-adv-chevron {
-    font-size: var(--jsm-font-size-sm);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
     color: var(--jsm-color-fg-secondary);
-    width: 1em;
+    transition: transform var(--jsm-transition-slower);
+  }
+  .jsm-adv-chevron.expanded {
+    transform: rotate(90deg);
   }
   .jsm-adv-divider {
     height: 1px;

@@ -4,6 +4,7 @@
   import BackControl from '../ds/BackControl.svelte';
   import SectionBlock from '../ds/SectionBlock.svelte';
   import DetailRows from '../ds/DetailRows.svelte';
+  import Icon from '../Icon.svelte';
 
   const { templateId }: { templateId: string } = $props();
 
@@ -60,7 +61,10 @@
     <div class="tpl-top">
       <BackControl label="Templates" onBack={goTemplatesIndex} />
       <div class="tpl-actions">
-        <button type="button" class="btn-sec" onclick={goEdit}>Edit</button>
+        <button type="button" class="btn btn-primary" onclick={goEdit}>
+          <Icon name="edit" size={14} />
+          <span>Edit</span>
+        </button>
       </div>
     </div>
 

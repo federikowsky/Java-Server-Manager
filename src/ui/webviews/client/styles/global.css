@@ -131,6 +131,10 @@ html:has(body.spa-mode) {
   gap: 12px;
 }
 
+.jsm-form--spa {
+  gap: var(--jsm-space-lg);
+}
+
 /* ── Section (Card) ────────────────────────────────────────────────────────── */
 
 .form-section {
@@ -158,6 +162,36 @@ html:has(body.spa-mode) {
   border-color: var(--jsm-color-border-focus);
 }
 
+.form-section.form-section--spa {
+  border: 1px solid var(--jsm-color-border-secondary);
+  border-radius: var(--jsm-radius-sm);
+  background: var(--jsm-surface-1);
+  box-shadow: none;
+  margin-bottom: 0;
+  animation: none;
+}
+
+.form-section.form-section--spa:hover {
+  box-shadow: none;
+}
+
+.form-section.form-section--spa:focus-within {
+  border-color: var(--jsm-color-border-focus);
+}
+
+.section-header.section-header--spa {
+  background: transparent;
+}
+
+.section-title.section-title--spa {
+  font-size: var(--jsm-font-size-md);
+  font-weight: var(--jsm-font-weight-semibold);
+}
+
+.section-content.section-content--spa {
+  padding: var(--jsm-space-md) var(--jsm-space-lg) var(--jsm-space-lg);
+}
+
 .section-title {
   font-size: var(--jsm-font-size-lg);
   font-weight: var(--jsm-font-weight-semibold);
@@ -183,26 +217,6 @@ html:has(body.spa-mode) {
 
 .section-header.collapsible:hover {
   background-color: var(--jsm-color-bg-hover);
-}
-
-.section-chevron {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: var(--jsm-icon-size-lg);
-  height: var(--jsm-icon-size-lg);
-  transition: transform var(--jsm-transition-slower);
-  flex-shrink: 0;
-  color: var(--jsm-color-fg-secondary);
-}
-
-.section-chevron.collapsed {
-  transform: rotate(-90deg);
-}
-
-.section-chevron svg {
-  width: 16px;
-  height: 16px;
 }
 
 .section-toggle {

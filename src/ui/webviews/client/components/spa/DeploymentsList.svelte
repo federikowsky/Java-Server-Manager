@@ -266,6 +266,7 @@
   .col-actions {
     width: 1%;
     white-space: nowrap;
+    min-width: 11.5rem;
   }
 
   .cell-name {
@@ -319,15 +320,18 @@
 
   .actions-cell {
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     align-items: center;
-    gap: var(--jsm-space-xs);
+    justify-content: flex-end;
+    gap: var(--jsm-space-2xs);
   }
 
   .act-icon,
   .act-text {
     display: inline-flex;
     align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
     gap: var(--jsm-space-2xs);
     padding: var(--jsm-space-2xs) var(--jsm-space-xs);
     border: none;

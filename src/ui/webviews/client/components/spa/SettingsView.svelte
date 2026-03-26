@@ -274,7 +274,8 @@
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    max-width: 52rem;
+    width: 100%;
+    box-sizing: border-box;
   }
 
   .stack-fields {
@@ -287,7 +288,7 @@
     display: flex;
     flex-direction: column;
     gap: var(--jsm-space-xs);
-    max-width: 28rem;
+    max-width: 100%;
   }
 
   .field-label {

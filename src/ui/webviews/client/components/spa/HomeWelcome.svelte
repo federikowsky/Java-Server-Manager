@@ -166,7 +166,18 @@
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: var(--jsm-space-lg);
-    align-items: start;
+    align-items: stretch;
+  }
+
+  /* Same row height: both SectionBlocks fill the taller column */
+  .home-two-col > :global(.jsm-section) {
+    height: 100%;
+    min-height: 0;
+  }
+
+  .home-two-col > :global(.jsm-section) > :global(.jsm-section-body) {
+    flex: 1;
+    min-height: 0;
   }
 
   @media (max-width: 720px) {

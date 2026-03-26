@@ -173,8 +173,8 @@
     </svelte:fragment>
 
     {#if isFormReady}
-      <div class="form-surface">
-        <FormBody sections={$spaState.currentFormSchema?.sections || []} />
+      <div class="tpl-form-stack">
+        <FormBody sections={$spaState.currentFormSchema?.sections || []} layout="spa" />
       </div>
     {:else if formLoadState === 'error'}
       <div class="inline-loading-state error">
@@ -211,17 +211,19 @@
 {/if}
 
 <style>
+  @import './forms/wizardFormShared.css';
+
   .tpl-editor {
     flex: 1;
     min-height: 0;
     display: flex;
     flex-direction: column;
   }
-  .form-surface {
-    padding: var(--jsm-space-lg);
-    border: 1px solid var(--jsm-color-border-secondary);
-    border-radius: var(--jsm-radius-sm);
-    background: var(--jsm-surface-1);
+  .tpl-form-stack {
+    display: flex;
+    flex-direction: column;
+    gap: var(--jsm-space-lg);
+    min-width: 0;
   }
   .inline-loading-state {
     display: flex;

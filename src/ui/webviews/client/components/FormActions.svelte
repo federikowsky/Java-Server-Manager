@@ -7,7 +7,9 @@
     submitting,
     formId,
     submitLabel,
-    showCancel,
+    showCancel = true,
+    showReset = false,
+    onReset,
     onCancel,
   }: {
     mode: 'create' | 'edit';
@@ -15,6 +17,8 @@
     formId: string;
     submitLabel?: string;
     showCancel?: boolean;
+    showReset?: boolean;
+    onReset?: () => void;
     onCancel?: () => void;
   } = $props();
 
@@ -40,9 +44,29 @@
     }
     sendCancel();
   }
+
+  function handleReset(): void {
+    onReset?.();
+  }
 </script>
 
+<!-- Spec §15.4: secondary actions first, then primary (e.g. [ Cancel ] < Save >). -->
 <div class="button-bar">
+  {#if showCancel}
+    <button type="button" class="btn btn-secondary" onclick={handleCancel}>
+      Cancel
+    </button>
+  {/if}
+  {#if showReset}
+    <button
+      type="button"
+      class="btn btn-secondary"
+      onclick={handleReset}
+      disabled={!onReset}
+    >
+      Reset
+    </button>
+  {/if}
   <button
     type="button"
     class="btn btn-primary"
@@ -56,13 +80,4 @@
       {getSubmitLabel()}
     {/if}
   </button>
-  {#if showCancel !== false}
-    <button
-      type="button"
-      class="btn btn-secondary"
-      onclick={handleCancel}
-    >
-      Cancel
-    </button>
-  {/if}
 </div>

@@ -5,8 +5,11 @@
   import { postToHost } from '../../../bridge';
   import { WEBVIEW_PROTOCOL_VERSION } from '../../../../protocol';
   import Icon from '../../Icon.svelte';
-  import AccordionSection from './AccordionSection.svelte';
   import FormPage from '../FormPage.svelte';
+  import SectionBlock from '../../ds/SectionBlock.svelte';
+  import AdvancedCollapse from '../../ds/AdvancedCollapse.svelte';
+  import ModeSelector from '../../ds/ModeSelector.svelte';
+  import ContextTag from '../../ds/ContextTag.svelte';
 
   interface Props {
     serverId: string;
@@ -16,12 +19,17 @@
 
   let { serverId, deploymentId, mode = 'create' }: Props = $props();
 
+  let pageSubtitle = $derived(
+    mode === 'create'
+      ? 'Choose source path, artifact type, sync behaviour, and optional health check.'
+      : 'Update source paths, sync behaviour, and health checks.',
+  );
+
   let state = $state($spaState);
   const unsubscribeSpaState = spaState.subscribe(s => { state = s; });
 
   let serverRecord = $derived(state.servers.find(s => s.config.id === serverId));
   let config = $derived(serverRecord?.config);
-  let workspaceFolderLabel = $derived(serverRecord?.workspaceFolderName ?? '');
   let existingDeployment = $derived(
     deploymentId ? config?.deployments?.find((d: any) => d.id === deploymentId) : undefined
   );
@@ -36,7 +44,6 @@
   let ignoreGlobs = $state<string[]>([]);
   let ignoreGlobDraft = $state('');
 
-  let expandedSection = $state<'advanced' | ''>('');
   let errors = $state<Record<string, string>>({});
   let touched = $state<Record<string, boolean>>({});
 
@@ -67,6 +74,7 @@
     }
 
     submitError = '';
+    spaState.update(s => ({ ...s, serverDetailResumeTab: 'deployments' }));
     activeEntity.set({ type: 'server', id: serverId });
   });
 
@@ -98,7 +106,6 @@
     healthCheckTimeoutMs = existingDeployment?.healthCheckTimeoutMs;
     ignoreGlobs = existingDeployment?.ignoreGlobs ? [...existingDeployment.ignoreGlobs] : [];
     ignoreGlobDraft = '';
-    expandedSection = '';
     errors = {};
     touched = {};
     submitState = 'idle';
@@ -134,10 +141,6 @@
     touched = { ...touched, [field]: true };
   }
 
-  function toggleAdvanced() {
-    expandedSection = expandedSection === 'advanced' ? '' : 'advanced';
-  }
-
   function handleBrowse() {
     postToHost({
       v: WEBVIEW_PROTOCOL_VERSION,
@@ -171,7 +174,8 @@
     ignoreGlobs = ignoreGlobs.filter((_, i) => i !== index);
   }
 
-  function handleCancel() {
+  function handleBack() {
+    spaState.update(s => ({ ...s, serverDetailResumeTab: 'deployments' }));
     activeEntity.set({ type: 'server', id: serverId });
   }
 
@@ -244,89 +248,40 @@
 
 {#if config}
   <div class="deployment-wizard-root">
-    <header class="context-header">
-      <div class="context-header-text">
-        <div class="context-title-row">
-          <h1 class="context-title">{config.name}</h1>
-          <span
-            class="badge"
-            class:mode-create={mode === 'create'}
-            class:mode-edit={mode === 'edit'}
-          >
-            {mode === 'create' ? 'new' : 'edit'}
-          </span>
-        </div>
-        <p class="context-subtitle">
-          {config.type || 'Server'} · {mode === 'create'
-            ? 'Add deployment'
-            : (existingDeployment?.deployName ?? 'Edit deployment')}
-        </p>
-        {#if workspaceFolderLabel}
-          <p class="context-meta">
-            <Icon name="folder" size={12} />
-            <span>{workspaceFolderLabel}</span>
-          </p>
-        {/if}
-      </div>
-    </header>
-
 <FormPage
-  icon="package"
-  eyebrow={mode === 'create' ? 'New Deployment' : 'Edit Deployment'}
+  variant="editor"
+  backLabel="Deployments"
+  onBack={handleBack}
   title={mode === 'create' ? 'Add Deployment' : 'Edit Deployment'}
-  subtitle="Choose source paths, artifact type, sync behaviour, and optional health check."
+  subtitle={pageSubtitle}
   alignStart={true}
 >
   <svelte:fragment slot="actions">
-    <span class="meta-chip">{formType === 'exploded' ? 'Exploded' : 'WAR'}</span>
-    <span class="meta-chip subtle">{config?.type || 'Server'}</span>
+    <ContextTag text={formType === 'exploded' ? 'EXPLODED' : 'WAR'} />
+    <ContextTag text={String(config?.type || 'server').toUpperCase()} />
   </svelte:fragment>
 
   <div class="wizard-content">
     <div class="wizard-unified">
-    <!-- Section 1: Source & Type (Flat) -->
-    <div class="wizard-section">
-      <h3 class="section-title">
-        <Icon name="folder" size={16} />
-        <span>Source & Type</span>
-      </h3>
+    <SectionBlock title="Source & Type">
       <div class="section-grid">
-        <!-- Deployment Type — Segmented Control -->
         <div class="form-field">
           <label class="field-label">Deployment Type</label>
-          <div class="segmented-control" role="radiogroup" aria-label="Deployment type">
-            <button
-              type="button"
-              class="segment"
-              class:selected={formType === 'exploded'}
-              role="radio"
-              aria-checked={formType === 'exploded'}
-              onclick={() => formType = 'exploded'}
-            >
-              <Icon name="folder-open" size={14} />
-              <span>Exploded Directory</span>
-            </button>
-            <button
-              type="button"
-              class="segment"
-              class:selected={formType === 'war'}
-              role="radio"
-              aria-checked={formType === 'war'}
-              onclick={() => formType = 'war'}
-            >
-              <Icon name="package" size={14} />
-              <span>WAR File</span>
-            </button>
-          </div>
-          <p class="field-help">
-            {formType === 'exploded' ? 'Hot-reload ready for iterative development.' : 'Packaged archive for explicit deploy steps.'}
-          </p>
+          <ModeSelector
+            ariaLabel="Deployment type"
+            value={formType}
+            onChange={(v) => (formType = v as 'exploded' | 'war')}
+            options={[
+              { value: 'exploded', label: 'Exploded Directory' },
+              { value: 'war', label: 'WAR File' },
+            ]}
+          />
         </div>
 
         <!-- Source Path -->
         <div class="form-field">
           <label class="field-label" for="source-path">
-            Source Path <span class="required">*</span>
+            {formType === 'war' ? 'WAR File' : 'Source Path'} <span class="required">*</span>
           </label>
           <div class="path-input-row">
             <input
@@ -347,7 +302,11 @@
           {#if errors.sourcePath && touched.sourcePath}
             <p class="field-error">{errors.sourcePath}</p>
           {:else}
-            <p class="field-help">Path to the {formType === 'war' ? 'WAR file' : 'exploded directory'}.</p>
+            <p class="field-help">
+              {formType === 'war'
+                ? 'Path to the deployable WAR artifact.'
+                : 'Path to the exploded directory.'}
+            </p>
           {/if}
         </div>
 
@@ -375,14 +334,9 @@
           {/if}
         </div>
       </div>
-    </div>
+    </SectionBlock>
 
-    <!-- Section 2: Sync & Options (Flat) -->
-    <div class="wizard-section">
-      <h3 class="section-title">
-        <Icon name="refresh" size={16} />
-        <span>Sync & Options</span>
-      </h3>
+    <AdvancedCollapse title="Sync & Options" defaultOpen={true}>
       <div class="section-grid">
         <div class="form-field">
           <label class="field-label">Synchronization Mode</label>
@@ -392,9 +346,7 @@
               <div class="radio-content">
                 <span class="radio-label">Auto</span>
                 <span class="radio-desc">
-                  {formType === 'war'
-                    ? 'When the WAR file changes, it is copied to webapps/ again; Tomcat picks up the update if auto-deploy is enabled.'
-                    : 'Files synced automatically on save. The extension applies the lightest safe update and falls back to full redeploy when needed.'}
+                  Files sync automatically on save. Applies the lightest safe update and falls back when needed.
                 </span>
               </div>
             </label>
@@ -402,7 +354,7 @@
               <input type="radio" bind:group={syncMode} value="manual" />
               <div class="radio-content">
                 <span class="radio-label">Manual</span>
-                <span class="radio-desc">You control when to redeploy from the dashboard or tree.</span>
+                <span class="radio-desc">You control redeploy from the dashboard or tree.</span>
               </div>
             </label>
           </div>
@@ -414,27 +366,15 @@
               <input type="checkbox" class="field-checkbox" bind:checked={hotReload} />
               <div class="checkbox-content">
                 <span class="checkbox-label-text">Enable Hot Reload</span>
-                <span class="checkbox-desc">Apply changes without full redeploy. Only affects files outside WEB-INF/ and META-INF/.</span>
+                <span class="checkbox-desc">Apply changes without full redeploy. Only affects files outside WEB-INF and META-INF.</span>
               </div>
             </label>
           </div>
-        {:else}
-          <div class="info-banner">
-            <Icon name="info" size={16} />
-            <span>WAR deploy copies the packaged file to webapps/. Use Redeploy for a full refresh on demand when sync is manual.</span>
-          </div>
         {/if}
       </div>
-    </div>
+    </AdvancedCollapse>
 
-    <!-- Section 3: Advanced (Accordion) -->
-    <div class="wizard-section">
-    <AccordionSection 
-      title="Advanced Options" 
-      icon="settings"
-      expanded={expandedSection === 'advanced'}
-      onToggle={toggleAdvanced}
-    >
+    <AdvancedCollapse title="Advanced Options">
       <div class="section-grid">
         <div class="form-field">
           <label class="field-label" for="health-path">Health Check Path</label>
@@ -499,8 +439,7 @@
           <p class="field-help">File patterns to exclude from sync (e.g., "*.tmp", "build/**").</p>
         </div>
       </div>
-    </AccordionSection>
-    </div>
+    </AdvancedCollapse>
     </div>
   </div>
 
@@ -512,7 +451,7 @@
   {/if}
 
   <svelte:fragment slot="footer">
-    <button type="button" class="btn btn-secondary" onclick={handleCancel} disabled={submitState === 'submitting'}>
+    <button type="button" class="btn btn-secondary" onclick={handleBack} disabled={submitState === 'submitting'}>
       <Icon name="x" size={14} />
       <span>Cancel</span>
     </button>
@@ -524,10 +463,10 @@
     >
       {#if submitState === 'submitting'}
         <Icon name="loading" size={14} />
-        <span>{mode === 'create' ? 'Saving Deployment...' : 'Saving Changes...'}</span>
+        <span>Saving…</span>
       {:else}
         <Icon name="check" size={14} />
-        <span>{mode === 'create' ? 'Add Deployment' : 'Save Deployment'}</span>
+        <span>{mode === 'create' ? 'Add Deployment' : 'Save Changes'}</span>
       {/if}
     </button>
   </svelte:fragment>
@@ -546,75 +485,6 @@
     flex: 1;
     min-height: 0;
     height: 100%;
-  }
-
-  .context-header {
-    padding: var(--jsm-space-lg) var(--jsm-space-xl);
-    border-bottom: 1px solid var(--jsm-context-header-border);
-    background: var(--jsm-context-header-bg);
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    gap: var(--jsm-space-xl);
-    flex-shrink: 0;
-  }
-
-  .context-header-text {
-    min-width: 0;
-    flex: 1;
-  }
-
-  .context-title-row {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: var(--jsm-space-md);
-  }
-
-  .context-title {
-    margin: 0;
-    font-size: var(--jsm-font-size-2xl);
-    font-weight: var(--jsm-font-weight-semibold);
-    color: var(--jsm-color-fg);
-    line-height: var(--jsm-line-height-tight);
-  }
-
-  .context-subtitle {
-    margin: var(--jsm-space-xs) 0 0;
-    font-size: var(--jsm-font-size-sm);
-    color: var(--jsm-color-fg-secondary);
-    font-family: var(--jsm-font-family);
-    word-break: break-word;
-  }
-
-  .context-meta {
-    margin: var(--jsm-space-xs) 0 0;
-    display: flex;
-    align-items: center;
-    gap: var(--jsm-space-xs);
-    font-size: var(--jsm-font-size-xs);
-    color: var(--jsm-color-fg-muted);
-  }
-
-  .badge {
-    padding: var(--jsm-badge-padding-y) var(--jsm-badge-padding-x);
-    border-radius: var(--jsm-badge-radius);
-    font-size: var(--jsm-font-size-sm);
-    font-weight: var(--jsm-font-weight-semibold);
-    text-transform: uppercase;
-    border: 1px solid transparent;
-  }
-
-  .badge.mode-create {
-    background: color-mix(in srgb, var(--jsm-color-primary) 20%, transparent);
-    color: var(--jsm-color-primary);
-    border-color: color-mix(in srgb, var(--jsm-color-primary) 42%, transparent);
-  }
-
-  .badge.mode-edit {
-    background: var(--jsm-color-bg-secondary);
-    color: var(--jsm-color-fg-secondary);
-    border-color: var(--jsm-color-border-secondary);
   }
 
   .empty-state {

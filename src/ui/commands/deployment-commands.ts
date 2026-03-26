@@ -298,6 +298,27 @@ export function registerDeploymentCommands(
       treeProvider.requestRefresh();
     }],
 
+    // Reveal deployment source in OS explorer / VS Code explorer (spec §17.3 download/export slot).
+    ['jsm.deployment.revealSource', async (arg: unknown) => {
+      if (!isDeploymentNode(arg)) return;
+      const dep =
+        arg.deploymentConfig
+        ?? resolveDeployment(arg.workspaceFolderUri, arg.serverId, arg.deploymentId);
+      const raw = dep && typeof (dep as DeploymentConfig).sourcePath === 'string'
+        ? (dep as DeploymentConfig).sourcePath.trim()
+        : '';
+      if (!raw) {
+        void vscode.window.showWarningMessage('JSM: No source path to reveal.');
+        return;
+      }
+      const uri = vscode.Uri.file(raw);
+      try {
+        await vscode.commands.executeCommand('revealInExplorer', uri);
+      } catch (e) {
+        showErr(JsmError.fromUnknown(e, ErrorCode.InvalidConfig));
+      }
+    }],
+
     // §8.2 — jsm.deployment.openLogs (deferred-v1.1)
     ['jsm.deployment.openLogs', async (arg: unknown) => {
       if (!isDeploymentNode(arg)) return;

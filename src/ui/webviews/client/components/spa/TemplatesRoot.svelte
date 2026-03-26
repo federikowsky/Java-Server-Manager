@@ -48,6 +48,23 @@
       openRow(id);
     }
   }
+
+  function formatUpdated(template: unknown): string {
+    if (!template || typeof template !== 'object') return '—';
+    const row = template as { updatedAt?: string; modifiedAt?: string; lastModified?: string };
+    const raw = row.updatedAt ?? row.modifiedAt ?? row.lastModified;
+    if (!raw || typeof raw !== 'string') return '—';
+    const t = Date.parse(raw);
+    if (Number.isNaN(t)) return '—';
+    const diff = Date.now() - t;
+    const days = Math.floor(diff / 86_400_000);
+    if (days < 0) return '—';
+    if (days === 0) return 'Today';
+    if (days === 1) return '1d ago';
+    if (days < 14) return `${days}d ago`;
+    const weeks = Math.floor(days / 7);
+    return `${weeks}w ago`;
+  }
 </script>
 
 {#if currentEntity.type === 'template' && currentEntity.id}
@@ -68,12 +85,12 @@
     </RootPageHeader>
 
     <div class="search-row">
-      <label class="sr-only" for="tpl-search">Search templates</label>
+      <label class="search-label" for="tpl-search">Search</label>
       <input
         id="tpl-search"
         class="search-input"
         type="search"
-        placeholder="Filter by name or description…"
+        placeholder="tomcat…"
         bind:value={search}
         autocomplete="off"
       />
@@ -81,15 +98,11 @@
 
     {#if filtered.length === 0}
       <PageState
-        title={state.templates.length === 0 ? 'No templates yet' : 'No matches'}
-        description={state.templates.length === 0
-          ? 'Create a template to capture defaults for new servers.'
-          : 'Try a different search term.'}
+        title="No templates found"
+        description="Create a new template or adjust your search."
       >
         <svelte:fragment slot="actions">
-          {#if state.templates.length === 0}
-            <button type="button" class="btn-primary" onclick={goNewTemplate}>New Template</button>
-          {/if}
+          <button type="button" class="btn-primary" onclick={goNewTemplate}>New Template</button>
         </svelte:fragment>
       </PageState>
     {:else}
@@ -117,7 +130,7 @@
                 <td>{row.scope}</td>
                 <td>{row.template.pluginType}</td>
                 <td class="cell-muted">{row.template.description ?? '—'}</td>
-                <td class="cell-muted">—</td>
+                <td class="cell-muted">{formatUpdated(row.template)}</td>
               </tr>
             {/each}
           </tbody>
@@ -138,9 +151,19 @@
   }
   .search-row {
     max-width: 28rem;
+    display: flex;
+    align-items: center;
+    gap: var(--jsm-space-md);
+  }
+  .search-label {
+    flex-shrink: 0;
+    font-size: var(--jsm-font-size-sm);
+    color: var(--jsm-color-fg-secondary);
+    font-weight: var(--jsm-font-weight-medium);
   }
   .search-input {
-    width: 100%;
+    flex: 1;
+    min-width: 0;
     box-sizing: border-box;
     padding: var(--jsm-space-sm) var(--jsm-space-md);
     font-family: var(--jsm-font-family);
@@ -212,15 +235,5 @@
   .btn-primary:focus-visible {
     outline: 2px solid var(--vscode-focusBorder);
     outline-offset: 2px;
-  }
-  .sr-only {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    border: 0;
   }
 </style>

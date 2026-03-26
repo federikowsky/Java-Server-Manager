@@ -1,6 +1,6 @@
 <script lang="ts">
-  const { title }: { title: string } = $props();
-  let open = $state(false);
+  const { title, defaultOpen = false }: { title: string; defaultOpen?: boolean } = $props();
+  let open = $state(defaultOpen);
   const tid = `adv-${Math.random().toString(36).slice(2, 9)}`;
 </script>
 

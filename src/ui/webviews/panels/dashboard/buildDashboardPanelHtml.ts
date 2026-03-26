@@ -19,10 +19,6 @@ export function buildDashboardPanelHtml(webview: vscode.Webview, distWebview: vs
 </head>
 <body>
   <div id="root"></div>
-  <script nonce="${nonce}">
-    // Signal SPA mode
-    window.__JSM_SPA_MODE__ = true;
-  </script>
   <script nonce="${nonce}" src="${scriptUri}"></script>
 </body>
 </html>`;

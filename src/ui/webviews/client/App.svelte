@@ -3,23 +3,7 @@
   import { activeEntity, schema, mode, formId, formData, fieldErrors, submitting, globalError, spaState, browseResult, hostError, lastCommandResult, homeRecentServerIds } from './stores';
   import { sendReady, onHostMessage } from './bridge';
   import type { HostToWebview, FormSchema } from '../protocol';
-  import FormHeader from './components/FormHeader.svelte';
-  import FormBody from './components/FormBody.svelte';
-  import FormActions from './components/FormActions.svelte';
-  import GlobalError from './components/GlobalError.svelte';
   import Layout from './components/spa/Layout.svelte';
-
-  let currentSchema = $state<import('../protocol').FormSchema | null>(null);
-  let currentMode = $state<'create' | 'edit'>('create');
-  let currentFormId = $state('');
-  let currentGlobalError = $state('');
-  let currentSubmitting = $state(false);
-
-  schema.subscribe(v => { currentSchema = v; });
-  mode.subscribe(v => { currentMode = v; });
-  formId.subscribe(v => { currentFormId = v; });
-  globalError.subscribe(v => { currentGlobalError = v; });
-  submitting.subscribe(v => { currentSubmitting = v; });
 
   function collectSchemaDefaults(formSchema: FormSchema): Record<string, unknown> {
     const defaults: Record<string, unknown> = {};
@@ -140,10 +124,19 @@
           ...(msg.data ?? {}),
         });
         break;
-      case 'hookOptions':
+      case 'hookOptions': {
         schema.update(current => current ? applyHookTaskOptions(current, msg.fields, msg.taskOptions) : current);
-        spaState.update(state => ({ ...state, hookTaskOptions: msg.taskOptions }));
+        spaState.update(state => {
+          const base = state.currentFormSchema;
+          const nextForm = base ? applyHookTaskOptions(base, msg.fields, msg.taskOptions) : undefined;
+          return {
+            ...state,
+            hookTaskOptions: msg.taskOptions,
+            ...(nextForm ? { currentFormSchema: nextForm } : {}),
+          };
+        });
         break;
+      }
       case 'workspaceFoldersResult':
         spaState.update(state => ({ ...state, workspaceFolders: msg.folders }));
         break;
@@ -188,20 +181,8 @@
     onHostMessage(handleHostMessage);
     sendReady();
 
-    // Add spa-mode class to body for CSS overrides
-    if ((window as any).__JSM_SPA_MODE__) {
-      document.body.classList.add('spa-mode');
-    }
+    document.body.classList.add('spa-mode');
   });
 </script>
 
-{#if (window as any).__JSM_SPA_MODE__}
-  <Layout />
-{:else}
-  {#if currentSchema}
-    <GlobalError message={currentGlobalError} />
-    <FormHeader title={currentSchema.title} formId={currentFormId} />
-    <FormBody sections={currentSchema.sections} />
-    <FormActions mode={currentMode} submitting={currentSubmitting} formId={currentFormId} />
-  {/if}
-{/if}
+<Layout />

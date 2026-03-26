@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import { spaState, formId, submitting } from '../../stores';
+  import { get } from 'svelte/store';
+  import { spaState, formData, formId, submitting } from '../../stores';
   import { postToHost } from '../../bridge';
   import { WEBVIEW_PROTOCOL_VERSION } from '../../../protocol';
   import FormBody from '../FormBody.svelte';
@@ -133,6 +134,31 @@
     }
   });
 
+  let configFormBaselineKey = $state('');
+  let configFormBaseline = $state<Record<string, unknown> | null>(null);
+
+  $effect(() => {
+    if (activeTab !== 'config') {
+      configFormBaselineKey = '';
+      configFormBaseline = null;
+      return;
+    }
+    if (!isConfigFormReady || !configRequestKey) {
+      return;
+    }
+    if (configFormBaselineKey === configRequestKey) {
+      return;
+    }
+    configFormBaselineKey = configRequestKey;
+    configFormBaseline = JSON.parse(JSON.stringify(get(formData))) as Record<string, unknown>;
+  });
+
+  function handleConfigFormReset(): void {
+    if (configFormBaseline) {
+      formData.set(JSON.parse(JSON.stringify(configFormBaseline)) as Record<string, unknown>);
+    }
+  }
+
   function handleAction(cmd: string) {
     postToHost({
       v: WEBVIEW_PROTOCOL_VERSION,
@@ -156,13 +182,10 @@
           <h1 class="context-title jsm-type-entity-title">{config.name}</h1>
           <StatusBadge state={(runtimeState?.state || 'stopped').toUpperCase()} />
         </div>
-        <p class="context-subtitle">{typeLabel} · {baseUrl}</p>
-        {#if serverRecord?.workspaceFolderName}
-          <p class="context-meta">
-            <Icon name="folder" size={12} />
-            <span>{serverRecord.workspaceFolderName}</span>
-          </p>
-        {/if}
+        <p class="context-subtitle">
+          {typeLabel} · {baseUrl}{#if serverRecord?.workspaceFolderName}
+            · {serverRecord.workspaceFolderName}{/if}
+        </p>
       </div>
       <div class="header-actions">
         <button
@@ -174,16 +197,17 @@
           <Icon name="terminal" size={14} />
           <span>Logs</span>
         </button>
-        {#if runtimeState?.state === 'stopped' || runtimeState?.state === 'error'}
+        {#if runtimeState?.state === 'error'}
+          <button class="action-btn primary" onclick={() => handleAction('jsm.server.startRun')}>
+            <Icon name="play" size={14} />
+            <span>Retry Start</span>
+          </button>
+        {:else if runtimeState?.state === 'stopped'}
           <button class="action-btn primary" onclick={() => handleAction('jsm.server.startRun')}>
             <Icon name="play" size={14} />
             <span>Start</span>
           </button>
         {:else if runtimeState?.state === 'running'}
-          <button class="action-btn" onclick={() => handleAction('jsm.server.restartRun')}>
-            <Icon name="refresh" size={14} />
-            <span>Restart</span>
-          </button>
           <button class="action-btn danger" onclick={() => handleAction('jsm.server.stop')}>
             <Icon name="stop" size={14} />
             <span>Stop</span>
@@ -200,10 +224,7 @@
         tabs={[
           { id: 'overview', label: 'Overview' },
           { id: 'config', label: 'Configuration' },
-          {
-            id: 'deployments',
-            label: `Deployments (${config.deployments?.length ?? 0})`,
-          },
+          { id: 'deployments', label: 'Deployments' },
         ]}
       />
     </div>
@@ -212,24 +233,43 @@
     <div class="tab-content">
       {#if activeTab === 'overview'}
         <div class="overview-sections jsm-stack-lg">
-          <SectionBlock title="Server identity">
+          <SectionBlock title="Identity">
             <DetailRows
               rows={[
                 { label: 'Name', value: String(config.name ?? '') },
-                { label: 'Type', value: String(config.type ?? '') },
-                { label: 'Runtime home', value: String(config.runtime?.homePath ?? '—') },
+                { label: 'Type', value: typeLabel },
+                { label: 'Home', value: String(config.runtime?.homePath ?? '—') },
               ]}
             />
           </SectionBlock>
-          <SectionBlock title="Ports & network">
+          <SectionBlock title="Ports & Network">
             <DetailRows
               rows={[
-                { label: 'HTTP port', value: String(config.ports?.http ?? '—') },
+                { label: 'HTTP Port', value: String(config.ports?.http ?? '—') },
                 {
-                  label: 'Debug port',
-                  value: config.ports?.debug != null ? String(config.ports.debug) : 'Auto-assign',
+                  label: 'Debug Port',
+                  value: config.ports?.debug != null ? String(config.ports.debug) : '—',
                 },
                 { label: 'Host', value: String(config.host ?? '—') },
+              ]}
+            />
+          </SectionBlock>
+          <SectionBlock title="Runtime">
+            <DetailRows
+              rows={[
+                { label: 'JAVA_HOME', value: String(config.javaHome ?? '—') },
+                {
+                  label: 'VM Arguments',
+                  value: (() => {
+                    const args = config.run?.vmArgs;
+                    if (!args?.length) return '—';
+                    return args.join(' ');
+                  })(),
+                },
+                {
+                  label: 'Hooks',
+                  value: `${config.hooks?.length ?? 0} configured`,
+                },
               ]}
             />
           </SectionBlock>
@@ -244,8 +284,10 @@
               mode="edit"
               submitting={$submitting}
               formId={$formId}
-              submitLabel="Save Server"
-              onCancel={() => activeTab = 'overview'}
+              submitLabel="Save"
+              showCancel={false}
+              showReset={true}
+              onReset={handleConfigFormReset}
             />
           {:else if configLoadState === 'error'}
             <div class="inline-loading-state error">
@@ -259,9 +301,12 @@
               </div>
             </div>
           {:else}
-            <div class="inline-loading-state">
+            <div class="inline-loading-state inline-loading-stack">
               <Icon name="loading" size={20} />
-              <span>Loading configuration form…</span>
+              <div class="inline-loading-lines">
+                <span class="loading-title">Loading configuration…</span>
+                <span class="loading-desc">Retrieving server details and runtime metadata.</span>
+              </div>
             </div>
           {/if}
         </div>
@@ -387,6 +432,27 @@
     border: 1px dashed var(--jsm-color-border-secondary);
     border-radius: var(--jsm-radius-md);
     background: var(--jsm-color-bg-secondary);
+  }
+
+  .inline-loading-stack {
+    align-items: flex-start;
+  }
+
+  .inline-loading-lines {
+    display: flex;
+    flex-direction: column;
+    gap: var(--jsm-space-2xs);
+    min-width: 0;
+  }
+
+  .loading-title {
+    font-weight: var(--jsm-font-weight-semibold);
+    color: var(--jsm-color-fg);
+  }
+
+  .loading-desc {
+    font-size: var(--jsm-font-size-sm);
+    line-height: var(--jsm-line-height-relaxed);
   }
 
   .inline-loading-state.error {

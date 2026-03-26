@@ -12,8 +12,9 @@
     HOOK_PHASE_OPTIONS,
   } from '../../hookForm';
   import Icon from './Icon.svelte';
-  import type { IconName } from './Icon.svelte';
   import KeyValueList from './inputs/KeyValueList.svelte';
+  import SectionBlock from './ds/SectionBlock.svelte';
+  import AdvancedCollapse from './ds/AdvancedCollapse.svelte';
 
   const { def, value, onChange, id }: {
     def: FormFieldDef;
@@ -37,7 +38,6 @@
 
   const allowedEvents = $derived((def.hookOptions?.events ?? HOOK_EVENT_OPTIONS).map(option => option.value as HookConfig['event']));
   const eventOptions = $derived(def.hookOptions?.events ?? HOOK_EVENT_OPTIONS);
-  const defaultEvent = $derived((def.hookOptions?.defaultEvent as HookConfig['event'] | undefined) ?? allowedEvents[0] ?? 'lifecycle.start');
   const taskOptions = $derived(def.hookOptions?.taskOptions ?? []);
 
   $effect(() => {
@@ -147,20 +147,8 @@
     return `${id}-${index}-${suffix.replaceAll('.', '-')}`;
   }
 
-  function getPhaseIcon(phase: HookPhase): IconName {
-    switch (phase) {
-      case 'pre': return 'play';
-      case 'post': return 'check';
-      case 'onError': return 'error';
-    }
-  }
-
   function getPhaseLabel(phase: HookPhase): string {
-    switch (phase) {
-      case 'pre': return 'Before';
-      case 'post': return 'After';
-      case 'onError': return 'On Error';
-    }
+    return HOOK_PHASE_OPTIONS.find(o => o.value === phase)?.label ?? phase;
   }
 
   function getEventLabel(event: HookEvent): string {
@@ -176,6 +164,15 @@
     return line.length > 0 ? `$ ${line}` : '(no command)';
   }
 
+  function getCommandCell(hook: HookConfig): string {
+    return getCommandPreview(hook).replace(/^\$\s+/, '');
+  }
+
+  function getTypeLabel(kind: HookKind): string {
+    const opt = HOOK_KIND_OPTIONS.find(o => o.value === kind);
+    return opt?.label ?? kind;
+  }
+
   function updateCommandLine(index: number, line: string): void {
     const hooks = getHooks();
     const current = hooks[index];
@@ -185,37 +182,38 @@
   }
 </script>
 
-<div class="hook-list" id={id}>
-  <!-- Hook Cards -->
-  {#each getHooks() as hook, index (hook.id + index)}
-    <div class="hook-card" class:editing={editingIndex === index}>
-      <!-- Compact View -->
-      <div class="hook-card-compact">
-        <div class="hook-card-icon">
-          <Icon name={getPhaseIcon(hook.phase)} size={14} />
+<div class="hook-list-root" id={id}>
+  <SectionBlock title="Existing Hooks">
+    <div class="hook-rows" role="list">
+      {#if getHooks().length > 0}
+        <div class="hook-spec-head" aria-hidden="true">
+          <span>Event</span>
+          <span>Phase</span>
+          <span>Type</span>
+          <span>Command</span>
+          <span class="hook-spec-actions-h"> </span>
         </div>
-        <div class="hook-card-info">
-          <span class="hook-card-title">{getPhaseLabel(hook.phase)} {getEventLabel(hook.event)}</span>
-          <code class="hook-card-command">{getCommandPreview(hook)}</code>
-        </div>
-        <div class="hook-card-meta">
-          <span class="hook-meta-badge">{hook.phase}</span>
-          <span class="hook-meta-badge subtle">{hook.kind === 'command' ? 'shell' : 'task'}</span>
-          <span class="hook-meta-badge subtle">{Math.round(hook.timeoutMs / 1000)}s</span>
-        </div>
-        <div class="hook-card-actions">
-          <button type="button" class="icon-btn" onclick={() => toggleEdit(index)} title="Edit hook" aria-label="Edit hook">
-            <Icon name="edit" size={14} />
-          </button>
-          <button type="button" class="icon-btn danger" onclick={() => removeHook(index)} title="Remove hook" aria-label="Remove hook">
-            <Icon name="x" size={14} />
-          </button>
-        </div>
-      </div>
+      {/if}
+      {#each getHooks() as hook, index (hook.id + index)}
+        <div class="hook-row" class:editing={editingIndex === index} role="listitem">
+          <div class="hook-spec-row">
+            <span class="hook-spec-cell">{getEventLabel(hook.event)}</span>
+            <span class="hook-spec-cell">{getPhaseLabel(hook.phase)}</span>
+            <span class="hook-spec-cell">{getTypeLabel(hook.kind)}</span>
+            <code class="hook-spec-cell hook-spec-cmd">{getCommandCell(hook)}</code>
+            <div class="hook-spec-actions">
+              <button type="button" class="hook-text-action" onclick={() => toggleEdit(index)}>
+                {editingIndex === index ? 'Collapse' : 'Edit'}
+              </button>
+              <span class="hook-action-sep" aria-hidden="true">|</span>
+              <button type="button" class="hook-text-action hook-text-action-danger" onclick={() => removeHook(index)}>
+                Remove
+              </button>
+            </div>
+          </div>
 
-      <!-- Expanded Edit View -->
-      {#if editingIndex === index}
-        <div class="hook-card-expanded">
+          {#if editingIndex === index}
+        <div class="hook-row-expanded">
           <div class="hook-edit-grid">
             <div class="hook-field">
               <label class="field-label" for={fieldId(index, 'event')}>Event</label>
@@ -364,18 +362,24 @@
             </button>
           </div>
         </div>
-      {/if}
+          {/if}
+        </div>
+      {:else}
+        <p class="hook-empty">No hooks configured</p>
+      {/each}
     </div>
-  {/each}
+  </SectionBlock>
 
-  {#if getHooks().length === 0}
-    <div class="hook-empty-state">No hooks configured. Add one below.</div>
-  {/if}
-
-  <!-- Add Hook Bar -->
-  <div class="hook-add-bar">
+  <SectionBlock title="Add Hook">
+    <div class="hook-add-stack">
+    <div class="hook-spec-head hook-add-head" aria-hidden="true">
+      <span>Event</span>
+      <span>Phase</span>
+      <span>Type</span>
+      <span>Command</span>
+      <span class="hook-spec-actions-h"> </span>
+    </div>
     <div class="hook-add-main">
-      <span class="hook-add-label">Add Hook</span>
       <select class="field-input hook-add-select" bind:value={addEvent}>
         {#each eventOptions as option (option.value)}
           <option value={option.value}>{option.label}</option>
@@ -412,182 +416,162 @@
       {/if}
       <button
         type="button"
-        class="btn btn-primary btn-sm"
+        class="btn btn-primary btn-sm hook-add-submit"
         onclick={addHook}
         disabled={addKind === 'command' ? !addCommand.trim() : !addTaskName.trim()}
       >
-        <Icon name="add" size={12} />
-        <span>Add</span>
+        Add
       </button>
     </div>
-    <details class="hook-add-advanced">
-      <summary>Advanced</summary>
-      <div class="hook-add-advanced-content">
-        <div class="hook-add-advanced-grid">
-          <div class="hook-field">
-            <label class="field-label">Timeout (ms)</label>
-            <input type="number" class="field-input" bind:value={addTimeout} min="1000" step="1000" />
-          </div>
-          {#if addKind === 'command'}
-            <div class="hook-field">
-              <label class="field-label">Working Directory</label>
-              <input type="text" class="field-input" placeholder="Optional" bind:value={addCwd} />
-            </div>
-          {/if}
-          <div class="hook-field hook-field-checkbox">
-            <label class="field-label">&nbsp;</label>
-            <label class="hook-toggle">
-              <input type="checkbox" class="field-checkbox" bind:checked={addContinueOnError} />
-              <span>Continue on error</span>
-            </label>
-          </div>
+    <AdvancedCollapse title="Advanced">
+      <div class="hook-add-adv-inline">
+        <div class="hook-field hook-field-inline">
+          <label class="field-label" for={`${id}-add-timeout`}>Timeout (ms)</label>
+          <input id={`${id}-add-timeout`} type="number" class="field-input" bind:value={addTimeout} min="1000" step="1000" />
         </div>
         {#if addKind === 'command'}
-          <div class="hook-field">
-            <div class="field-label">Environment Variables</div>
-            <KeyValueList
-              id="{id}-add-env"
-              value={addEnv}
-              onChange={(env: Record<string, string>) => addEnv = env}
-            />
+          <div class="hook-field hook-field-inline">
+            <label class="field-label" for={`${id}-add-cwd`}>Working Directory</label>
+            <input id={`${id}-add-cwd`} type="text" class="field-input" placeholder="Optional" bind:value={addCwd} />
           </div>
         {/if}
+        <label class="hook-toggle hook-toggle-inline">
+          <input type="checkbox" class="field-checkbox" bind:checked={addContinueOnError} />
+          <span>Continue on error</span>
+        </label>
       </div>
-    </details>
-  </div>
+      {#if addKind === 'command'}
+        <div class="hook-field hook-env-below">
+          <div class="field-label">Environment Variables</div>
+          <KeyValueList
+            id={`${id}-add-env`}
+            value={addEnv}
+            onChange={(env: Record<string, string>) => addEnv = env}
+          />
+        </div>
+      {/if}
+    </AdvancedCollapse>
+    </div>
+  </SectionBlock>
 </div>
 
 <style>
-  .hook-list {
+  .hook-list-root {
     display: flex;
     flex-direction: column;
-    gap: var(--jsm-space-sm);
-  }
-
-  .hook-empty-state {
-    padding: var(--jsm-space-lg);
-    text-align: center;
-    color: var(--jsm-color-fg-muted);
-    font-size: var(--jsm-font-size-sm);
-    font-style: italic;
-    border: 1px dashed var(--jsm-color-border-secondary);
-    border-radius: var(--jsm-radius-md);
-  }
-
-  /* Hook Card — Compact */
-  .hook-card {
-    border: 1px solid var(--jsm-color-border-secondary);
-    border-radius: var(--jsm-radius-md);
-    background: var(--jsm-color-bg);
-    overflow: hidden;
-  }
-
-  .hook-card.editing {
-    border-color: var(--jsm-color-border-focus);
-  }
-
-  .hook-card-compact {
-    display: flex;
-    align-items: center;
-    gap: var(--jsm-space-sm);
-    padding: var(--jsm-space-sm) var(--jsm-space-md);
-  }
-
-  .hook-card-icon {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
-    border-radius: var(--jsm-radius-sm);
-    background: var(--jsm-color-bg-secondary);
-    color: var(--jsm-color-fg-secondary);
-    flex-shrink: 0;
-  }
-
-  .hook-card-info {
-    flex: 1;
+    gap: var(--jsm-space-md);
     min-width: 0;
+  }
+
+  .hook-rows {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    min-width: 0;
   }
 
-  .hook-card-title {
+  .hook-empty {
+    margin: 0;
     font-size: var(--jsm-font-size-sm);
-    font-weight: var(--jsm-font-weight-medium);
+    color: var(--jsm-color-fg-muted);
+  }
+
+  .hook-row {
+    border-bottom: 1px solid var(--jsm-color-border-secondary);
+    padding: var(--jsm-space-sm) 0;
+  }
+
+  .hook-row:last-child {
+    border-bottom: none;
+  }
+
+  .hook-row.editing {
+    padding-bottom: 0;
+  }
+
+  .hook-spec-head,
+  .hook-spec-row {
+    display: grid;
+    grid-template-columns: minmax(5rem, 1.1fr) minmax(3.5rem, 0.55fr) minmax(4rem, 0.65fr) minmax(0, 1.35fr) auto;
+    gap: var(--jsm-space-sm);
+    align-items: center;
+    font-size: var(--jsm-font-size-sm);
+  }
+
+  .hook-spec-head {
+    padding: 0 0 var(--jsm-space-2xs);
+    font-weight: var(--jsm-font-weight-semibold);
+    color: var(--jsm-color-fg-secondary);
+    font-size: var(--jsm-font-size-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    border-bottom: 1px solid var(--jsm-color-border-secondary);
+  }
+
+  .hook-add-head {
+    margin-bottom: var(--jsm-space-2xs);
+  }
+
+  .hook-spec-cell {
+    min-width: 0;
     color: var(--jsm-color-fg);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
 
-  .hook-card-command {
-    font-size: var(--jsm-font-size-xs);
+  .hook-spec-cmd {
     font-family: var(--vscode-editor-font-family, var(--jsm-font-family));
+    font-size: var(--jsm-font-size-xs);
     color: var(--jsm-color-fg-secondary);
+  }
+
+  .hook-spec-actions,
+  .hook-spec-actions-h {
+    justify-self: end;
     white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
 
-  .hook-card-meta {
-    display: flex;
-    gap: var(--jsm-space-2xs);
-    flex-shrink: 0;
-  }
-
-  .hook-meta-badge {
-    padding: 2px var(--jsm-space-xs);
-    border-radius: var(--jsm-radius-sm);
-    font-size: 10px;
-    font-weight: var(--jsm-font-weight-medium);
-    text-transform: uppercase;
-    letter-spacing: 0.02em;
-    background: var(--jsm-color-bg-secondary);
-    color: var(--jsm-color-fg-secondary);
-    border: 1px solid var(--jsm-color-border-secondary);
-  }
-
-  .hook-meta-badge.subtle {
-    background: transparent;
-    border-color: transparent;
-  }
-
-  .hook-card-actions {
-    display: flex;
-    gap: var(--jsm-space-2xs);
-    flex-shrink: 0;
-  }
-
-  .icon-btn {
+  .hook-spec-actions {
     display: flex;
     align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
+    gap: var(--jsm-space-xs);
+  }
+
+  .hook-action-sep {
+    color: var(--jsm-color-border-secondary);
+    font-size: var(--jsm-font-size-xs);
+    user-select: none;
+  }
+
+  .hook-text-action {
     border: none;
-    border-radius: var(--jsm-radius-sm);
-    background: transparent;
-    color: var(--jsm-color-fg-secondary);
+    background: none;
+    padding: 0;
+    font: inherit;
+    font-size: var(--jsm-font-size-sm);
+    color: var(--vscode-textLink-foreground, var(--jsm-color-accent));
     cursor: pointer;
-    transition: all var(--jsm-transition-fast);
+    text-decoration: underline;
+    text-underline-offset: 2px;
   }
 
-  .icon-btn:hover {
-    background: var(--jsm-color-bg-hover);
-    color: var(--jsm-color-fg);
+  .hook-text-action:hover {
+    color: var(--vscode-textLink-activeForeground, var(--jsm-color-fg));
   }
 
-  .icon-btn.danger:hover {
-    background: color-mix(in srgb, var(--jsm-color-error) 15%, transparent);
+  .hook-text-action-danger {
     color: var(--jsm-color-error);
   }
 
-  /* Hook Card — Expanded Edit */
-  .hook-card-expanded {
+  .hook-text-action-danger:hover {
+    color: color-mix(in srgb, var(--jsm-color-error) 85%, var(--jsm-color-fg));
+  }
+
+  .hook-row-expanded {
+    margin-top: var(--jsm-space-md);
     padding: var(--jsm-space-md);
-    border-top: 1px solid var(--jsm-color-border-secondary);
+    border-radius: var(--jsm-radius-md);
+    border: 1px solid var(--jsm-color-border-secondary);
     background: var(--jsm-color-bg-secondary);
     display: flex;
     flex-direction: column;
@@ -651,26 +635,52 @@
     justify-content: flex-end;
   }
 
-  /* Add Hook Bar */
-  .hook-add-bar {
-    border: 1px solid var(--jsm-color-border-secondary);
-    border-radius: var(--jsm-radius-md);
-    background: var(--jsm-color-bg);
-    overflow: hidden;
+  .hook-add-stack {
+    display: flex;
+    flex-direction: column;
+    gap: var(--jsm-space-sm);
+    min-width: 0;
   }
 
   .hook-add-main {
-    display: flex;
-    align-items: center;
+    display: grid;
+    grid-template-columns: minmax(5rem, 1.1fr) minmax(3.5rem, 0.55fr) minmax(4rem, 0.65fr) minmax(0, 1.35fr) auto;
     gap: var(--jsm-space-sm);
-    padding: var(--jsm-space-sm) var(--jsm-space-md);
+    align-items: center;
+    padding: var(--jsm-space-xs) 0;
+    min-width: 0;
   }
 
-  .hook-add-label {
+  .hook-add-submit {
+    justify-self: end;
+  }
+
+  .hook-add-adv-inline {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: var(--jsm-space-md);
+    margin-bottom: var(--jsm-space-sm);
+  }
+
+  .hook-field-inline {
+    flex: 1;
+    min-width: 8rem;
+  }
+
+  .hook-toggle-inline {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--jsm-space-sm);
+    cursor: pointer;
     font-size: var(--jsm-font-size-sm);
-    font-weight: var(--jsm-font-weight-medium);
-    color: var(--jsm-color-fg-secondary);
+    color: var(--jsm-color-fg);
+    margin-bottom: var(--jsm-space-2xs);
     white-space: nowrap;
+  }
+
+  .hook-env-below {
+    margin-top: var(--jsm-space-sm);
   }
 
   .hook-add-select {
@@ -695,33 +705,6 @@
     font-family: var(--vscode-editor-font-family, var(--jsm-font-family));
   }
 
-  .hook-add-advanced {
-    border-top: 1px solid var(--jsm-color-border-secondary);
-  }
-
-  .hook-add-advanced summary {
-    padding: var(--jsm-space-xs) var(--jsm-space-md);
-    font-size: var(--jsm-font-size-xs);
-    font-weight: var(--jsm-font-weight-medium);
-    color: var(--jsm-color-fg-muted);
-    cursor: pointer;
-    user-select: none;
-  }
-
-  .hook-add-advanced summary:hover {
-    color: var(--jsm-color-fg-secondary);
-  }
-
-  .hook-add-advanced-content {
-    padding: 0 var(--jsm-space-md) var(--jsm-space-sm);
-  }
-
-  .hook-add-advanced-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
-    gap: var(--jsm-space-sm);
-  }
-
   .btn-sm {
     padding: var(--jsm-space-xs) var(--jsm-space-sm);
     font-size: var(--jsm-font-size-sm);
@@ -732,7 +715,7 @@
       grid-template-columns: 1fr;
     }
 
-    .hook-add-bar {
+    .hook-add-main {
       flex-wrap: wrap;
     }
 

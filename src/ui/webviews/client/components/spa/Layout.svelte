@@ -32,8 +32,8 @@
       <div class="loading-wrap jsm-page-padding">
         <PageState
           variant="loading"
-          title="Loading dashboard…"
-          description="Retrieving servers, templates, and workspace metadata."
+          title="Loading configuration…"
+          description="Retrieving server details and runtime metadata."
         />
       </div>
     {:else if state.globalTab === 'home'}

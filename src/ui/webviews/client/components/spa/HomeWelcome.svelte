@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import { spaState, homeRecentServerIds, activeEntity } from '../../stores';
+  import { postToHost } from '../../bridge';
+  import { WEBVIEW_PROTOCOL_VERSION } from '../../../protocol';
   import Icon from '../Icon.svelte';
   import RootPageHeader from '../ds/RootPageHeader.svelte';
   import SectionBlock from '../ds/SectionBlock.svelte';
@@ -13,6 +15,15 @@
     onAddServer: () => void;
     onBrowseTemplates: () => void;
   } = $props();
+
+  function importInventory(): void {
+    postToHost({
+      v: WEBVIEW_PROTOCOL_VERSION,
+      command: 'executeCommand',
+      id: 'jsm.server.import',
+      args: [],
+    });
+  }
 
   let state = $state($spaState);
   const unsubscribeSpa = spaState.subscribe(s => {
@@ -73,7 +84,7 @@
   <div class="home-inner jsm-page-padding jsm-stack-lg">
     <RootPageHeader
       title="Java Server Manager"
-      subtitle="Manage servers, templates, runtime defaults, and deployments. Use the Java Servers tree for inventory and lifecycle."
+      subtitle="Manage servers, templates, runtime defaults, and deployments."
     >
       <svelte:fragment slot="actions">
         <button
@@ -89,18 +100,8 @@
       </svelte:fragment>
     </RootPageHeader>
 
-    {#if !trusted}
-      <section class="home-banner trust-banner" aria-live="polite">
-        <Icon name="error" size={18} />
-        <div>
-          <strong>Workspace not trusted.</strong>
-          <span>Grant trust to add servers, save settings, and run hooks. You can still browse read-only views.</span>
-        </div>
-      </section>
-    {/if}
-
     <div class="home-two-col">
-      <SectionBlock title="Quick actions">
+      <SectionBlock title="Quick Actions">
         <ul class="action-list">
           <li>
             <button type="button" class="action-link" disabled={!trusted} onclick={onAddServer}>Add server</button>
@@ -110,6 +111,11 @@
           </li>
           <li>
             <button type="button" class="action-link" onclick={goSettings}>Configure defaults</button>
+          </li>
+          <li>
+            <button type="button" class="action-link" disabled={!trusted} onclick={importInventory}>
+              Import inventory
+            </button>
           </li>
         </ul>
         {#if multiRoot}
@@ -122,7 +128,7 @@
       </SectionBlock>
     </div>
 
-    <SectionBlock title="Recent context">
+    <SectionBlock title="Recent Context">
       {#if recentEntries.length === 0}
         <p class="muted">No recent context yet</p>
         <p class="muted">Open a server from the Java Servers tree to inspect and configure it.</p>
@@ -167,28 +173,6 @@
     .home-two-col {
       grid-template-columns: 1fr;
     }
-  }
-
-  .home-banner {
-    display: flex;
-    align-items: flex-start;
-    gap: var(--jsm-space-md);
-    padding: var(--jsm-space-md) var(--jsm-space-lg);
-    border-radius: var(--jsm-radius-sm);
-    border: 1px solid var(--jsm-color-border-secondary);
-    font-size: var(--jsm-font-size-sm);
-    line-height: var(--jsm-line-height-relaxed);
-  }
-
-  .trust-banner {
-    background: color-mix(in srgb, var(--jsm-color-warning) 12%, var(--jsm-surface-1));
-    border-color: color-mix(in srgb, var(--jsm-color-warning) 35%, var(--jsm-color-border));
-    color: var(--jsm-color-fg);
-  }
-
-  .trust-banner strong {
-    display: block;
-    margin-bottom: var(--jsm-space-2xs);
   }
 
   .action-list {

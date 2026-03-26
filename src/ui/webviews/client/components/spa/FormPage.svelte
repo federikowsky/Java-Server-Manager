@@ -168,7 +168,7 @@
   }
 
   .page-header.editor .page-context-tags {
-    justify-content: flex-start;
+    justify-content: flex-end;
   }
 
   .page-header-actions {

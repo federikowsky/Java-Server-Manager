@@ -5,7 +5,6 @@
   import { hooksEditorSession, activeEntity, spaState } from '../../stores';
   import HookList from '../HookList.svelte';
   import BackControl from '../ds/BackControl.svelte';
-  import SectionBlock from '../ds/SectionBlock.svelte';
 
   let state = $state($spaState);
   const unsubState = spaState.subscribe(s => {
@@ -61,14 +60,12 @@
       <p class="jsm-type-meta">Configure terminal commands or VS Code tasks for lifecycle events</p>
     </header>
 
-    <SectionBlock title="Lifecycle hooks">
-      <HookList
-        def={hookDef}
-        value={localHooks as import('@core/types').HookConfig[]}
-        onChange={(v) => (localHooks = v)}
-        id="hooks-editor-list"
-      />
-    </SectionBlock>
+    <HookList
+      def={hookDef}
+      value={localHooks as import('@core/types').HookConfig[]}
+      onChange={(v) => (localHooks = v)}
+      id="hooks-editor-list"
+    />
   </div>
 {:else}
   <div class="hooks-editor jsm-page-padding">

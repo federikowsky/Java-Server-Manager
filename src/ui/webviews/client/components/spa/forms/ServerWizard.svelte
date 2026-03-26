@@ -7,10 +7,12 @@
   import { postToHost } from '../../../bridge';
   import { WEBVIEW_PROTOCOL_VERSION } from '../../../../protocol';
   import Icon from '../../Icon.svelte';
-  import AccordionSection from './AccordionSection.svelte';
   import ValidatedInput from './ValidatedInput.svelte';
   import FormPage from '../FormPage.svelte';
   import ContextTag from '../../ds/ContextTag.svelte';
+  import SectionBlock from '../../ds/SectionBlock.svelte';
+  import AdvancedCollapse from '../../ds/AdvancedCollapse.svelte';
+  import ModeSelector from '../../ds/ModeSelector.svelte';
 
   const { templateId }: { templateId?: string } = $props();
 
@@ -29,6 +31,14 @@
   let creationMode = $state<'scratch' | 'template'>('scratch');
   let selectedTemplateId = $state('');
   let availableTemplates = $derived(state.templates || []);
+
+  $effect(() => {
+    if (creationMode === 'template' && availableTemplates.length === 0) {
+      creationMode = 'scratch';
+      selectedTemplateId = '';
+      resetToScratchDraft();
+    }
+  });
 
   let selectedType = $state('tomcat');
   let serverName = $state('');
@@ -53,7 +63,6 @@
     state.workspaceFolders.find(folder => folder.uri === selectedWorkspace)?.name || 'No workspace selected'
   );
 
-  let expandedSection = $state<'advanced' | ''>('');
   let errors = $state<Record<string, string>>({});
   let touched = $state<Record<string, boolean>>({});
 
@@ -276,10 +285,6 @@
     touched = { ...touched, [field]: true };
   }
 
-  function toggleAdvanced() {
-    expandedSection = expandedSection === 'advanced' ? '' : 'advanced';
-  }
-
   function setCreationMode(mode: 'scratch' | 'template') {
     creationMode = mode;
     if (mode === 'scratch') {
@@ -445,91 +450,66 @@
 
   <div class="wizard-content">
     <div class="wizard-unified">
-    <!-- Section 1: Type & Identity (Flat) -->
-    <div class="wizard-section">
-      <h3 class="section-title">
-        <Icon name="server" size={16} />
-        <span>Server Type & Identity</span>
-      </h3>
+    <SectionBlock title="Provisioning Mode">
       <div class="section-grid">
-        <!-- Creation Mode — Segmented Control -->
-        {#if availableTemplates.length > 0}
+        <div class="form-field">
+          <ModeSelector
+            ariaLabel="Provisioning mode"
+            value={creationMode}
+            onChange={(v) => setCreationMode(v as 'scratch' | 'template')}
+            disabledValues={availableTemplates.length === 0 ? ['template'] : []}
+            options={[
+              { value: 'scratch', label: 'From Scratch' },
+              { value: 'template', label: 'From Template' },
+            ]}
+          />
+          <p class="field-help">
+            {availableTemplates.length === 0
+              ? 'No templates in this workspace — create one from the Templates tab to enable From Template.'
+              : creationMode === 'scratch'
+                ? 'Configure manually or start from a saved template.'
+                : 'Apply saved defaults, then adjust any values below.'}
+          </p>
+        </div>
+
+        {#if creationMode === 'template' && availableTemplates.length > 0}
           <div class="form-field">
-            <label class="field-label">How do you want to create this server?</label>
-            <div class="segmented-control" role="radiogroup" aria-label="Creation mode">
-              <button
-                type="button"
-                class="segment"
-                class:selected={creationMode === 'scratch'}
-                role="radio"
-                aria-checked={creationMode === 'scratch'}
-                onclick={() => setCreationMode('scratch')}
-              >
-                <Icon name="server" size={14} />
-                <span>From Scratch</span>
-              </button>
-              <button
-                type="button"
-                class="segment"
-                class:selected={creationMode === 'template'}
-                role="radio"
-                aria-checked={creationMode === 'template'}
-                onclick={() => setCreationMode('template')}
-              >
-                <Icon name="file-code" size={14} />
-                <span>From Template</span>
-              </button>
-            </div>
-            <p class="field-help">
-              {creationMode === 'scratch' ? 'Configure all settings manually.' : 'Use an existing template as starting point.'}
-            </p>
+            <label class="field-label" for="template-select">Template <span class="required">*</span></label>
+            <select
+              id="template-select"
+              class="field-input"
+              class:error={errors.selectedTemplateId && touched.selectedTemplateId}
+              bind:value={selectedTemplateId}
+              onchange={() => {
+                handleFieldInput('selectedTemplateId', selectedTemplateId);
+                applyTemplate(selectedTemplateId);
+              }}
+              onblur={() => handleFieldBlur('selectedTemplateId')}
+            >
+              <option value="">Choose a template…</option>
+              {#each availableTemplates as tpl}
+                <option value={tpl.template?.id}>{tpl.template?.name} ({tpl.scope})</option>
+              {/each}
+            </select>
+            {#if errors.selectedTemplateId && touched.selectedTemplateId}
+              <p class="field-error">{errors.selectedTemplateId}</p>
+            {/if}
           </div>
-
-          {#if creationMode === 'template'}
-            <div class="form-field">
-              <label class="field-label" for="template-select">Select Template</label>
-              <select 
-                id="template-select" 
-                class="field-input"
-                class:error={errors.selectedTemplateId && touched.selectedTemplateId}
-                bind:value={selectedTemplateId}
-                onchange={() => {
-                  handleFieldInput('selectedTemplateId', selectedTemplateId);
-                  applyTemplate(selectedTemplateId);
-                }}
-                onblur={() => handleFieldBlur('selectedTemplateId')}
-              >
-                <option value="">Choose a template...</option>
-                {#each availableTemplates as tpl}
-                  <option value={tpl.template?.id}>{tpl.template?.name} ({tpl.scope})</option>
-                {/each}
-              </select>
-              {#if errors.selectedTemplateId && touched.selectedTemplateId}
-                <p class="field-error">{errors.selectedTemplateId}</p>
-              {/if}
-            </div>
-          {/if}
         {/if}
+      </div>
+    </SectionBlock>
 
-        <!-- Server Type — Segmented Control (only for scratch mode) -->
+    <SectionBlock title="Identity">
+      <div class="section-grid">
         {#if creationMode === 'scratch' && availableTypes.length > 1}
           <div class="form-field">
-            <label class="field-label">Server Type</label>
-            <div class="segmented-control" role="radiogroup" aria-label="Server type">
-              {#each availableTypes as t}
-                <button
-                  type="button"
-                  class="segment"
-                  class:selected={selectedType === t.type}
-                  role="radio"
-                  aria-checked={selectedType === t.type}
-                  onclick={() => selectedType = t.type}
-                >
-                  <Icon name="server" size={14} />
-                  <span>{t.displayName}</span>
-                </button>
-              {/each}
-            </div>
+            <label class="field-label">Server type</label>
+            <ModeSelector
+              ariaLabel="Server type"
+              value={selectedType}
+              onChange={(v) => (selectedType = v)}
+              options={availableTypes.map(t => ({ value: t.type, label: t.displayName }))}
+            />
           </div>
         {/if}
 
@@ -555,15 +535,10 @@
           </div>
         {/if}
       </div>
-    </div>
+    </SectionBlock>
 
-    <!-- Section 2: Runtime & Java (Flat) -->
-    <div class="wizard-section">
-      <h3 class="section-title">
-        <Icon name="folder" size={16} />
-        <span>Runtime & Java</span>
-      </h3>
-      <div class="section-grid two-columns">
+    <SectionBlock title="Runtime & Java">
+      <div class="section-grid">
         <div class="form-field">
           <label class="field-label" for="runtime-home">
             {runtimeLabel} <span class="required">*</span>
@@ -622,15 +597,10 @@
           {/if}
         </div>
       </div>
-    </div>
+    </SectionBlock>
 
-    <!-- Section 3: Network & Ports (Flat) -->
-    <div class="wizard-section">
-      <h3 class="section-title">
-        <Icon name="globe" size={16} />
-        <span>Network & Ports</span>
-      </h3>
-      <div class="section-grid two-columns">
+    <SectionBlock title="Network & Ports">
+      <div class="section-grid">
         <div class="form-field">
           <label class="field-label" for="http-port">
             HTTP Port <span class="required">*</span>
@@ -650,9 +620,8 @@
             <p class="field-error">{errors.httpPort}</p>
           {/if}
         </div>
-
         <div class="form-field">
-          <label class="field-label" for="bind-address">Bind Address</label>
+          <label class="field-label" for="bind-address">Host</label>
           <input
             id="bind-address"
             type="text"
@@ -660,19 +629,12 @@
             bind:value={host}
             placeholder="127.0.0.1"
           />
-          <p class="field-help">IP address or hostname to bind to. Use 0.0.0.0 for all interfaces.</p>
+          <p class="field-help">Listen address. Use 0.0.0.0 for all interfaces.</p>
         </div>
       </div>
-    </div>
+    </SectionBlock>
 
-    <!-- Section 4: Advanced (Accordion) -->
-    <div class="wizard-section">
-    <AccordionSection 
-      title="Advanced Options" 
-      icon="settings"
-      expanded={expandedSection === 'advanced'}
-      onToggle={toggleAdvanced}
-    >
+    <AdvancedCollapse title="Advanced Options">
       <div class="section-grid">
         <div class="section-grid two-columns">
           <div class="form-field">
@@ -756,8 +718,7 @@
           <p class="field-help">Configure terminal commands or VS Code tasks for lifecycle events.</p>
         </div>
       </div>
-    </AccordionSection>
-    </div>
+    </AdvancedCollapse>
     </div>
   </div>
 
@@ -781,10 +742,10 @@
     >
       {#if submitState === 'submitting'}
         <Icon name="loading" size={14} />
-        <span>Creating...</span>
+        <span>Saving…</span>
       {:else}
         <Icon name="check" size={14} />
-        <span>Create Server</span>
+        <span>Add Server</span>
       {/if}
     </button>
   </svelte:fragment>

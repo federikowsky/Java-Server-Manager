@@ -4,11 +4,13 @@
     value,
     onChange,
     ariaLabel,
+    disabledValues = [],
   }: {
     options: { value: string; label: string }[];
     value: string;
     onChange: (v: string) => void;
     ariaLabel: string;
+    disabledValues?: string[];
   } = $props();
 </script>
 
@@ -19,7 +21,10 @@
       class="jsm-mode-opt"
       class:selected={value === opt.value}
       aria-pressed={value === opt.value}
-      onclick={() => onChange(opt.value)}
+      disabled={disabledValues.includes(opt.value)}
+      onclick={() => {
+        if (!disabledValues.includes(opt.value)) onChange(opt.value);
+      }}
     >
       {opt.label}
     </button>
@@ -56,5 +61,9 @@
   .jsm-mode-opt:focus-visible {
     outline: 2px solid var(--vscode-focusBorder);
     outline-offset: 2px;
+  }
+  .jsm-mode-opt:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
   }
 </style>

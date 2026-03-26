@@ -1,12 +1,14 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import { activeEntity, formId, spaState, submitting } from '../../stores';
+  import { get } from 'svelte/store';
+  import { activeEntity, formData, formId, spaState, submitting } from '../../stores';
   import { postToHost } from '../../bridge';
   import { WEBVIEW_PROTOCOL_VERSION } from '../../../protocol';
   import FormBody from '../FormBody.svelte';
   import FormActions from '../FormActions.svelte';
   import Icon from '../Icon.svelte';
   import FormPage from './FormPage.svelte';
+  import ContextTag from '../ds/ContextTag.svelte';
 
   const { templateId }: { templateId?: string } = $props();
 
@@ -108,12 +110,46 @@
   function goBack(): void {
     activeEntity.set({ type: 'templates-index' });
   }
+
+  let templateEditBaselineKey = $state('');
+  let templateEditBaseline = $state<Record<string, unknown> | null>(null);
+
+  $effect(() => {
+    if (!isEdit || !isFormReady || !templateId) {
+      templateEditBaselineKey = '';
+      templateEditBaseline = null;
+      return;
+    }
+    const key = templateId;
+    if (templateEditBaselineKey !== key) {
+      templateEditBaselineKey = key;
+      templateEditBaseline = JSON.parse(JSON.stringify(get(formData))) as Record<string, unknown>;
+    }
+  });
+
+  function handleTemplateReset(): void {
+    if (templateEditBaseline) {
+      formData.set(JSON.parse(JSON.stringify(templateEditBaseline)) as Record<string, unknown>);
+    }
+  }
+
+  let backLabel = $derived(
+    isEdit && tpl
+      ? String((tpl.template as { name?: string }).name ?? '').trim() || 'Templates'
+      : 'Templates',
+  );
+
+  let pageSubtitle = $derived(
+    isEdit
+      ? 'Update provisioning defaults and template metadata.'
+      : 'Save reusable defaults for provisioning managed instances.',
+  );
 </script>
 
 {#if templateId && !tpl}
   <div class="tpl-editor jsm-page-padding">
     <FormPage
-      backLabel="Templates"
+      backLabel={backLabel}
       onBack={goBack}
       title="Template"
       subtitle="The requested template could not be loaded."
@@ -124,19 +160,17 @@
   </div>
 {:else}
   <FormPage
-    backLabel="Templates"
+    backLabel={backLabel}
     onBack={goBack}
     title={isEdit ? 'Edit Template' : 'Create Template'}
-    subtitle={isEdit
-      ? 'Update reusable defaults for provisioning managed instances.'
-      : 'Save reusable defaults for provisioning managed instances.'}
+    subtitle={pageSubtitle}
     variant="editor"
   >
-    <span slot="contextTags" class="tag-upper" class:tag-upper--hidden={!tpl}>
+    <svelte:fragment slot="actions">
       {#if tpl}
-        {String((tpl.template as { pluginType?: string }).pluginType ?? '').toUpperCase()}
+        <ContextTag text={String((tpl.template as { pluginType?: string }).pluginType ?? '').toUpperCase()} />
       {/if}
-    </span>
+    </svelte:fragment>
 
     {#if isFormReady}
       <div class="form-surface">
@@ -156,7 +190,7 @@
     {:else}
       <div class="inline-loading-state">
         <Icon name="loading" size={20} />
-        <span>Loading template form…</span>
+        <span>Loading configuration…</span>
       </div>
     {/if}
 
@@ -166,8 +200,10 @@
           mode={isEdit ? 'edit' : 'create'}
           submitting={$submitting}
           formId={$formId}
-          submitLabel="Save Template"
-          showCancel={false}
+          submitLabel={isEdit ? 'Save Changes' : 'Save Template'}
+          showCancel={!isEdit}
+          showReset={isEdit}
+          onReset={handleTemplateReset}
         />
       {/if}
     </div>
@@ -219,19 +255,5 @@
     display: inline-flex;
     align-items: center;
     gap: var(--jsm-space-xs);
-  }
-  .tag-upper {
-    display: inline-flex;
-    font-size: var(--jsm-font-size-xs);
-    font-weight: var(--jsm-font-weight-semibold);
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--jsm-color-fg-secondary);
-    border: 1px dashed var(--jsm-color-border-secondary);
-    border-radius: var(--jsm-radius-xs);
-    padding: 2px var(--jsm-space-sm);
-  }
-  .tag-upper--hidden {
-    display: none;
   }
 </style>

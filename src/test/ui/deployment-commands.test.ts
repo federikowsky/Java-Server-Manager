@@ -166,6 +166,7 @@ describe('Deployment Commands', () => {
       'jsm.deployment.undeploy', 'jsm.deployment.toggleAutosync',
       'jsm.deployment.configureIgnoreGlobs', 'jsm.deployment.edit',
       'jsm.deployment.remove', 'jsm.deployment.openLogs',
+      'jsm.deployment.revealSource',
     ];
     for (const id of expected) {
       expect(registeredHandlers[id], `Missing: ${id}`).toBeDefined();

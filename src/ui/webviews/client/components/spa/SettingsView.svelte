@@ -11,7 +11,6 @@
   let defaultHttpPort = $state(8080);
   let defaultDebugPort = $state(5005);
   let defaultJavaHome = $state('');
-  let showStatusInSidebar = $state(true);
 
   let settingsFingerprint = $state('');
   let saving = $state(false);
@@ -63,7 +62,6 @@
     defaultHttpPort = state.settings.defaultHttpPort;
     defaultDebugPort = state.settings.defaultDebugPort;
     defaultJavaHome = state.settings.defaultJavaHome;
-    showStatusInSidebar = state.settings.showStatusInSidebar;
   });
 
   function validatePort(port: number, label: string): string {
@@ -98,7 +96,6 @@
         defaultHttpPort,
         defaultDebugPort,
         defaultJavaHome,
-        showStatusInSidebar,
       }],
     });
   }
@@ -107,9 +104,26 @@
     defaultHttpPort = 8080;
     defaultDebugPort = 5005;
     defaultJavaHome = '';
-    showStatusInSidebar = true;
     saveError = '';
     saveMessage = '';
+  }
+
+  function handleExportInventory() {
+    postToHost({
+      v: WEBVIEW_PROTOCOL_VERSION,
+      command: 'executeCommand',
+      id: 'jsm.server.export',
+      args: [],
+    });
+  }
+
+  function handleImportInventory() {
+    postToHost({
+      v: WEBVIEW_PROTOCOL_VERSION,
+      command: 'executeCommand',
+      id: 'jsm.server.import',
+      args: [],
+    });
   }
 
   function handleBrowseJava() {
@@ -128,7 +142,7 @@
       <Icon name="settings" size={24} />
       <div class="header-text">
         <h1>Preferences</h1>
-        <p class="subtitle">Configure creation defaults and interface preferences</p>
+        <p class="subtitle">Defaults, workspace summary, and inventory backup</p>
       </div>
     </div>
   </div>
@@ -192,21 +206,24 @@
       </div>
     </div>
 
-    <!-- UI Preferences Section -->
+    <!-- Import / export -->
     <div class="settings-section">
       <h3 class="section-title">
-        <Icon name="layout" size={16} />
-        <span>Interface</span>
+        <Icon name="file-code" size={16} />
+        <span>Inventory backup</span>
       </h3>
-
-      <div class="setting-row">
-        <label class="checkbox-label">
-          <input type="checkbox" class="field-checkbox" bind:checked={showStatusInSidebar} />
-          <div class="setting-info">
-            <span class="setting-name">Show server status in sidebar</span>
-            <span class="setting-desc">Display colored status indicators next to server names</span>
-          </div>
-        </label>
+      <p class="section-lead">
+        Export or import your server inventory as JSON. VS Code will prompt for a file path.
+      </p>
+      <div class="import-export-row">
+        <button type="button" class="btn btn-secondary btn-prominent" onclick={handleExportInventory}>
+          <Icon name="download" size={16} />
+          <span>Export servers…</span>
+        </button>
+        <button type="button" class="btn btn-secondary btn-prominent" onclick={handleImportInventory}>
+          <Icon name="upload" size={16} />
+          <span>Import servers…</span>
+        </button>
       </div>
     </div>
 
@@ -327,6 +344,25 @@
     border-bottom: 1px solid var(--jsm-color-border-secondary);
   }
 
+  .section-lead {
+    margin: calc(-1 * var(--jsm-space-sm)) 0 var(--jsm-space-md);
+    font-size: var(--jsm-font-size-sm);
+    line-height: var(--jsm-line-height-relaxed);
+    color: var(--jsm-color-fg-secondary);
+  }
+
+  .import-export-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--jsm-space-sm);
+  }
+
+  .btn-prominent {
+    font-weight: var(--jsm-font-weight-semibold);
+    padding: var(--jsm-space-sm) var(--jsm-space-lg);
+    min-height: 36px;
+  }
+
   .setting-row {
     display: flex;
     align-items: center;
@@ -346,22 +382,6 @@
 
   .setting-row.disabled {
     opacity: 0.5;
-  }
-
-  .checkbox-label {
-    display: flex;
-    align-items: flex-start;
-    gap: var(--jsm-space-md);
-    cursor: pointer;
-    flex: 1;
-  }
-
-  .field-checkbox {
-    width: 16px;
-    height: 16px;
-    accent-color: var(--jsm-color-primary);
-    margin-top: 2px;
-    flex-shrink: 0;
   }
 
   .setting-info {

@@ -56,7 +56,17 @@ export interface FieldError {
 }
 
 export interface DashboardNavigationTarget {
-  type: 'welcome' | 'server' | 'template' | 'new-server' | 'new-template' | 'settings' | 'deployment';
+  type:
+    | 'welcome'
+    | 'server'
+    | 'template'
+    | 'new-server'
+    | 'new-template'
+    | 'edit-template'
+    | 'templates-index'
+    | 'settings'
+    | 'deployment'
+    | 'hooks-editor';
   id?: string;
   serverId?: string;
   mode?: 'create' | 'edit';

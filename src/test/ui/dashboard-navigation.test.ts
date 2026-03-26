@@ -25,6 +25,15 @@ describe('normalizeDashboardNavigationTarget', () => {
       type: 'new-template',
       globalTab: 'templates',
     });
+    expect(normalizeDashboardNavigationTarget({ type: 'edit-template', id: 't1' })).toMatchObject({
+      type: 'edit-template',
+      id: 't1',
+      globalTab: 'templates',
+    });
+    expect(normalizeDashboardNavigationTarget({ type: 'templates-index' })).toMatchObject({
+      type: 'templates-index',
+      globalTab: 'templates',
+    });
   });
 
   it('preserves explicit globalTab for template types', () => {

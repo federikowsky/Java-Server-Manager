@@ -643,9 +643,7 @@ export class DashboardPanel implements vscode.Disposable {
       if ('defaultJavaHome' in s) {
         await config.update('defaults.javaHome', s.defaultJavaHome, vscode.ConfigurationTarget.Global);
       }
-      if ('showStatusInSidebar' in s) {
-        await config.update('ui.showStatusInSidebar', s.showStatusInSidebar, vscode.ConfigurationTarget.Global);
-      }
+      await config.update('ui.showStatusInSidebar', true, vscode.ConfigurationTarget.Global);
 
       this.deps.logger.info('Settings saved successfully');
       this.syncState();

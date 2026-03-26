@@ -85,6 +85,11 @@
         "icon": "$(file-code)"
       },
       {
+        "command": "jsm.server.showLogs",
+        "title": "Show Server Logs",
+        "icon": "$(output)"
+      },
+      {
         "command": "jsm.deployment.add",
         "title": "Add Deployment",
         "icon": "$(file-add)"
@@ -173,19 +178,9 @@
           "group": "navigation@2"
         },
         {
-          "command": "jsm.server.export",
-          "when": "view == javaServerManagerView",
-          "group": "navigation@3"
-        },
-        {
-          "command": "jsm.server.import",
-          "when": "view == javaServerManagerView",
-          "group": "navigation@4"
-        },
-        {
           "command": "jsm.dashboard.open",
           "when": "view == javaServerManagerView",
-          "group": "navigation@5"
+          "group": "navigation@3"
         }
       ],
       "view/item/context": [
@@ -285,6 +280,11 @@
           "group": "troubleshooting@1"
         },
         {
+          "command": "jsm.server.showLogs",
+          "when": "view == javaServerManagerView && viewItem =~ /jsm\\.server\\..*/",
+          "group": "troubleshooting@2"
+        },
+        {
           "command": "jsm.deployment.redeploy",
           "when": "view == javaServerManagerView && viewItem =~ /jsm\\.deployment\\..*/",
           "group": "inline@1"
@@ -352,11 +352,6 @@
           "type": "string",
           "default": "",
           "description": "Default JAVA_HOME path for new servers."
-        },
-        "jsm.ui.showStatusInSidebar": {
-          "type": "boolean",
-          "default": true,
-          "description": "Show server status indicators in the dashboard sidebar."
         }
       }
     }

@@ -2,10 +2,10 @@
   import { spaState, hostError } from '../../stores';
   import TopBar from './TopBar.svelte';
   import DetailPane from './DetailPane.svelte';
-  import TemplatesTabPane from './TemplatesTabPane.svelte';
+  import TemplatesRoot from './TemplatesRoot.svelte';
   import SettingsView from './SettingsView.svelte';
   import GlobalError from '../GlobalError.svelte';
-  import Icon from '../Icon.svelte';
+  import PageState from '../ds/PageState.svelte';
 
   let state = $state($spaState);
   spaState.subscribe(s => {
@@ -29,9 +29,12 @@
   <TopBar />
   <div class="main-content">
     {#if loading}
-      <div class="loading-state">
-        <Icon name="loading" size={32} />
-        <p>Loading...</p>
+      <div class="loading-wrap jsm-page-padding">
+        <PageState
+          variant="loading"
+          title="Loading dashboard…"
+          description="Retrieving servers, templates, and workspace metadata."
+        />
       </div>
     {:else if state.globalTab === 'home'}
       <div class="detail-container">
@@ -39,7 +42,7 @@
       </div>
     {:else if state.globalTab === 'templates'}
       <div class="detail-container detail-container--stretch">
-        <TemplatesTabPane />
+        <TemplatesRoot />
       </div>
     {:else}
       <div class="detail-container detail-container--stretch">
@@ -80,13 +83,12 @@
   .detail-container--stretch {
     overflow: hidden;
   }
-  .loading-state {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
+  .loading-wrap {
     flex: 1;
-    gap: var(--jsm-space-md);
-    color: var(--jsm-color-fg-secondary);
+    min-height: 0;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding-top: var(--jsm-space-2xl);
   }
 </style>

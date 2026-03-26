@@ -283,8 +283,9 @@
   </svelte:fragment>
 
   <div class="wizard-content">
+    <div class="wizard-unified">
     <!-- Section 1: Source & Type (Flat) -->
-    <div class="form-section">
+    <div class="wizard-section">
       <h3 class="section-title">
         <Icon name="folder" size={16} />
         <span>Source & Type</span>
@@ -377,7 +378,7 @@
     </div>
 
     <!-- Section 2: Sync & Options (Flat) -->
-    <div class="form-section">
+    <div class="wizard-section">
       <h3 class="section-title">
         <Icon name="refresh" size={16} />
         <span>Sync & Options</span>
@@ -427,6 +428,7 @@
     </div>
 
     <!-- Section 3: Advanced (Accordion) -->
+    <div class="wizard-section">
     <AccordionSection 
       title="Advanced Options" 
       icon="settings"
@@ -498,6 +500,8 @@
         </div>
       </div>
     </AccordionSection>
+    </div>
+    </div>
   </div>
 
   {#if submitError}
@@ -539,8 +543,9 @@
   .deployment-wizard-root {
     display: flex;
     flex-direction: column;
-    height: 100%;
+    flex: 1;
     min-height: 0;
+    height: 100%;
   }
 
   .context-header {

@@ -5,6 +5,7 @@
   import ServerWizard from './forms/ServerWizard.svelte';
   import DeploymentWizard from './forms/DeploymentWizard.svelte';
   import HomeWelcome from './HomeWelcome.svelte';
+  import HooksEditorPage from './HooksEditorPage.svelte';
 
   let currentEntity = $state<ActiveEntity>($activeEntity);
   activeEntity.subscribe(e => {
@@ -35,6 +36,8 @@
     {/if}
   {:else if currentEntity.type === 'new-server'}
     <ServerWizard templateId={currentEntity.templateId} />
+  {:else if currentEntity.type === 'hooks-editor'}
+    <HooksEditorPage />
   {:else if currentEntity.type === 'deployment'}
     {#if currentEntity.serverId}
       <DeploymentWizard
@@ -52,6 +55,8 @@
 
 <style>
   .detail-content {
+    flex: 1;
+    min-height: 0;
     height: 100%;
     width: 100%;
     display: flex;

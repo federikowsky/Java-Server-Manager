@@ -68,7 +68,7 @@ export function buildDashboardSyncStatePayload(deps: DashboardPanelDeps): Dashbo
     defaultHttpPort: config.get('defaults.httpPort', 8080),
     defaultDebugPort: config.get('defaults.debugPort', 5005),
     defaultJavaHome: config.get('defaults.javaHome', ''),
-    showStatusInSidebar: config.get('ui.showStatusInSidebar', true),
+    showStatusInSidebar: true,
   };
 
   const workspaceTrusted = deps.trustGate?.isTrusted() ?? vscode.workspace.isTrusted;

@@ -13,7 +13,12 @@ export function normalizeDashboardNavigationTarget(
 
   if (type === 'settings') {
     globalTab = 'settings';
-  } else if (type === 'template' || type === 'new-template') {
+  } else if (
+    type === 'template'
+    || type === 'new-template'
+    || type === 'edit-template'
+    || type === 'templates-index'
+  ) {
     globalTab = globalTab ?? 'templates';
   } else {
     globalTab = globalTab ?? 'home';

@@ -56,6 +56,8 @@ export const spaState = writable<{
   hookTaskOptions?: Array<{ value: string; label: string }>;
   /** Primary shell tab (tree = inventory; SPA = detail / templates / settings). */
   globalTab: 'home' | 'templates' | 'settings';
+  /** When returning from Hooks Editor, reopen server tab (spec §29). */
+  serverDetailResumeTab?: 'overview' | 'config' | 'deployments';
   /** From host syncState; false limits side-effecting actions (plan §7.2). */
   workspaceTrusted: boolean;
 }>({
@@ -88,4 +90,12 @@ export const lastCommandResult = writable<{
   ok: boolean;
   message?: string;
   data?: Record<string, unknown>;
+} | null>(null);
+
+/** Full-screen Hooks Editor: draft hooks + commit back to caller + restore navigation (spec §29). */
+export const hooksEditorSession = writable<{
+  draft: unknown[];
+  fieldName: string;
+  commit: (hooks: unknown[]) => void;
+  returnTarget: ActiveEntity;
 } | null>(null);

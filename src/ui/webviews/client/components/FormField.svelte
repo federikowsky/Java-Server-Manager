@@ -1,6 +1,7 @@
 <script lang="ts">
+  import { get } from 'svelte/store';
   import type { FormFieldDef } from '../../protocol';
-  import { formData, fieldErrors } from '../stores';
+  import { formData, fieldErrors, formId, activeEntity, spaState, hooksEditorSession } from '../stores';
   import { sendValidateField, sendBrowse, postToHost } from '../bridge';
   import TextInput from './inputs/TextInput.svelte';
   import NumberInput from './inputs/NumberInput.svelte';
@@ -63,6 +64,29 @@
   let fieldId = $derived(`field-${def.name}`);
   let helpId = $derived(`${def.name}-help`);
   let errorId = $derived(`${def.name}-error`);
+
+  let currentFormId = $state('');
+  formId.subscribe(f => {
+    currentFormId = f;
+  });
+
+  function openHooksEditor(): void {
+    const hooks = Array.isArray(value) ? [...(value as unknown[])] : [];
+    const ent = get(activeEntity);
+    hooksEditorSession.set({
+      draft: hooks,
+      fieldName: def.name,
+      commit: next => handleChange(next),
+      returnTarget: ent,
+    });
+    if (ent.type === 'server' && ent.id) {
+      spaState.update(s => ({ ...s, serverDetailResumeTab: 'config' }));
+    }
+    activeEntity.set({
+      type: 'hooks-editor',
+      serverId: ent.type === 'server' ? ent.id : undefined,
+    });
+  }
 </script>
 
 {#if visible}
@@ -87,7 +111,16 @@
     {:else if def.type === 'number'}
       <NumberInput {def} value={value as number | undefined} onChange={handleChange} id={fieldId} />
     {:else if def.type === 'hooks'}
-      <HookList {def} value={value as import('@core/types').HookConfig[] | undefined} onChange={handleChange} id={fieldId} />
+      {#if currentFormId === 'jsm.serverForm'}
+        <p class="hooks-inline-summary">
+          {Array.isArray(value) && value.length > 0
+            ? `${value.length} hook(s) configured`
+            : 'No hooks configured yet'}
+        </p>
+        <button type="button" class="hooks-open-btn" onclick={openHooksEditor}>Open Hooks Editor</button>
+      {:else}
+        <HookList {def} value={value as import('@core/types').HookConfig[] | undefined} onChange={handleChange} id={fieldId} />
+      {/if}
     {:else if def.type === 'password'}
       <PasswordInput {def} value={value as string | undefined} onChange={handleChange} id={fieldId} />
     {:else}
@@ -109,3 +142,31 @@
     </span>
   </div>
 {/if}
+
+<style>
+  .hooks-inline-summary {
+    margin: 0 0 var(--jsm-space-sm);
+    font-size: var(--jsm-font-size-sm);
+    color: var(--jsm-color-fg-secondary);
+  }
+  .hooks-open-btn {
+    display: inline-flex;
+    align-items: center;
+    padding: var(--jsm-space-sm) var(--jsm-space-md);
+    font-family: var(--jsm-font-family);
+    font-size: var(--jsm-font-size-sm);
+    font-weight: var(--jsm-font-weight-semibold);
+    color: var(--jsm-color-secondary-fg);
+    background: var(--jsm-color-secondary);
+    border: 1px solid var(--jsm-color-border-secondary);
+    border-radius: var(--jsm-radius-sm);
+    cursor: pointer;
+  }
+  .hooks-open-btn:hover {
+    background: var(--jsm-color-secondary-hover);
+  }
+  .hooks-open-btn:focus-visible {
+    outline: 2px solid var(--vscode-focusBorder);
+    outline-offset: 2px;
+  }
+</style>

@@ -58,6 +58,11 @@
   --jsm-color-bg: var(--vscode-editor-background);
   --jsm-color-bg-secondary: var(--vscode-sideBar-background, var(--vscode-editor-background));
   --jsm-color-bg-tertiary: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+
+  /* Surface model (spec §10) — canvas / section / inset */
+  --jsm-surface-0: var(--vscode-editor-background);
+  --jsm-surface-1: var(--vscode-editorWidget-background, var(--vscode-sideBar-background));
+  --jsm-surface-2: color-mix(in srgb, var(--vscode-input-background) 92%, var(--vscode-editor-background));
   --jsm-color-bg-hover: var(--vscode-list-hoverBackground);
   --jsm-color-bg-active: var(--vscode-list-activeSelectionBackground);
 

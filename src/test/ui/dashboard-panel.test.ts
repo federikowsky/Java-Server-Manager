@@ -82,7 +82,6 @@ describe('DashboardPanel trust enforcement', () => {
       defaultHttpPort: 8180,
       defaultDebugPort: 5100,
       defaultJavaHome: '/jdk',
-      showStatusInSidebar: false,
     });
 
     expect(result).toEqual({
@@ -99,7 +98,6 @@ describe('DashboardPanel trust enforcement', () => {
       defaultHttpPort: 8180,
       defaultDebugPort: 5100,
       defaultJavaHome: '/jdk',
-      showStatusInSidebar: false,
     });
 
     expect(result).toEqual({ ok: true });

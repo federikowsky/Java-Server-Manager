@@ -26,6 +26,12 @@
   color: var(--jsm-color-fg-secondary);
 }
 
+.hooks-summary {
+  margin: 0 0 var(--jsm-space-sm);
+  font-size: var(--jsm-font-size-sm);
+  color: var(--jsm-color-fg-secondary);
+}
+
 .section-grid {
   display: flex;
   flex-direction: column;
@@ -303,14 +309,23 @@
   font-size: var(--jsm-font-size-xs);
 }
 
-.form-section {
+.wizard-unified {
+  border: 1px solid var(--jsm-color-border-secondary);
+  border-radius: var(--jsm-radius-lg);
+  background: var(--jsm-color-bg);
+  overflow: hidden;
+}
+
+.wizard-section {
   display: flex;
   flex-direction: column;
   gap: var(--jsm-space-md);
   padding: var(--jsm-space-lg);
-  border: 1px solid var(--jsm-color-border-secondary);
-  border-radius: var(--jsm-radius-lg);
-  background: var(--jsm-color-bg);
+  border-bottom: 1px solid var(--jsm-color-border-secondary);
+}
+
+.wizard-section:last-child {
+  border-bottom: none;
 }
 
 .section-title {

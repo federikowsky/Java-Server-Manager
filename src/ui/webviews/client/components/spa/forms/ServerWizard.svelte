@@ -2,14 +2,15 @@
   import { onDestroy, onMount } from 'svelte';
   import { applyTemplateToServerDraft, createServerDraft } from '@core/authoring';
   import type { PluginConfig } from '@core/types';
-  import { spaState, activeEntity, browseResult, lastCommandResult } from '../../../stores';
+  import { get } from 'svelte/store';
+  import { spaState, activeEntity, browseResult, lastCommandResult, hooksEditorSession } from '../../../stores';
   import { postToHost } from '../../../bridge';
   import { WEBVIEW_PROTOCOL_VERSION } from '../../../../protocol';
   import Icon from '../../Icon.svelte';
   import AccordionSection from './AccordionSection.svelte';
   import ValidatedInput from './ValidatedInput.svelte';
   import FormPage from '../FormPage.svelte';
-  import HookList from '../../HookList.svelte';
+  import ContextTag from '../../ds/ContextTag.svelte';
 
   const { templateId }: { templateId?: string } = $props();
 
@@ -355,6 +356,18 @@
     activeEntity.set({ type: 'welcome' });
   }
 
+  function openHooksEditor(): void {
+    hooksEditorSession.set({
+      draft: cloneValue(hooks),
+      fieldName: 'hooks',
+      commit: (next) => {
+        hooks = Array.isArray(next) ? cloneValue(next) : [];
+      },
+      returnTarget: get(activeEntity),
+    });
+    activeEntity.set({ type: 'hooks-editor' });
+  }
+
   async function handleSubmit() {
     if (submitState === 'submitting') {
       return;
@@ -418,20 +431,22 @@
 </script>
 
 <FormPage
-  icon="server"
-  eyebrow="New Server"
+  variant="editor"
+  backLabel="Home"
+  onBack={handleCancel}
   title="Add Server"
-  subtitle={`Provision a managed ${pluginDisplayName} instance with workspace-aware defaults, runtime paths, and deployment-ready ports.`}
+  subtitle="Provision a managed instance with workspace-aware defaults."
   alignStart={true}
 >
   <svelte:fragment slot="actions">
-    <span class="meta-chip">{creationMode === 'template' ? 'From Template' : 'From Scratch'}</span>
-    <span class="meta-chip subtle">{pluginDisplayName}</span>
+    <ContextTag text={creationMode === 'template' ? 'FROM TEMPLATE' : 'FROM SCRATCH'} />
+    <ContextTag text={String(pluginDisplayName).toUpperCase()} />
   </svelte:fragment>
 
   <div class="wizard-content">
+    <div class="wizard-unified">
     <!-- Section 1: Type & Identity (Flat) -->
-    <div class="form-section">
+    <div class="wizard-section">
       <h3 class="section-title">
         <Icon name="server" size={16} />
         <span>Server Type & Identity</span>
@@ -543,7 +558,7 @@
     </div>
 
     <!-- Section 2: Runtime & Java (Flat) -->
-    <div class="form-section">
+    <div class="wizard-section">
       <h3 class="section-title">
         <Icon name="folder" size={16} />
         <span>Runtime & Java</span>
@@ -610,7 +625,7 @@
     </div>
 
     <!-- Section 3: Network & Ports (Flat) -->
-    <div class="form-section">
+    <div class="wizard-section">
       <h3 class="section-title">
         <Icon name="globe" size={16} />
         <span>Network & Ports</span>
@@ -651,6 +666,7 @@
     </div>
 
     <!-- Section 4: Advanced (Accordion) -->
+    <div class="wizard-section">
     <AccordionSection 
       title="Advanced Options" 
       icon="settings"
@@ -731,16 +747,18 @@
 
         <div class="form-field">
           <label class="field-label">Hooks</label>
-          <HookList
-            def={{ name: 'hooks', label: 'Hooks', type: 'hooks', hookOptions: { taskOptions: state.hookTaskOptions || [] } }}
-            value={hooks}
-            onChange={(v) => hooks = v}
-            id="server-hooks"
-          />
-          <p class="field-help">Configure hooks as terminal commands or VS Code tasks for lifecycle events.</p>
+          <p class="hooks-summary">
+            {hooks.length === 0 ? 'No hooks configured yet' : `${hooks.length} hook(s) configured`}
+          </p>
+          <button type="button" class="btn btn-secondary btn-sm" onclick={openHooksEditor}>
+            Open Hooks Editor
+          </button>
+          <p class="field-help">Configure terminal commands or VS Code tasks for lifecycle events.</p>
         </div>
       </div>
     </AccordionSection>
+    </div>
+    </div>
   </div>
 
   {#if submitError}

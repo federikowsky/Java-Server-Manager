@@ -32,9 +32,6 @@ export const submitting = writable<boolean>(false);
 /** Top-level global error message (from host 'error' message). */
 export const globalError = writable<string>('');
 
-/** Available templates for ServerFormPanel in create mode. */
-export const templates = writable<Array<{ id: string; name: string; defaults: Record<string, unknown> }>>([]);
-
 // ── SPA Mode Stores ─────────────────────────────────────────────────────────
 
 export type EntityType = DashboardNavigationTarget['type'];

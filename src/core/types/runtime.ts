@@ -39,10 +39,13 @@ export type OperationKind =
   | 'LifecycleRestart'
   | 'DeployFull'
   | 'DeployIncremental'
+  | 'DeploySync'
   | 'DeployHotReload'
   | 'SyncAll'
   | 'RedeployAll'
   | 'Undeploy'
+  | 'DeployUndeployed'
+  | 'RunDeploymentHealthChecks'
   | 'StatusRefresh';
 
 // ── Infrastructure Interfaces ───────────────────────────────────────────────
@@ -85,7 +88,6 @@ export interface OperationContext {
   operationId: OperationId;
   serverId: ServerId;
   kind: OperationKind;
-  /** Set for per-deployment ops (DeployFull, DeployIncremental, Undeploy). */
   targetDeploymentId?: DeploymentId;
   startedAt: number;
   timeoutMs: number;

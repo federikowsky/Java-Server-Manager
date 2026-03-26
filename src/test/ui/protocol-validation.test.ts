@@ -11,11 +11,11 @@ import { WEBVIEW_PROTOCOL_VERSION } from '@ui/webviews/protocol';
 import type { WebviewToHost, HostToWebview } from '@ui/webviews/protocol';
 
 /* ══════════════════════════════════════════════════════════════════════════
- * isValidProtocolMessage — extracted logic (mirrors BaseFormPanel)
+ * isValidProtocolMessage — extracted logic for generic webview message guards
  * ══════════════════════════════════════════════════════════════════════════ */
 
 // Re-implement the validation logic here to test it exhaustively,
-// since it's a private function in BaseFormPanel.
+// since the host-side guard is not exported directly.
 function isValidProtocolMessage(raw: unknown): raw is WebviewToHost {
   if (typeof raw !== 'object' || raw === null) return false;
   const msg = raw as Record<string, unknown>;
@@ -51,13 +51,6 @@ describe('Protocol Message Validation', () => {
       expect(isValidProtocolMessage({ v: 1, command: 'cancel' })).toBe(true);
     });
 
-    it('should accept loadData', () => {
-      expect(isValidProtocolMessage({ v: 1, command: 'loadData' })).toBe(true);
-    });
-
-    it('should accept requestDefaults', () => {
-      expect(isValidProtocolMessage({ v: 1, command: 'requestDefaults', pluginType: 'tomcat' })).toBe(true);
-    });
   });
 
   /* ── Version Mismatch ────────────────────────────────────────────────── */
@@ -218,7 +211,7 @@ describe('Protocol Message Validation', () => {
 });
 
 /* ══════════════════════════════════════════════════════════════════════════
- * escapeHtml — extracted logic (mirrors BaseFormPanel)
+ * escapeHtml — extracted logic from the legacy HTML-rendering path
  * ══════════════════════════════════════════════════════════════════════════ */
 
 function escapeHtml(text: string): string {

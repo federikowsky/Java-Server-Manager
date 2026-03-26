@@ -1,8 +1,8 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { createHash } from 'crypto';
-import workspaceSchemaDocument from '../data/jsm.servers.schema.json';
-import type { HookConfig, ServerId, DeploymentId, FileChangeBatch, OperationContext, Logger as ILogger } from '@core/types';
+import workspaceSchemaDocument from './schema/jsm.servers.schema.json';
+import type { ServerId, DeploymentId, FileChangeBatch, Logger as ILogger } from '@core/types';
 import type { Result } from '@core/result';
 import { ok, err } from '@core/result';
 import { JsmError } from '@core/errors/JsmError';
@@ -29,8 +29,6 @@ import { OutputSinkAdapter, MementoAdapter, DebugAdapter, FileWatcherAdapter } f
 import { ServerLogChannel } from '@ui/channels';
 import { ServerTreeViewProvider } from '@ui/tree';
 import { DashboardPanel } from '@ui/webviews/panels/DashboardPanel';
-import { ServerFormPanel } from '@ui/webviews/panels/ServerFormPanel';
-import { DeploymentFormPanel } from '@ui/webviews/panels/DeploymentFormPanel';
 import { registerServerCommands, registerDeploymentCommands } from '@ui/commands';
 import {
   MAIN_OUTPUT_CHANNEL,
@@ -139,9 +137,9 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
   }
 
   const hookExecutor: HookExecutor = {
-    async runCommand(hook: HookConfig): Promise<Result<void, JsmError>> {
+    async runCommand(request): Promise<Result<void, JsmError>> {
       try {
-        const cmd = hook.command;
+        const cmd = request.hook.command;
         if (!cmd) {
           return err(new JsmError({ code: ErrorCode.HookFailed, message: 'Hook has no command config' }));
         }
@@ -149,6 +147,7 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
           line: cmd.line,
           cwd: cmd.cwd ?? primaryWorkspaceFolder,
           env: cmd.env,
+          onData: (chunk) => request.parent.output.append(chunk),
         });
         await new Promise<void>((resolve, reject) => {
           child.on('close', (code) => {
@@ -164,14 +163,15 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
         );
       }
     },
-    async runVscodeTask(hook: HookConfig): Promise<Result<void, JsmError>> {
+    async runVscodeTask(request): Promise<Result<void, JsmError>> {
       try {
-        const taskName = hook.vscodeTask?.taskName ?? 'JSM Hook';
+        const taskName = request.hook.vscodeTask?.taskName ?? 'JSM Hook';
         const taskResult = await resolveHookTask(taskName);
         if (!taskResult.ok) {
           return taskResult;
         }
 
+        request.parent.output.appendLine(`Starting VS Code task hook '${taskName}'`);
         const taskExecution = await vscode.tasks.executeTask(taskResult.value);
         const exitCode = await new Promise<number | undefined>((resolve) => {
           const d = vscode.tasks.onDidEndTaskProcess((ev) => {
@@ -189,6 +189,7 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
           }));
         }
 
+        request.parent.output.appendLine(`VS Code task hook '${taskName}' completed`);
         return ok(undefined);
       } catch (e) {
         return err(
@@ -220,6 +221,7 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
         bus: eventBus,
         logger,
         workspaceFolderUri: scope.uri,
+        trustGate,
       });
       const managedInstancePathResolver = new ManagedInstancePathResolver(
         path.join(baseManagedStorageRoot, 'workspaces', workspaceStorageId(scope.uri), 'instances'),
@@ -229,6 +231,7 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
         pluginRegistry,
         pathResolver: managedInstancePathResolver,
         logger,
+        trustGate,
       });
 
       return {
@@ -248,6 +251,8 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
     trustGate,
     hookRunner,
   });
+
+  const autoSyncRef: { current?: InstanceType<typeof AutoSyncService> } = {};
 
   const lifecycle = new ServerLifecycle({
     pluginRegistry,
@@ -270,6 +275,11 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
       },
     }),
     deployService,
+    resolveServerConfig: serverKey =>
+      workspaceServiceRegistry.getServerRecordByKey(serverKey)?.config,
+    onDeploySyncFailure: (serverKey, deploymentId) => {
+      autoSyncRef.current?.recordFailure(serverKey, deploymentId);
+    },
   });
 
   const autoSyncService = new AutoSyncService({
@@ -279,38 +289,32 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
     trustGate,
     onSyncRequest: async (
       serverId: ServerId,
-      _deploymentId: DeploymentId,
+      deploymentId: DeploymentId,
       batch: FileChangeBatch,
     ) => {
-      const record = workspaceServiceRegistry.getServerRecordByKey(serverId);
-      const config = record?.config;
-      if (!config) return;
-      const deployment = config.deployments?.find(
-        d => d.id === _deploymentId,
-      );
-      if (!deployment) return;
-      const runtime = lifecycle.getRuntime(serverId);
-      if (!runtime) return;
-      const opCtx: OperationContext = {
-        operationId: `autosync-${Date.now()}`,
-        serverId,
-        kind: 'DeployIncremental',
-        targetDeploymentId: _deploymentId,
-        startedAt: Date.now(),
-        timeoutMs: 30_000,
-        cancel: { isCancelled: false, onCancelled: () => ({ dispose: () => {} }) },
-        progress: { report: () => {} },
-        output: { append: () => {}, appendLine: () => {}, clear: () => {} },
-      };
-      await deployService.sync(opCtx, config, deployment, batch);
+      if (!lifecycle.getRuntime(serverId)) return;
+      const enqueued = lifecycle.enqueueDeploySync(serverId, deploymentId, batch);
+      if (!enqueued.ok) {
+        autoSyncRef.current?.recordFailure(serverId, deploymentId);
+      }
     },
   });
+  autoSyncRef.current = autoSyncService;
   disposables.push(autoSyncService);
+
+  /** Recreate autosync watchers from latest saved config when the server is running. */
+  function refreshAutosyncIfRunning(serverKey: ServerId): void {
+    if (lifecycle.getRuntime(serverKey)?.getState().state !== 'running') return;
+    const cfg = workspaceServiceRegistry.getServerRecordByKey(serverKey)?.config;
+    if (!cfg) return;
+    autoSyncService.rebindWatchers(serverKey, cfg);
+  }
 
   const templateService = new TemplateService({
     globalStore,
     workspaceStore,
     logger,
+    trustGate,
   });
 
   const discoveryService = new ServerDiscoveryService(pluginRegistry, logger);
@@ -324,6 +328,7 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
     })),
     getServers: (workspaceFolderUri: string) => workspaceServiceRegistry.getServers(workspaceFolderUri),
     getRuntimeState: (sid: ServerId) => lifecycle.getRuntime(sid)?.getState(),
+    isQueueBusy: (sid: ServerId) => lifecycle.isQueueBusy(sid),
     getDeploymentState: (sid: ServerId, did: DeploymentId) =>
       deployService.getDeploymentState(sid, did),
     getDeploymentHealth: (sid: ServerId, did: DeploymentId) =>
@@ -336,21 +341,17 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
   });
   disposables.push(treeView);
 
-  const serverFormPanel = new ServerFormPanel({
-    extensionUri: ctx.extensionUri,
-    workspaceRegistry: workspaceServiceRegistry,
-    templateService,
-    discoveryService,
-    logger,
-  });
-  disposables.push(serverFormPanel);
-
-  const deploymentFormPanel = new DeploymentFormPanel({
-    extensionUri: ctx.extensionUri,
-    workspaceRegistry: workspaceServiceRegistry,
-    logger,
-  });
-  disposables.push(deploymentFormPanel);
+  disposables.push(
+    eventBus.on('OperationStarted', () => {
+      treeProvider.requestRefresh();
+    }),
+    eventBus.on('OperationCompleted', () => {
+      treeProvider.requestRefresh();
+    }),
+    eventBus.on('OperationFailed', () => {
+      treeProvider.requestRefresh();
+    }),
+  );
 
   const dashboardPanel = new DashboardPanel({
     extensionUri: ctx.extensionUri,
@@ -362,6 +363,7 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
     deployService,
     logger,
     bus: eventBus,
+    trustGate,
   });
   disposables.push(dashboardPanel);
 
@@ -375,18 +377,15 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
       lifecycle,
       pluginRegistry,
       workspaceRegistry: workspaceServiceRegistry,
-      deployService,
       discoveryService,
       treeProvider,
-      serverFormPanel,
       schemaValidator: validator,
     }),
     ...registerDeploymentCommands({
       workspaceRegistry: workspaceServiceRegistry,
       pluginRegistry,
-      deployService,
+      lifecycle,
       treeProvider,
-      deploymentFormPanel,
     }),
   );
 
@@ -404,8 +403,10 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
     }),
     eventBus.on('ServerUpdated', ({ serverId, workspaceFolderUri }) => {
       const config = workspaceServiceRegistry.getServer({ workspaceFolderUri, serverId });
+      const serverKey = makeWorkspaceServerKey(workspaceFolderUri, serverId);
       if (config) {
-        lifecycle.updateConfig(makeWorkspaceServerKey(workspaceFolderUri, serverId), config);
+        lifecycle.updateConfig(serverKey, config);
+        refreshAutosyncIfRunning(serverKey);
       }
       treeProvider.requestRefresh();
     }),
@@ -413,27 +414,33 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
       const serverKey = makeWorkspaceServerKey(workspaceFolderUri, serverId);
       lifecycle.unregister(serverKey);
       logChannel.detach(serverKey);
-      autoSyncService.suspend(serverKey);
+      autoSyncService.purgeServerWatchState(serverKey);
       treeProvider.requestRefresh();
     }),
     eventBus.on('DeploymentAdded', ({ serverId, workspaceFolderUri }) => {
       const config = workspaceServiceRegistry.getServer({ workspaceFolderUri, serverId });
+      const serverKey = makeWorkspaceServerKey(workspaceFolderUri, serverId);
       if (config) {
-        lifecycle.updateConfig(makeWorkspaceServerKey(workspaceFolderUri, serverId), config);
+        lifecycle.updateConfig(serverKey, config);
+        refreshAutosyncIfRunning(serverKey);
       }
       treeProvider.requestRefresh();
     }),
     eventBus.on('DeploymentUpdated', ({ serverId, workspaceFolderUri }) => {
       const config = workspaceServiceRegistry.getServer({ workspaceFolderUri, serverId });
+      const serverKey = makeWorkspaceServerKey(workspaceFolderUri, serverId);
       if (config) {
-        lifecycle.updateConfig(makeWorkspaceServerKey(workspaceFolderUri, serverId), config);
+        lifecycle.updateConfig(serverKey, config);
+        refreshAutosyncIfRunning(serverKey);
       }
       treeProvider.requestRefresh();
     }),
     eventBus.on('DeploymentRemoved', ({ serverId, workspaceFolderUri }) => {
       const config = workspaceServiceRegistry.getServer({ workspaceFolderUri, serverId });
+      const serverKey = makeWorkspaceServerKey(workspaceFolderUri, serverId);
       if (config) {
-        lifecycle.updateConfig(makeWorkspaceServerKey(workspaceFolderUri, serverId), config);
+        lifecycle.updateConfig(serverKey, config);
+        refreshAutosyncIfRunning(serverKey);
       }
       treeProvider.requestRefresh();
     }),
@@ -450,9 +457,10 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
         const channel = logChannel.getChannel(serverId, name);
         channel.clear();
         logChannel.showLogs(serverId, name);
-        if (config) autoSyncService.enable(config, serverId);
+        if (config) autoSyncService.rebindWatchers(serverId, config);
       } else if (state === 'stopped' || state === 'error') {
         autoSyncService.suspend(serverId);
+        autoSyncService.disable(serverId);
       }
 
       treeProvider.requestRefresh();

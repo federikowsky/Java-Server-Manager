@@ -1,6 +1,9 @@
 import type { ServerId, DeploymentId, OperationKind } from '../types';
 import type { Logger } from '../types/logger';
 
+/** `QueueEntry.meta` key for `DeploySync` — value is `FileChangeBatch`. */
+export const QUEUE_META_FILE_CHANGE_BATCH = 'fileChangeBatch';
+
 // ── Priority Map (§9.4) ────────────────────────────────────────────────────
 
 const PRIORITY: Record<OperationKind, number> = {
@@ -9,10 +12,13 @@ const PRIORITY: Record<OperationKind, number> = {
   LifecycleStart:     2,
   DeployFull:         3,
   DeployIncremental:  3,
+  DeploySync:         3,
   DeployHotReload:    3,
   SyncAll:            3,
   RedeployAll:        3,
   Undeploy:           3,
+  DeployUndeployed:   3,
+  RunDeploymentHealthChecks: 3,
   StatusRefresh:      3,
 };
 
@@ -51,6 +57,22 @@ function coalesce(existing: QueueEntry, incoming: QueueEntry): CoalesceAction {
       : 'queue';
   }
 
+  // DeploySync(dep) + DeploySync(dep) → keep last (autosync coalescing)
+  if (ek === 'DeploySync' && ik === 'DeploySync') {
+    return sameDeployment(existing.targetDeploymentId, incoming.targetDeploymentId)
+      ? 'keep-last'
+      : 'queue';
+  }
+
+  // DeploySync ↔ DeployIncremental same dep → keep last (same autosync family)
+  if (
+    (ek === 'DeploySync' && ik === 'DeployIncremental' ||
+      ek === 'DeployIncremental' && ik === 'DeploySync') &&
+    sameDeployment(existing.targetDeploymentId, incoming.targetDeploymentId)
+  ) {
+    return 'keep-last';
+  }
+
   // DeployHotReload(dep) + DeployHotReload(dep) → keep last
   if (ek === 'DeployHotReload' && ik === 'DeployHotReload') {
     return sameDeployment(existing.targetDeploymentId, incoming.targetDeploymentId)
@@ -66,6 +88,18 @@ function coalesce(existing: QueueEntry, incoming: QueueEntry): CoalesceAction {
 
   // DeployIncremental(dep) + DeployHotReload(dep) → replace with hot-reload
   if (ek === 'DeployIncremental' && ik === 'DeployHotReload' &&
+      sameDeployment(existing.targetDeploymentId, incoming.targetDeploymentId)) {
+    return 'replace';
+  }
+
+  // DeployHotReload(dep) + DeploySync(dep) → keep last
+  if (ek === 'DeployHotReload' && ik === 'DeploySync' &&
+      sameDeployment(existing.targetDeploymentId, incoming.targetDeploymentId)) {
+    return 'keep-last';
+  }
+
+  // DeploySync(dep) + DeployHotReload(dep) → replace with hot-reload
+  if (ek === 'DeploySync' && ik === 'DeployHotReload' &&
       sameDeployment(existing.targetDeploymentId, incoming.targetDeploymentId)) {
     return 'replace';
   }
@@ -94,8 +128,23 @@ function coalesce(existing: QueueEntry, incoming: QueueEntry): CoalesceAction {
     return 'replace';
   }
 
+  // DeployFull(dep) + DeploySync(dep) → drop incoming sync (explicit full wins)
+  if (ek === 'DeployFull' && ik === 'DeploySync' &&
+      sameDeployment(existing.targetDeploymentId, incoming.targetDeploymentId)) {
+    return 'drop';
+  }
+
+  // DeploySync(dep) + DeployFull(dep) → replace pending sync with full
+  if (ek === 'DeploySync' && ik === 'DeployFull' &&
+      sameDeployment(existing.targetDeploymentId, incoming.targetDeploymentId)) {
+    return 'replace';
+  }
+
   // SyncAll + DeployIncremental(any) → drop
   if (ek === 'SyncAll' && ik === 'DeployIncremental') return 'drop';
+
+  // SyncAll + DeploySync(any) → drop
+  if (ek === 'SyncAll' && ik === 'DeploySync') return 'drop';
 
   // SyncAll + DeployFull(any) → queue (explicit full takes precedence)
   if (ek === 'SyncAll' && ik === 'DeployFull') return 'queue';
@@ -103,11 +152,18 @@ function coalesce(existing: QueueEntry, incoming: QueueEntry): CoalesceAction {
   // DeployIncremental(any) + SyncAll → replace pending incrementals
   if (ek === 'DeployIncremental' && ik === 'SyncAll') return 'replace';
 
-  // RedeployAll + DeployFull/SyncAll → drop
-  if (ek === 'RedeployAll' && (ik === 'DeployFull' || ik === 'SyncAll')) return 'drop';
+  // DeploySync(any) + SyncAll → replace pending sync
+  if (ek === 'DeploySync' && ik === 'SyncAll') return 'replace';
 
-  // DeployFull/SyncAll + RedeployAll → replace
-  if ((ek === 'DeployFull' || ek === 'SyncAll') && ik === 'RedeployAll') return 'replace';
+  // RedeployAll + DeployFull/SyncAll/DeploySync → drop
+  if (ek === 'RedeployAll' && (ik === 'DeployFull' || ik === 'SyncAll' || ik === 'DeploySync')) {
+    return 'drop';
+  }
+
+  // DeployFull/SyncAll/DeploySync + RedeployAll → replace
+  if ((ek === 'DeployFull' || ek === 'SyncAll' || ek === 'DeploySync') && ik === 'RedeployAll') {
+    return 'replace';
+  }
 
   // Lifecycle start + same start → ignore (drop)
   if (ek === 'LifecycleStart' && ik === 'LifecycleStart') {
@@ -136,6 +192,9 @@ export class OperationQueue {
   private running: QueueEntry | null = null;
   private executor: Executor | null = null;
   private draining = false;
+  private readonly idleWaiters: Array<() => void> = [];
+  /** First executor error in the current drain pass; cleared when read after idle. */
+  private drainFailure: unknown = undefined;
 
   constructor(serverId: ServerId, logger: Logger) {
     this.serverId = serverId;
@@ -189,6 +248,16 @@ export class OperationQueue {
     this.pending.length = 0;
   }
 
+  /**
+   * Returns the first error thrown by the executor during the last completed drain pass, then clears it.
+   * Call after `waitUntilIdle` resolves to surface failures to UI.
+   */
+  getAndClearDrainFailure(): unknown | undefined {
+    const e = this.drainFailure;
+    this.drainFailure = undefined;
+    return e;
+  }
+
   /** Whether an operation is currently executing. */
   get isRunning(): boolean {
     return this.running !== null;
@@ -204,11 +273,38 @@ export class OperationQueue {
     return this.running?.kind ?? null;
   }
 
+  /** True when no operation is running and nothing is pending. */
+  get isIdle(): boolean {
+    return !this.draining && this.running === null && this.pending.length === 0;
+  }
+
+  /**
+   * Resolves when the queue finishes draining (no running op, no pending).
+   * Safe to call when already idle.
+   */
+  waitUntilIdle(): Promise<void> {
+    if (this.isIdle) {
+      return Promise.resolve();
+    }
+    return new Promise(resolve => {
+      this.idleWaiters.push(resolve);
+    });
+  }
+
   // ── Internal ────────────────────────────────────────────────────────────
+
+  private flushIdleWaiters(): void {
+    if (!this.isIdle) return;
+    const waiters = this.idleWaiters.splice(0);
+    for (const w of waiters) {
+      w();
+    }
+  }
 
   private async drain(): Promise<void> {
     if (this.draining || !this.executor) return;
     this.draining = true;
+    this.drainFailure = undefined;
     try {
       while (this.pending.length > 0) {
         const entry = this.pending.shift()!;
@@ -217,12 +313,16 @@ export class OperationQueue {
           await this.executor(entry);
         } catch (err) {
           this.logger.error(`Queue[${this.serverId}]: executor error for ${entry.kind}`, err);
+          if (this.drainFailure === undefined) {
+            this.drainFailure = err;
+          }
         } finally {
           this.running = null;
         }
       }
     } finally {
       this.draining = false;
+      this.flushIdleWaiters();
     }
   }
 }

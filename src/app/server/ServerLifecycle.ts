@@ -1,6 +1,7 @@
 import type {
   ServerConfig,
   ServerId,
+  DeploymentId,
   ServerState,
   StartMode,
   OperationContext,
@@ -11,13 +12,21 @@ import type {
   OutputSink,
   HookEvent,
 } from '@core/types';
+import type { FileChangeBatch } from '@core/types/events';
 import type { Result } from '@core/result';
 import { ok, err } from '@core/result';
 import { JsmError } from '@core/errors/JsmError';
 import { ErrorCode } from '@core/errors/codes';
 import type { EventBus } from '@core/events/EventBus';
 import { decideReadiness, decideStopEscalation, canStart, canStop } from '@core/policy/DecisionEngine';
+import {
+  createCancellationTokenSource,
+  cancellationPromise,
+  throwIfCancelled,
+} from '@core/ops';
 import type { OperationQueue, QueueEntry } from '@core/ops/OperationQueue';
+import { QUEUE_META_FILE_CHANGE_BATCH } from '@core/ops/OperationQueue';
+import type { CancellationTokenSource } from '@core/ops';
 import type { IServerPlugin } from '@plugins/interfaces/IServerPlugin';
 import type { PluginRegistry } from '@plugins/registry/PluginRegistry';
 import { PidManager } from '@infra/pid';
@@ -43,7 +52,9 @@ export interface ServerLifecycleDeps {
   trustGate?: TrustGate;
   hookRunner?: Pick<HookRunner, 'runHooks'>;
   getOutputSink?: (serverKey: ServerId, serverName: string) => OutputSink;
-  deployService?: DeploymentService;
+  deployService: DeploymentService;
+  resolveServerConfig?: (serverKey: ServerId) => ServerConfig | undefined;
+  onDeploySyncFailure?: (serverKey: ServerId, deploymentId: DeploymentId) => void;
 }
 
 interface ServerEntry {
@@ -51,6 +62,7 @@ interface ServerEntry {
   config: ServerConfig;
   runtime: ServerRuntime;
   queue: OperationQueue;
+  activeCancellation?: CancellationTokenSource;
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -67,8 +79,13 @@ async function probeAfterStartupEvent(
   portScanner: PortScanner,
   config: ServerConfig,
   debounceMs: number,
+  ctx: OperationContext,
 ): Promise<boolean> {
-  await sleep(debounceMs);
+  await Promise.race([
+    sleep(debounceMs),
+    cancellationPromise(ctx.cancel, `Start operation for '${config.name}' was cancelled.`),
+  ]);
+  throwIfCancelled(ctx.cancel, `Start operation for '${config.name}' was cancelled.`);
   const portOpen = await portScanner.probe(config.ports.http, config.host);
   return portOpen;
 }
@@ -78,10 +95,12 @@ async function waitForHttpReadiness(
   config: ServerConfig,
   timeoutMs: number,
   startedAt: number,
+  ctx: OperationContext,
 ): Promise<boolean> {
   let ready = false;
 
   while (!ready && (Date.now() - startedAt) < timeoutMs) {
+    throwIfCancelled(ctx.cancel, `Start operation for '${config.name}' was cancelled.`);
     const portOpen = await portScanner.probe(config.ports.http, config.host);
     const decision = decideReadiness({
       portOpen,
@@ -98,7 +117,10 @@ async function waitForHttpReadiness(
       break;
     }
 
-    await sleep(READINESS_PROBE_INTERVAL_MS);
+    await Promise.race([
+      sleep(READINESS_PROBE_INTERVAL_MS),
+      cancellationPromise(ctx.cancel, `Start operation for '${config.name}' was cancelled.`),
+    ]);
   }
 
   return ready;
@@ -106,22 +128,19 @@ async function waitForHttpReadiness(
 
 function makeCtx(
   serverId: ServerId,
-  _serverName: string,
   kind: OperationKind,
   timeoutMs: number,
-  _logger: Logger,
+  cancel: OperationContext['cancel'],
   outputSink?: OutputSink,
+  operationId?: OperationContext['operationId'],
 ): OperationContext {
   return {
-    operationId: `op-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` as OperationContext['operationId'],
+    operationId: operationId ?? (`op-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` as OperationContext['operationId']),
     serverId,
     kind,
     startedAt: Date.now(),
     timeoutMs,
-    cancel: {
-      isCancelled: false,
-      onCancelled: () => ({ dispose: () => {} }),
-    },
+    cancel,
     progress: {
       report: (msg: string) => outputSink?.appendLine(msg),
     },
@@ -230,7 +249,12 @@ export class ServerLifecycle {
   /** Cancel all pending operations for a server. */
   cancel(serverId: ServerId): void {
     const entry = this.servers.get(serverId);
-    if (entry) entry.queue.clear();
+    if (!entry) {
+      return;
+    }
+
+    entry.activeCancellation?.cancel();
+    entry.queue.clear();
   }
 
   /** Enqueue a status refresh operation (§9). */
@@ -240,6 +264,92 @@ export class ServerLifecycle {
 
     entry.queue.enqueue({ kind: 'StatusRefresh' });
     return ok(undefined);
+  }
+
+  /**
+   * Enqueue filesystem-triggered deploy sync (autosync).
+   * Executes `DeploymentService.sync` on the queue with fresh config when `resolveServerConfig` is set.
+   */
+  enqueueDeploySync(
+    serverId: ServerId,
+    deploymentId: DeploymentId,
+    batch: FileChangeBatch,
+  ): Result<void, JsmError> {
+    if (!this.checkTrust()) return this.untrustedErr();
+
+    const entry = this.servers.get(serverId);
+    if (!entry) return this.notFound(serverId);
+
+    entry.queue.enqueue({
+      kind: 'DeploySync',
+      targetDeploymentId: deploymentId,
+      meta: { [QUEUE_META_FILE_CHANGE_BATCH]: batch },
+    });
+    return ok(undefined);
+  }
+
+  /** Enqueue first-time deploy for all currently undeployed applications (pre-start). */
+  enqueueDeployUndeployed(serverId: ServerId): Result<void, JsmError> {
+    if (!this.checkTrust()) return this.untrustedErr();
+    const entry = this.servers.get(serverId);
+    if (!entry) return this.notFound(serverId);
+    entry.queue.enqueue({ kind: 'DeployUndeployed' });
+    return ok(undefined);
+  }
+
+  /** Enqueue full redeploy for one deployment. */
+  enqueueDeployFull(serverId: ServerId, deploymentId: DeploymentId): Result<void, JsmError> {
+    if (!this.checkTrust()) return this.untrustedErr();
+    const entry = this.servers.get(serverId);
+    if (!entry) return this.notFound(serverId);
+    entry.queue.enqueue({ kind: 'DeployFull', targetDeploymentId: deploymentId });
+    return ok(undefined);
+  }
+
+  /** Enqueue undeploy for one deployment. */
+  enqueueUndeploy(serverId: ServerId, deploymentId: DeploymentId): Result<void, JsmError> {
+    if (!this.checkTrust()) return this.untrustedErr();
+    const entry = this.servers.get(serverId);
+    if (!entry) return this.notFound(serverId);
+    entry.queue.enqueue({ kind: 'Undeploy', targetDeploymentId: deploymentId });
+    return ok(undefined);
+  }
+
+  /** Enqueue full redeploy for every deployment on the server. */
+  enqueueRedeployAll(serverId: ServerId): Result<void, JsmError> {
+    if (!this.checkTrust()) return this.untrustedErr();
+    const entry = this.servers.get(serverId);
+    if (!entry) return this.notFound(serverId);
+    entry.queue.enqueue({ kind: 'RedeployAll' });
+    return ok(undefined);
+  }
+
+  /** Enqueue HTTP health checks for deployments with `healthCheckPath` (tooltip cache). */
+  enqueueRunDeploymentHealthChecks(serverId: ServerId): Result<void, JsmError> {
+    if (!this.checkTrust()) return this.untrustedErr();
+    const entry = this.servers.get(serverId);
+    if (!entry) return this.notFound(serverId);
+    entry.queue.enqueue({ kind: 'RunDeploymentHealthChecks' });
+    return ok(undefined);
+  }
+
+  /** True if the server queue is executing or has pending entries. */
+  isQueueBusy(serverId: ServerId): boolean {
+    const entry = this.servers.get(serverId);
+    if (!entry) return false;
+    return entry.queue.isRunning || entry.queue.size > 0;
+  }
+
+  /** Resolves when the server queue is idle (no running op, no pending). */
+  waitUntilQueueIdle(serverId: ServerId): Promise<void> {
+    const entry = this.servers.get(serverId);
+    if (!entry) return Promise.resolve();
+    return entry.queue.waitUntilIdle();
+  }
+
+  /** First executor error from the last drain pass for this server (then cleared). See `OperationQueue.getAndClearDrainFailure`. */
+  getAndClearQueueDrainFailure(serverId: ServerId): unknown | undefined {
+    return this.servers.get(serverId)?.queue.getAndClearDrainFailure();
   }
 
   /** Attach debugger to an already-running server. */
@@ -335,36 +445,62 @@ export class ServerLifecycle {
     if (!server) return;
 
     const { kind } = entry;
+    const operationId = `op-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` as OperationContext['operationId'];
+    const cancellation = createCancellationTokenSource();
+    server.activeCancellation = cancellation;
 
     this.deps.bus.emit('OperationStarted', {
       serverId,
-      operationId: `op-${Date.now()}` as OperationContext['operationId'],
+      operationId,
       kind,
     });
 
     try {
       switch (kind) {
         case 'LifecycleStart':
-          await this.doStart(server, (entry.meta?.['mode'] as StartMode) ?? 'run');
+          await this.doStart(server, (entry.meta?.['mode'] as StartMode) ?? 'run', cancellation.token);
           break;
         case 'LifecycleStop':
-          await this.doStop(server);
+          await this.doStop(server, cancellation.token);
           break;
         case 'LifecycleRestart': {
           const mode = (entry.meta?.['mode'] as StartMode) ?? 'run';
-          await this.doRestart(server, mode);
+          await this.doRestart(server, mode, cancellation.token);
           break;
         }
         case 'StatusRefresh':
-          await this.doStatusRefresh(server);
+          await this.doStatusRefresh(server, cancellation.token);
           break;
-        default:
-          this.deps.logger.warn(`ServerLifecycle: unhandled operation kind '${kind}'`);
+        case 'DeploySync':
+          await this.doDeploySync(server, entry, operationId, cancellation.token);
+          break;
+        case 'DeployFull':
+          await this.doDeployFull(server, entry, operationId, cancellation.token);
+          break;
+        case 'Undeploy':
+          await this.doUndeploy(server, entry, operationId, cancellation.token);
+          break;
+        case 'RedeployAll':
+          await this.doRedeployAll(server, operationId, cancellation.token);
+          break;
+        case 'DeployUndeployed':
+          await this.doDeployUndeployed(server, operationId, cancellation.token);
+          break;
+        case 'RunDeploymentHealthChecks':
+          await this.doRunDeploymentHealthChecks(server, operationId, cancellation.token);
+          break;
+        case 'DeployIncremental':
+        case 'DeployHotReload':
+        case 'SyncAll':
+          throw new JsmError({
+            code: ErrorCode.Unsupported,
+            message: `Operation '${kind}' must be enqueued only via a supported composite path`,
+          });
       }
 
       this.deps.bus.emit('OperationCompleted', {
         serverId,
-        operationId: `op-${Date.now()}` as OperationContext['operationId'],
+        operationId,
         kind,
       });
     } catch (cause) {
@@ -374,44 +510,53 @@ export class ServerLifecycle {
 
       this.deps.bus.emit('OperationFailed', {
         serverId,
-        operationId: `op-${Date.now()}` as OperationContext['operationId'],
+        operationId,
         kind,
         error,
       });
+    } finally {
+      if (server.activeCancellation === cancellation) {
+        server.activeCancellation = undefined;
+      }
     }
   }
 
   // ── Start Flow ────────────────────────────────────────────────────
 
-  private async doStart(server: ServerEntry, mode: StartMode): Promise<void> {
-    await this.doStartInternal(server, mode, 'lifecycle.start');
+  private async doStart(
+    server: ServerEntry,
+    mode: StartMode,
+    cancel: OperationContext['cancel'],
+  ): Promise<void> {
+    await this.doStartInternal(server, mode, cancel, 'lifecycle.start');
   }
 
-  private async doStartInternal(server: ServerEntry, mode: StartMode, hookEvent?: HookEvent): Promise<void> {
+  private async doStartInternal(
+    server: ServerEntry,
+    mode: StartMode,
+    cancel: OperationContext['cancel'],
+    hookEvent?: HookEvent,
+  ): Promise<void> {
     const { config, runtime } = server;
     const plugin = this.getPlugin(config);
-    const startedAt = Date.now();
-
-    if (hookEvent) {
-      await this.runServerHooks(server, 'pre', hookEvent);
-    }
-
-    runtime.transition('starting', { startMode: mode });
-
-    const timeoutMs = mode === 'debug'
-      ? (config.timeouts?.startDebugMs ?? 45_000)
-      : (config.timeouts?.startRunMs ?? 30_000);
+    const timeoutMs = this.getStartTimeoutMs(config, mode);
 
     const ctx = makeCtx(
       server.serverKey,
-      config.name,
       'LifecycleStart',
       timeoutMs,
-      this.deps.logger,
+      cancel,
       this.deps.getOutputSink?.(server.serverKey, config.name),
     );
 
     try {
+      if (hookEvent) {
+        await this.runServerHooks(server, ctx, 'pre', hookEvent);
+      }
+      throwIfCancelled(ctx.cancel, `Start operation for '${config.name}' was cancelled before launch.`);
+
+      runtime.transition('starting', { startMode: mode });
+
       const startResult = await plugin.start(ctx, config, mode);
       if (!startResult.ok) {
         runtime.transition('error', { error: startResult.error });
@@ -420,12 +565,16 @@ export class ServerLifecycle {
 
       const { pid, startupMonitor } = startResult.value;
       await this.deps.pidManager.writePid(server.serverKey, pid);
+      throwIfCancelled(ctx.cancel, `Start operation for '${config.name}' was cancelled while waiting for readiness.`);
 
       let ready = false;
 
       try {
         if (startupMonitor) {
-          const outcome = await startupMonitor.waitForOutcome(timeoutMs);
+          const outcome = await Promise.race([
+            startupMonitor.waitForOutcome(this.remainingContextBudgetMs(ctx)),
+            cancellationPromise(ctx.cancel, `Start operation for '${config.name}' was cancelled while waiting for readiness.`),
+          ]);
           if (outcome.state === 'failed') {
             throw outcome.error ?? new JsmError({
               code: ErrorCode.ProcessSpawnFailed,
@@ -436,9 +585,10 @@ export class ServerLifecycle {
             this.deps.portScanner,
             config,
             STARTUP_CALLBACK_DEBOUNCE_MS,
+            ctx,
           );
         } else {
-          ready = await waitForHttpReadiness(this.deps.portScanner, config, timeoutMs, startedAt);
+          ready = await waitForHttpReadiness(this.deps.portScanner, config, timeoutMs, ctx.startedAt, ctx);
         }
       } finally {
         await startupMonitor?.dispose();
@@ -457,9 +607,11 @@ export class ServerLifecycle {
         });
       }
 
+      throwIfCancelled(ctx.cancel, `Start operation for '${config.name}' was cancelled after readiness.`);
       runtime.transition('running', { pid });
 
       if (plugin.healthCheck) {
+        throwIfCancelled(ctx.cancel, `Start operation for '${config.name}' was cancelled before health checks.`);
         const healthResult = await plugin.healthCheck(ctx, config);
         if (!healthResult.ok) {
           runtime.transition('error', { error: healthResult.error });
@@ -476,12 +628,15 @@ export class ServerLifecycle {
         }
       }
 
-      if (this.deps.deployService) {
-        await this.deps.deployService.runHealthChecksForServer(server.serverKey, config);
-      }
+      throwIfCancelled(ctx.cancel, `Start operation for '${config.name}' was cancelled before deployment health checks.`);
+      await this.deps.deployService.runHealthChecksForServer(server.serverKey, config);
 
       if (mode === 'debug' && config.debug.enabled) {
-        await sleep(config.debug.attachDelayMs);
+        await Promise.race([
+          sleep(config.debug.attachDelayMs),
+          cancellationPromise(ctx.cancel, `Start operation for '${config.name}' was cancelled before debugger attach.`),
+        ]);
+        throwIfCancelled(ctx.cancel, `Start operation for '${config.name}' was cancelled before debugger attach.`);
         const attachResult = await this.deps.debugAttacher.attach({
           serverId: server.serverKey,
           port: config.ports.debug ?? 5005,
@@ -494,62 +649,78 @@ export class ServerLifecycle {
       }
 
       if (hookEvent) {
-        await this.runServerHooks(server, 'post', hookEvent);
+        await this.runServerHooks(server, ctx, 'post', hookEvent);
       }
     } catch (cause) {
-      await this.runServerOnErrorHooks(server, hookEvent, cause);
-      throw cause;
+      const error = cause instanceof JsmError ? cause : JsmError.fromUnknown(cause);
+      if (runtime.state === 'starting') {
+        runtime.transition('error', { error });
+      }
+      if (!(error.code === ErrorCode.Cancelled && runtime.state === 'stopped')) {
+        await this.runServerOnErrorHooks(server, ctx, hookEvent, error);
+      }
+      throw error;
     }
   }
 
   // ── Stop Flow ─────────────────────────────────────────────────────
 
-  private async doStop(server: ServerEntry): Promise<void> {
-    await this.doStopInternal(server, 'lifecycle.stop');
+  private async doStop(
+    server: ServerEntry,
+    cancel: OperationContext['cancel'],
+  ): Promise<void> {
+    await this.doStopInternal(server, cancel, 'lifecycle.stop');
   }
 
-  private async doStopInternal(server: ServerEntry, hookEvent?: HookEvent): Promise<void> {
+  private async doStopInternal(
+    server: ServerEntry,
+    cancel: OperationContext['cancel'],
+    hookEvent?: HookEvent,
+  ): Promise<void> {
     const { config, runtime } = server;
     const plugin = this.getPlugin(config);
 
     if (runtime.state === 'stopped') return;
 
-    if (hookEvent) {
-      await this.runServerHooks(server, 'pre', hookEvent);
-    }
-
-    runtime.transition('stopping');
-
     const timeoutMs = config.timeouts?.stopMs ?? 20_000;
     const ctx = makeCtx(
       server.serverKey,
-      config.name,
       'LifecycleStop',
       timeoutMs,
-      this.deps.logger,
+      cancel,
       this.deps.getOutputSink?.(server.serverKey, config.name),
     );
 
     try {
+      if (hookEvent) {
+        await this.runServerHooks(server, ctx, 'pre', hookEvent);
+      }
+      throwIfCancelled(ctx.cancel, `Stop operation for '${config.name}' was cancelled before shutdown.`);
+
+      runtime.transition('stopping');
+
       const stopResult = await plugin.stop(ctx, config);
       if (!stopResult.ok) {
         this.deps.logger.warn(`ServerLifecycle: stop error for '${config.name}'`, stopResult.error);
       }
 
-      const startedAt = Date.now();
       const pid = runtime.pid;
 
       if (pid) {
-        while (Date.now() - startedAt < timeoutMs) {
+        while (Date.now() - ctx.startedAt < timeoutMs) {
+          throwIfCancelled(ctx.cancel, `Stop operation for '${config.name}' was cancelled while waiting for shutdown.`);
           if (!this.deps.pidManager.isProcessAlive(pid)) break;
 
-          const decision = decideStopEscalation(Date.now() - startedAt, timeoutMs);
+          const decision = decideStopEscalation(Date.now() - ctx.startedAt, timeoutMs);
           if (decision === 'force-kill') {
             this.deps.logger.warn(`ServerLifecycle: force-killing ${config.name} (PID ${pid})`);
             try { process.kill(pid, 'SIGKILL'); } catch { /* already dead */ }
             break;
           }
-          await sleep(500);
+          await Promise.race([
+            sleep(500),
+            cancellationPromise(ctx.cancel, `Stop operation for '${config.name}' was cancelled while waiting for shutdown.`),
+          ]);
         }
       }
 
@@ -559,39 +730,228 @@ export class ServerLifecycle {
       runtime.transition('stopped');
 
       if (hookEvent) {
-        await this.runServerHooks(server, 'post', hookEvent);
+        await this.runServerHooks(server, ctx, 'post', hookEvent);
       }
     } catch (cause) {
-      await this.runServerOnErrorHooks(server, hookEvent, cause);
-      throw cause;
+      const error = cause instanceof JsmError ? cause : JsmError.fromUnknown(cause);
+      if (!(error.code === ErrorCode.Cancelled && runtime.state === 'running')) {
+        await this.runServerOnErrorHooks(server, ctx, hookEvent, error);
+      }
+      throw error;
     }
   }
 
-  private async doRestart(server: ServerEntry, mode: StartMode): Promise<void> {
+  private async doRestart(
+    server: ServerEntry,
+    mode: StartMode,
+    cancel: OperationContext['cancel'],
+  ): Promise<void> {
     const hookEvent: HookEvent = 'lifecycle.restart';
-    await this.runServerHooks(server, 'pre', hookEvent);
+    const timeoutMs = (server.config.timeouts?.stopMs ?? 20_000) + this.getStartTimeoutMs(server.config, mode);
+    const ctx = makeCtx(
+      server.serverKey,
+      'LifecycleRestart',
+      timeoutMs,
+      cancel,
+      this.deps.getOutputSink?.(server.serverKey, server.config.name),
+    );
+
     try {
-      await this.doStopInternal(server);
-      await this.doStartInternal(server, mode);
-      await this.runServerHooks(server, 'post', hookEvent);
+      await this.runServerHooks(server, ctx, 'pre', hookEvent);
+      throwIfCancelled(ctx.cancel, `Restart operation for '${server.config.name}' was cancelled before restart.`);
+      await this.doStopInternal(server, cancel);
+      await this.doStartInternal(server, mode, cancel);
+      await this.runServerHooks(server, ctx, 'post', hookEvent);
     } catch (cause) {
-      await this.runServerOnErrorHooks(server, hookEvent, cause);
+      const error = cause instanceof JsmError ? cause : JsmError.fromUnknown(cause);
+      if (!(error.code === ErrorCode.Cancelled && server.runtime.state === 'running')) {
+        await this.runServerOnErrorHooks(server, ctx, hookEvent, error);
+      }
+      throw error;
+    }
+  }
+
+  private resolveRunningConfig(server: ServerEntry): ServerConfig {
+    return this.deps.resolveServerConfig?.(server.serverKey) ?? server.config;
+  }
+
+  private async doDeployFull(
+    server: ServerEntry,
+    entry: QueueEntry,
+    busOperationId: OperationContext['operationId'],
+    cancel: OperationContext['cancel'],
+  ): Promise<void> {
+    const deploymentId = entry.targetDeploymentId;
+    if (!deploymentId) {
+      throw new JsmError({
+        code: ErrorCode.InvalidConfig,
+        message: 'DeployFull requires targetDeploymentId',
+      });
+    }
+    const config = this.resolveRunningConfig(server);
+    const dep = config.deployments.find(d => d.id === deploymentId);
+    if (!dep) {
+      throw new JsmError({
+        code: ErrorCode.InvalidConfig,
+        message: `Deployment '${deploymentId}' not found`,
+      });
+    }
+    const ctx = makeCtx(
+      server.serverKey,
+      'DeployFull',
+      600_000,
+      cancel,
+      this.deps.getOutputSink?.(server.serverKey, config.name),
+      busOperationId,
+    );
+    ctx.targetDeploymentId = deploymentId;
+    const result = await this.deps.deployService.fullRedeploy(ctx, config, dep);
+    if (!result.ok) throw result.error;
+  }
+
+  private async doUndeploy(
+    server: ServerEntry,
+    entry: QueueEntry,
+    busOperationId: OperationContext['operationId'],
+    cancel: OperationContext['cancel'],
+  ): Promise<void> {
+    const deploymentId = entry.targetDeploymentId;
+    if (!deploymentId) {
+      throw new JsmError({
+        code: ErrorCode.InvalidConfig,
+        message: 'Undeploy requires targetDeploymentId',
+      });
+    }
+    const config = this.resolveRunningConfig(server);
+    const dep = config.deployments.find(d => d.id === deploymentId);
+    if (!dep) {
+      throw new JsmError({
+        code: ErrorCode.InvalidConfig,
+        message: `Deployment '${deploymentId}' not found`,
+      });
+    }
+    const ctx = makeCtx(
+      server.serverKey,
+      'Undeploy',
+      600_000,
+      cancel,
+      this.deps.getOutputSink?.(server.serverKey, config.name),
+      busOperationId,
+    );
+    ctx.targetDeploymentId = deploymentId;
+    const result = await this.deps.deployService.undeploy(ctx, config, dep);
+    if (!result.ok) throw result.error;
+  }
+
+  private async doRedeployAll(
+    server: ServerEntry,
+    busOperationId: OperationContext['operationId'],
+    cancel: OperationContext['cancel'],
+  ): Promise<void> {
+    const config = this.resolveRunningConfig(server);
+    const ctx = makeCtx(
+      server.serverKey,
+      'RedeployAll',
+      600_000,
+      cancel,
+      this.deps.getOutputSink?.(server.serverKey, config.name),
+      busOperationId,
+    );
+    await this.deps.deployService.redeployAll(ctx, config);
+  }
+
+  private async doDeployUndeployed(
+    server: ServerEntry,
+    busOperationId: OperationContext['operationId'],
+    cancel: OperationContext['cancel'],
+  ): Promise<void> {
+    const config = this.resolveRunningConfig(server);
+    const ctx = makeCtx(
+      server.serverKey,
+      'DeployUndeployed',
+      600_000,
+      cancel,
+      this.deps.getOutputSink?.(server.serverKey, config.name),
+      busOperationId,
+    );
+    await this.deps.deployService.deployUndeployed(ctx, config);
+  }
+
+  private async doRunDeploymentHealthChecks(
+    server: ServerEntry,
+    _busOperationId: OperationContext['operationId'],
+    cancel: OperationContext['cancel'],
+  ): Promise<void> {
+    throwIfCancelled(cancel, 'Deployment health checks cancelled.');
+    const config = this.resolveRunningConfig(server);
+    await this.deps.deployService.runHealthChecksForServer(server.serverKey, config);
+  }
+
+  // ── Deploy sync (autosync) ──────────────────────────────────────
+
+  private async doDeploySync(
+    server: ServerEntry,
+    entry: QueueEntry,
+    busOperationId: OperationContext['operationId'],
+    cancel: OperationContext['cancel'],
+  ): Promise<void> {
+    const deployService = this.deps.deployService;
+
+    const deploymentId = entry.targetDeploymentId;
+    if (!deploymentId) {
+      this.deps.logger.warn('ServerLifecycle: DeploySync missing targetDeploymentId');
+      return;
+    }
+
+    const batch = entry.meta?.[QUEUE_META_FILE_CHANGE_BATCH] as FileChangeBatch | undefined;
+    if (!batch || !Array.isArray(batch.changes)) {
+      this.deps.logger.warn('ServerLifecycle: DeploySync missing fileChangeBatch meta');
+      return;
+    }
+
+    const serverKey = server.serverKey;
+    const config = this.deps.resolveServerConfig?.(serverKey) ?? server.config;
+    const dep = config.deployments.find(d => d.id === deploymentId);
+    if (!dep) {
+      this.deps.logger.warn(`ServerLifecycle: DeploySync deployment '${deploymentId}' not found`);
+      return;
+    }
+
+    const ctx = makeCtx(
+      serverKey,
+      'DeploySync',
+      30_000,
+      cancel,
+      this.deps.getOutputSink?.(serverKey, config.name),
+      busOperationId,
+    );
+    ctx.targetDeploymentId = deploymentId;
+
+    try {
+      const result = await deployService.sync(ctx, config, dep, batch);
+      if (!result.ok) {
+        this.deps.onDeploySyncFailure?.(serverKey, deploymentId);
+      }
+    } catch (cause) {
+      this.deps.onDeploySyncFailure?.(serverKey, deploymentId);
       throw cause;
     }
   }
 
   // ── Status Refresh ────────────────────────────────────────────────
 
-  private async doStatusRefresh(server: ServerEntry): Promise<void> {
+  private async doStatusRefresh(
+    server: ServerEntry,
+    cancel: OperationContext['cancel'],
+  ): Promise<void> {
     const { config, runtime } = server;
     const plugin = this.getPlugin(config);
 
     const ctx = makeCtx(
       server.serverKey,
-      config.name,
       'StatusRefresh',
       5000,
-      this.deps.logger,
+      cancel,
       this.deps.getOutputSink?.(server.serverKey, config.name),
     );
     const result = await plugin.getStatus(ctx, config);
@@ -679,21 +1039,55 @@ export class ServerLifecycle {
     return !this.deps.trustGate || this.deps.trustGate.isTrusted();
   }
 
-  private async runServerHooks(server: ServerEntry, phase: 'pre' | 'post' | 'onError', event: HookEvent): Promise<void> {
+  private getStartTimeoutMs(config: ServerConfig, mode: StartMode): number {
+    return mode === 'debug'
+      ? (config.timeouts?.startDebugMs ?? 45_000)
+      : (config.timeouts?.startRunMs ?? 30_000);
+  }
+
+  private remainingContextBudgetMs(ctx: OperationContext): number {
+    return Math.max(1, ctx.timeoutMs - (Date.now() - ctx.startedAt));
+  }
+
+  private async runServerHooks(
+    server: ServerEntry,
+    ctx: OperationContext,
+    phase: 'pre' | 'post' | 'onError',
+    event: HookEvent,
+  ): Promise<void> {
     if (!this.deps.hookRunner) return;
-    const result = await this.deps.hookRunner.runHooks(server.serverKey, phase, event, server.config.hooks);
+    const result = await this.deps.hookRunner.runHooks({
+      parent: ctx,
+      phase,
+      event,
+      hooks: server.config.hooks,
+    });
     if (!result.ok) {
       throw result.error;
     }
   }
 
-  private async runServerOnErrorHooks(server: ServerEntry, event: HookEvent | undefined, cause: unknown): Promise<void> {
+  private async runServerOnErrorHooks(
+    server: ServerEntry,
+    ctx: OperationContext,
+    event: HookEvent | undefined,
+    cause: unknown,
+  ): Promise<void> {
     if (!event || !this.deps.hookRunner) return;
-    const result = await this.deps.hookRunner.runHooks(server.serverKey, 'onError', event, server.config.hooks);
+    const result = await this.deps.hookRunner.runHooks({
+      parent: ctx,
+      phase: 'onError',
+      event,
+      hooks: server.config.hooks,
+    });
     if (!result.ok) {
       this.deps.logger.warn(`ServerLifecycle: onError hook failed for '${server.config.name}'`, result.error);
     }
-    if (cause instanceof JsmError && server.runtime.state !== 'error') {
+    if (
+      cause instanceof JsmError
+      && server.runtime.state !== 'error'
+      && server.runtime.state !== 'stopped'
+    ) {
       server.runtime.transition('error', { error: cause });
     }
   }

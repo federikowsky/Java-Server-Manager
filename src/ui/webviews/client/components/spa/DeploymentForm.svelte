@@ -69,7 +69,7 @@
       type: formType,
       sourcePath: sourcePath.trim(),
       deployName: deployName.trim(),
-      syncMode: formType === 'exploded' ? syncMode : 'manual',
+      syncMode,
       hotReload: formType === 'exploded' ? hotReload : false,
       healthCheckPath: healthCheckPath.trim() || undefined,
       ignoreGlobs: ignoreGlobs.length > 0 ? ignoreGlobs : undefined,
@@ -198,18 +198,20 @@
         <p class="field-help">Context path in webapps/. Must be alphanumeric with dots, dashes, underscores.</p>
       </div>
 
-      {#if formType === 'exploded'}
-        <div class="form-field">
-          <label class="field-label" for="dep-sync">
-            Auto-Sync
-          </label>
-          <select id="dep-sync" class="field-input" bind:value={syncMode}>
-            <option value="auto">Auto</option>
-            <option value="manual">Manual</option>
-          </select>
-          <p class="field-help">Auto applies safe file changes and falls back to redeploy when needed.</p>
-        </div>
+      <div class="form-field">
+        <label class="field-label" for="dep-sync">Sync mode</label>
+        <select id="dep-sync" class="field-input" bind:value={syncMode}>
+          <option value="auto">Auto</option>
+          <option value="manual">Manual</option>
+        </select>
+        <p class="field-help">
+          {formType === 'war'
+            ? 'Auto recopies the WAR to webapps/ when the source file changes (Tomcat auto-deploy applies the update).'
+            : 'Auto applies the lightest safe file sync and falls back to full redeploy when needed.'}
+        </p>
+      </div>
 
+      {#if formType === 'exploded'}
         <div class="form-field">
           <label class="checkbox-label">
             <input type="checkbox" class="field-checkbox" bind:checked={hotReload} />

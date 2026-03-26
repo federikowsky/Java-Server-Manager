@@ -1,16 +1,15 @@
 # Java Server Manager
 
-Java Server Manager is a VS Code extension for managing local Java application servers, currently Tomcat-first and plugin-oriented.
+Java Server Manager is a VS Code extension for managing local Java application servers. The implemented surface is Tomcat-only today, with a plugin-oriented architecture for future expansion.
 
 ## Status
 
-The repository is an advanced MVP, not a production-ready release.
+The repository is an advanced MVP. It is not production-ready and has not yet completed its first official Marketplace release cycle.
 
 - Implemented: Tomcat server CRUD, run/debug lifecycle, deployment management, template management, tree view, and webview forms.
 - Partial: autosync, logging UX, deployment orchestration, manifest/spec alignment.
-- Missing for production readiness: stable test pipeline, CI, diagnostics, stronger runtime hardening, and full spec reconciliation.
-
-For the current assessment, see [PROJECT_TECHNICAL_AUDIT.md](./PROJECT_TECHNICAL_AUDIT.md).
+- Release posture: CI exists and runs lint, type checks, tests, production build, and repository audits; Marketplace publication is now governed separately.
+- Missing for production readiness: stronger runtime hardening, full spec-to-code reconciliation, broader release validation confidence, and first monitored release execution.
 
 ## Requirements
 
@@ -25,7 +24,7 @@ For the current assessment, see [PROJECT_TECHNICAL_AUDIT.md](./PROJECT_TECHNICAL
 npm install
 npm run check-types
 npm run lint
-npm run compile
+npm run build
 ```
 
 To launch the extension in development, open the workspace in VS Code and press `F5`.
@@ -36,19 +35,23 @@ To launch the extension in development, open the workspace in VS Code and press 
 - [docs](./docs): canonical specifications and supporting project documents
 - [.github](./.github): shared Copilot customizations, agents, prompts, skills, and hooks
 
+## Configuration note
+
+JSM expects server and deployment changes through the extension UI or registered commands. Manually editing the workspace `jsm.servers.json` file is not a supported workflow for refreshing autosync watchers or lifecycle state.
+
 ## Key documents
 
-- [docs/specs.md](./docs/specs.md): canonical frozen specification
-- [docs/specs-extended.md](./docs/specs-extended.md): extended supporting specification
-- [PROJECT_TECHNICAL_AUDIT.md](./PROJECT_TECHNICAL_AUDIT.md): implementation audit and production blocker baseline
-- [PROJECT_DOSSIER.md](./PROJECT_DOSSIER.md): architecture and status dossier
+- [docs/documentation-map.md](./docs/documentation-map.md): canonical documentation map and source-of-truth rules
+- [docs/release-process.md](./docs/release-process.md): Beta and Stable release policy plus CI/CD contract
+- [docs/release-decision-log.md](./docs/release-decision-log.md): frozen release decisions
+- [docs/specs.md](./docs/specs.md): canonical product and domain specification
 
 ## Current focus areas
 
-- close the spec-to-code gap
-- restore a working automated test path
+- close the remaining spec-to-code gap
 - harden Tomcat runtime and deployment behavior
-- improve diagnostics, logging, and release confidence
+- complete the first monitored Beta release cycle
+- graduate the release flow to Stable readiness
 
 ## Verification commands
 
@@ -56,6 +59,7 @@ To launch the extension in development, open the workspace in VS Code and press 
 npm run check-types
 npm run lint
 npm test
+npm run build
 ```
 
-`npm test` is expected to remain the main readiness gate to fix before claiming production quality.
+`npm test` remains the main Stable-quality gate, while `npm run test:smoke` is the lighter Beta gate.

@@ -5,7 +5,7 @@ This repository is a VS Code extension written in TypeScript for managing Java a
 ## Project reality first
 
 - Treat the repository as the source of truth. Do not trust README, changelog, or specs unless the code confirms them.
-- Use [PROJECT_TECHNICAL_AUDIT.md](../PROJECT_TECHNICAL_AUDIT.md), [PROJECT_DOSSIER.md](../PROJECT_DOSSIER.md), [docs/specs.md](../docs/specs.md), and [docs/specs-extended.md](../docs/specs-extended.md) as context, not as proof that a feature already exists.
+- Use [docs/specs.md](../docs/specs.md), [docs/documentation-map.md](../docs/documentation-map.md), and [docs/release-process.md](../docs/release-process.md) as context, not as proof that a feature already exists.
 - The current implementation is an advanced MVP, not production-ready. Do not describe the project as production-ready unless the requested work actually closes the blocking gaps.
 
 ## Technical priorities
@@ -20,7 +20,7 @@ This repository is a VS Code extension written in TypeScript for managing Java a
 
 - Before claiming completion for code changes, run the narrowest relevant verification among `npm run check-types`, `npm run lint`, and `npm test`.
 - If `npm test` is still failing because of known baseline issues, state that clearly and separate pre-existing failures from new regressions.
-- For changes that affect command contributions or packaging, inspect [package.json](../package.json), [src/commands/index.ts](../src/commands/index.ts), and [src/extension.ts](../src/extension.ts) together.
+- For changes that affect command contributions or packaging, inspect [package.json](../package.json), [src/ui/commands/index.ts](../src/ui/commands/index.ts), and [src/extension.ts](../src/extension.ts) together.
 
 ## Implementation conventions
 
@@ -28,7 +28,7 @@ This repository is a VS Code extension written in TypeScript for managing Java a
 - Match existing TypeScript style and strict typing.
 - Prefer updating existing services and core modules over adding duplicate abstractions.
 - When touching persistence or runtime behavior, check both workspace config and extension storage flows.
-- When touching deployment behavior, verify how [src/services/DeploymentService.ts](../src/services/DeploymentService.ts), [src/services/AutoSyncService.ts](../src/services/AutoSyncService.ts), and [src/core/server/plugins/implementations/TomcatPlugin.ts](../src/core/server/plugins/implementations/TomcatPlugin.ts) interact.
+- When touching deployment behavior, verify how [src/app/deployment/DeploymentService.ts](../src/app/deployment/DeploymentService.ts), [src/app/sync/AutoSyncService.ts](../src/app/sync/AutoSyncService.ts), and [src/plugins/tomcat/TomcatPlugin.ts](../src/plugins/tomcat/TomcatPlugin.ts) interact.
 
 ## Documentation conventions
 

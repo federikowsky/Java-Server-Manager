@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { TemplateService } from '@app/templates/TemplateService';
+import { ErrorCode } from '@core/errors/codes';
 import type { Logger } from '@core/types/logger';
 import type { KeyValueStore } from '@core/types/runtime';
 import type { ServerTemplate } from '@core/types/domain';
@@ -30,14 +31,17 @@ describe('TemplateService', () => {
   let globalStore: KeyValueStore;
   let workspaceStore: KeyValueStore;
   let service: TemplateService;
+  let trustGate: { isTrusted: ReturnType<typeof vi.fn> };
 
   beforeEach(() => {
     globalStore = mockStore();
     workspaceStore = mockStore();
+    trustGate = { isTrusted: vi.fn(() => true) };
     service = new TemplateService({
       globalStore,
       workspaceStore,
       logger: mockLogger(),
+      trustGate,
     });
   });
 
@@ -98,6 +102,36 @@ describe('TemplateService', () => {
     expect(service.getAll()).toHaveLength(1);
   });
 
+  it('moves a template from global to workspace scope without leaving a duplicate copy', async () => {
+    await service.save(makeTemplate('t1', 'Global'), 'global');
+
+    const result = await service.save(makeTemplate('t1', 'Workspace'), 'workspace');
+
+    expect(result.ok).toBe(true);
+    expect(service.listScoped()).toEqual([
+      expect.objectContaining({
+        key: 'workspace:t1',
+        scope: 'workspace',
+        template: expect.objectContaining({ id: 't1', name: 'Workspace' }),
+      }),
+    ]);
+  });
+
+  it('moves a template from workspace to global scope without leaving a duplicate copy', async () => {
+    await service.save(makeTemplate('t1', 'Workspace'), 'workspace');
+
+    const result = await service.save(makeTemplate('t1', 'Global'), 'global');
+
+    expect(result.ok).toBe(true);
+    expect(service.listScoped()).toEqual([
+      expect.objectContaining({
+        key: 'global:t1',
+        scope: 'global',
+        template: expect.objectContaining({ id: 't1', name: 'Global' }),
+      }),
+    ]);
+  });
+
   it('lists templates with their scope', async () => {
     await service.save(makeTemplate('g1', 'Global'), 'global');
     await service.save(makeTemplate('w1', 'Workspace'), 'workspace');
@@ -117,5 +151,22 @@ describe('TemplateService', () => {
 
     expect(clone.id).toBe('t2');
     expect(clone.name).toBe('Copy');
+  });
+
+  it('blocks template writes when workspace is untrusted', async () => {
+    trustGate.isTrusted.mockReturnValue(false);
+
+    const saveResult = await service.save(makeTemplate(), 'global');
+    const deleteResult = await service.delete('tpl-1', 'global');
+
+    expect(saveResult.ok).toBe(false);
+    expect(deleteResult.ok).toBe(false);
+    expect((globalStore.set as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
+
+    for (const result of [saveResult, deleteResult]) {
+      if (!result.ok) {
+        expect(result.error.code).toBe(ErrorCode.WorkspaceUntrusted);
+      }
+    }
   });
 });

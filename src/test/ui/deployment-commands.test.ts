@@ -21,6 +21,15 @@ const mockShowWarningMessage = vi.fn();
 const mockOpenTextDocument = vi.fn();
 const mockShowTextDocument = vi.fn();
 const mockExecuteCommand = vi.fn();
+const mockWithProgress = vi.fn(async (_options: unknown, task: (progress: { report: ReturnType<typeof vi.fn> }, token: { isCancellationRequested: boolean; onCancellationRequested: (listener: () => void) => { dispose: ReturnType<typeof vi.fn> } }) => unknown) =>
+  task(
+    { report: vi.fn() },
+    {
+      isCancellationRequested: false,
+      onCancellationRequested: () => ({ dispose: vi.fn() }),
+    },
+  ),
+);
 const registeredHandlers: Record<string, (...args: unknown[]) => unknown> = {};
 
 vi.mock('vscode', () => ({
@@ -29,6 +38,7 @@ vi.mock('vscode', () => ({
     showInformationMessage: mockShowInfoMessage,
     showWarningMessage: mockShowWarningMessage,
     showTextDocument: mockShowTextDocument,
+    withProgress: mockWithProgress,
     createTreeView: vi.fn(() => ({ dispose: vi.fn() })),
   },
   workspace: {
@@ -44,6 +54,7 @@ vi.mock('vscode', () => ({
   Uri: {
     file: (p: string) => ({ fsPath: p, path: p }),
   },
+  ProgressLocation: { Notification: 15 },
   ViewColumn: { One: 1 },
   TreeItemCollapsibleState: { None: 0, Collapsed: 1, Expanded: 2 },
   TreeItem: class {
@@ -113,9 +124,12 @@ function mockDeps() {
     pluginRegistry: {
       get: vi.fn(() => ({ getLogSources })),
     },
-    deployService: {
-      fullRedeploy: vi.fn(async () => ok(undefined)),
-      undeploy: vi.fn(async () => ok(undefined)),
+    lifecycle: {
+      enqueueDeployFull: vi.fn(() => ok(undefined)),
+      enqueueUndeploy: vi.fn(() => ok(undefined)),
+      cancel: vi.fn(),
+      waitUntilQueueIdle: vi.fn(async () => {}),
+      getAndClearQueueDrainFailure: vi.fn(() => undefined),
     },
     treeProvider: {
       requestRefresh: vi.fn(),
@@ -187,7 +201,16 @@ describe('Deployment Commands', () => {
         serverId: 'srv-1',
         serverKey: 'srv-1',
         workspaceFolderUri: '',
-        deployment: makeDeployment('dep-2'),
+        draft: {
+          id: 'dep-2',
+          type: 'exploded',
+          sourcePath: '/src/app',
+          deployName: 'myapp',
+          syncMode: 'auto',
+          hotReload: false,
+          ignoreGlobs: [],
+          hooks: [],
+        },
       });
 
       expect(deps.configService.updateServer).toHaveBeenCalledWith(
@@ -205,7 +228,38 @@ describe('Deployment Commands', () => {
       }));
     });
 
-    it('jsm.deployment.redeploy should call deployService.fullRedeploy', async () => {
+    it('jsm.deployment.add should surface untrusted-workspace errors from config writes', async () => {
+      deps.configService.updateServer.mockResolvedValue(
+        err(new JsmError({
+          code: ErrorCode.WorkspaceUntrusted,
+          message: 'Grant workspace trust to modify deployment configuration.',
+        })),
+      );
+
+      const result = await invoke('jsm.deployment.add', {
+        serverId: 'srv-1',
+        serverKey: 'srv-1',
+        workspaceFolderUri: '',
+        draft: {
+          id: 'dep-2',
+          type: 'exploded',
+          sourcePath: '/src/app',
+          deployName: 'myapp',
+          syncMode: 'auto',
+          hotReload: false,
+          ignoreGlobs: [],
+          hooks: [],
+        },
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        message: 'Grant workspace trust to modify deployment configuration.',
+      });
+      expect(deps.treeProvider.requestRefresh).not.toHaveBeenCalled();
+    });
+
+    it('jsm.deployment.redeploy should enqueue DeployFull on lifecycle', async () => {
       const dep = makeDeployment();
       const server = makeServer();
       server.deployments = [dep];
@@ -214,13 +268,13 @@ describe('Deployment Commands', () => {
       const node = createDeploymentNode('srv-1', dep);
       await invoke('jsm.deployment.redeploy', node);
 
-      expect(deps.deployService.fullRedeploy).toHaveBeenCalled();
+      expect(deps.lifecycle.enqueueDeployFull).toHaveBeenCalledWith('srv-1', 'dep-1');
       expect(mockShowInfoMessage).toHaveBeenCalledWith(
         expect.stringContaining('Redeploy completed'),
       );
     });
 
-    it('jsm.deployment.undeploy should call deployService.undeploy', async () => {
+    it('jsm.deployment.undeploy should enqueue Undeploy on lifecycle', async () => {
       const dep = makeDeployment();
       const server = makeServer();
       server.deployments = [dep];
@@ -229,7 +283,7 @@ describe('Deployment Commands', () => {
       const node = createDeploymentNode('srv-1', dep);
       await invoke('jsm.deployment.undeploy', node);
 
-      expect(deps.deployService.undeploy).toHaveBeenCalled();
+      expect(deps.lifecycle.enqueueUndeploy).toHaveBeenCalledWith('srv-1', 'dep-1');
       expect(mockShowInfoMessage).toHaveBeenCalledWith(
         expect.stringContaining('Undeployed'),
       );
@@ -281,8 +335,8 @@ describe('Deployment Commands', () => {
       );
     });
 
-    it('should do nothing for war deployments', async () => {
-      const dep = makeDeployment('dep-1', 'auto', 'war');
+    it('should cycle sync mode for war deployments', async () => {
+      const dep = makeDeployment('dep-1', 'manual', 'war');
       const server = makeServer();
       server.deployments = [dep];
       deps.configService.getServer.mockReturnValue(server);
@@ -290,7 +344,11 @@ describe('Deployment Commands', () => {
       const node = createDeploymentNode('srv-1', dep);
       await invoke('jsm.deployment.toggleAutosync', node);
 
-      expect(deps.configService.updateServer).not.toHaveBeenCalled();
+      expect(deps.configService.updateServer).toHaveBeenCalledWith(
+        expect.objectContaining({
+          deployments: [expect.objectContaining({ type: 'war', syncMode: 'auto' })],
+        }),
+      );
     });
 
     it('should show error when updateServer fails', async () => {
@@ -346,7 +404,7 @@ describe('Deployment Commands', () => {
       deps.configService.getServer.mockReturnValue(undefined);
       const node = createDeploymentNode();
       await invoke('jsm.deployment.redeploy', node);
-      expect(deps.deployService.fullRedeploy).not.toHaveBeenCalled();
+      expect(deps.lifecycle.enqueueDeployFull).not.toHaveBeenCalled();
     });
 
     it('redeploy should silently return when deployment not found in server', async () => {
@@ -356,16 +414,16 @@ describe('Deployment Commands', () => {
 
       const node = createDeploymentNode();
       await invoke('jsm.deployment.redeploy', node);
-      expect(deps.deployService.fullRedeploy).not.toHaveBeenCalled();
+      expect(deps.lifecycle.enqueueDeployFull).not.toHaveBeenCalled();
     });
 
-    it('redeploy should show error when fullRedeploy fails', async () => {
+    it('redeploy should show error when queued deploy fails', async () => {
       const dep = makeDeployment();
       const server = makeServer();
       server.deployments = [dep];
       deps.configService.getServer.mockReturnValue(server);
-      deps.deployService.fullRedeploy.mockResolvedValue(
-        err(new JsmError({ code: ErrorCode.DeployFailed, message: 'Deploy error' })),
+      deps.lifecycle.getAndClearQueueDrainFailure.mockReturnValue(
+        new JsmError({ code: ErrorCode.DeployFailed, message: 'Deploy error' }),
       );
 
       const node = createDeploymentNode('srv-1', dep);

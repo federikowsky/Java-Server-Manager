@@ -12,7 +12,12 @@ import { ErrorCode } from '@core/errors/codes';
 import type { EventBus } from '@core/events/EventBus';
 import type { SchemaValidator } from '@core/validation/SchemaValidator';
 import type { ConfigRepo } from '@infra/fs/ConfigRepo';
-import { validateSecurityPolicy } from '@core/policy/SecurityPolicy';
+import { requireWorkspaceTrust, validateSecurityPolicy } from '@core/policy';
+import type { TrustGate } from '@core/types/runtime';
+
+function deploymentPersistedChanged(before: DeploymentConfig, after: DeploymentConfig): boolean {
+  return JSON.stringify(before) !== JSON.stringify(after);
+}
 
 /**
  * Application-level config service (§5.5).
@@ -24,6 +29,7 @@ export class ConfigService {
   private readonly bus: EventBus;
   private readonly logger: Logger;
   private readonly workspaceFolderUri: string;
+  private readonly trustGate?: TrustGate;
 
   constructor(deps: {
     repo: ConfigRepo;
@@ -31,12 +37,14 @@ export class ConfigService {
     bus: EventBus;
     logger: Logger;
     workspaceFolderUri: string;
+    trustGate?: TrustGate;
   }) {
     this.repo = deps.repo;
     this.validator = deps.validator;
     this.bus = deps.bus;
     this.logger = deps.logger;
     this.workspaceFolderUri = deps.workspaceFolderUri;
+    this.trustGate = deps.trustGate;
   }
 
   /**
@@ -64,6 +72,9 @@ export class ConfigService {
 
   /** Add a new server, validate, persist, and emit event. */
   async addServer(config: ServerConfig): Promise<Result<void, JsmError>> {
+    const trustResult = requireWorkspaceTrust(this.trustGate, 'modify server inventory');
+    if (!trustResult.ok) return trustResult;
+
     // Check for duplicate ID
     if (this.repo.get(config.id)) {
       return err(new JsmError({
@@ -90,7 +101,11 @@ export class ConfigService {
 
   /** Update an existing server, validate, persist, and emit event. */
   async updateServer(config: ServerConfig): Promise<Result<void, JsmError>> {
-    if (!this.repo.get(config.id)) {
+    const trustResult = requireWorkspaceTrust(this.trustGate, 'modify server inventory');
+    if (!trustResult.ok) return trustResult;
+
+    const previous = this.repo.get(config.id);
+    if (!previous) {
       return err(new JsmError({
         code: ErrorCode.InvalidConfig,
         message: `Server '${config.id}' not found`,
@@ -107,12 +122,25 @@ export class ConfigService {
     if (!saveResult.ok) return saveResult;
 
     this.bus.emit('ServerUpdated', { serverId: config.id, workspaceFolderUri: this.workspaceFolderUri });
+    for (const dep of config.deployments) {
+      const prevDep = previous.deployments.find(d => d.id === dep.id);
+      if (prevDep !== undefined && deploymentPersistedChanged(prevDep, dep)) {
+        this.bus.emit('DeploymentUpdated', {
+          serverId: config.id,
+          deploymentId: dep.id,
+          workspaceFolderUri: this.workspaceFolderUri,
+        });
+      }
+    }
     this.logger.info(`ConfigService: updated server '${config.name}'`);
     return ok(undefined);
   }
 
   /** Remove a server and emit event. */
   async removeServer(serverId: ServerId): Promise<Result<void, JsmError>> {
+    const trustResult = requireWorkspaceTrust(this.trustGate, 'modify server inventory');
+    if (!trustResult.ok) return trustResult;
+
     if (!this.repo.get(serverId)) {
       return err(new JsmError({
         code: ErrorCode.InvalidConfig,
@@ -130,6 +158,9 @@ export class ConfigService {
 
   /** Add a deployment to a server. */
   async addDeployment(serverId: ServerId, dep: DeploymentConfig): Promise<Result<void, JsmError>> {
+    const trustResult = requireWorkspaceTrust(this.trustGate, 'modify deployment configuration');
+    if (!trustResult.ok) return trustResult;
+
     const server = this.repo.get(serverId);
     if (!server) {
       return err(new JsmError({
@@ -165,6 +196,9 @@ export class ConfigService {
 
   /** Remove a deployment from a server. */
   async removeDeployment(serverId: ServerId, deploymentId: DeploymentId): Promise<Result<void, JsmError>> {
+    const trustResult = requireWorkspaceTrust(this.trustGate, 'modify deployment configuration');
+    if (!trustResult.ok) return trustResult;
+
     const server = this.repo.get(serverId);
     if (!server) {
       return err(new JsmError({

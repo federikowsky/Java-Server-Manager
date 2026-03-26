@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
+  import { formDataToDeploymentDraft } from '@core/authoring';
   import { spaState, activeEntity, browseResult, lastCommandResult } from '../../../stores';
   import { postToHost } from '../../../bridge';
   import { WEBVIEW_PROTOCOL_VERSION } from '../../../../protocol';
@@ -76,7 +77,6 @@
 
   $effect(() => {
     if (formType === 'war') {
-      syncMode = 'manual';
       hotReload = false;
     }
   });
@@ -204,12 +204,11 @@
       return;
     }
 
-    const deployment = {
-      id: existingDeployment?.id || crypto.randomUUID(),
+    const formData: Record<string, unknown> = {
       type: formType,
       sourcePath: sourcePath.trim(),
       deployName: deployName.trim(),
-      syncMode: formType === 'exploded' ? syncMode : 'manual',
+      syncMode,
       hotReload: formType === 'exploded' ? hotReload : false,
       healthCheckPath: healthCheckPath.trim() || undefined,
       healthCheckTimeoutMs: healthCheckTimeoutMs && healthCheckTimeoutMs > 0
@@ -218,6 +217,7 @@
       ignoreGlobs: [...ignoreGlobs],
       hooks: [],
     };
+    const draft = formDataToDeploymentDraft(formData, { id: existingDeployment?.id });
 
     submitState = 'submitting';
     submitError = '';
@@ -234,8 +234,8 @@
         serverKey: serverRecord.serverKey,
         workspaceFolderUri: serverRecord.workspaceFolderUri,
         workspaceFolderName: serverRecord.workspaceFolderName,
-        deploymentId: deployment.id,
-        deployment,
+        deploymentId: draft.id,
+        draft,
       }],
     });
   }
@@ -354,27 +354,31 @@
         <span>Sync & Options</span>
       </h3>
       <div class="section-grid">
-        {#if formType === 'exploded'}
-          <div class="form-field">
-            <label class="field-label">Synchronization Mode</label>
-            <div class="radio-group">
-              <label class="radio-option" class:selected={syncMode === 'auto'}>
+        <div class="form-field">
+          <label class="field-label">Synchronization Mode</label>
+          <div class="radio-group">
+            <label class="radio-option" class:selected={syncMode === 'auto'}>
               <input type="radio" bind:group={syncMode} value="auto" />
-                <div class="radio-content">
-                  <span class="radio-label">Auto (Recommended)</span>
-                  <span class="radio-desc">Files synced automatically on save. Safe changes applied instantly.</span>
-                </div>
-              </label>
-              <label class="radio-option" class:selected={syncMode === 'manual'}>
-                <input type="radio" bind:group={syncMode} value="manual" />
-                <div class="radio-content">
-                  <span class="radio-label">Manual</span>
-                  <span class="radio-desc">You control when to redeploy.</span>
-                </div>
-              </label>
-            </div>
+              <div class="radio-content">
+                <span class="radio-label">Auto</span>
+                <span class="radio-desc">
+                  {formType === 'war'
+                    ? 'When the WAR file changes, it is copied to webapps/ again; Tomcat picks up the update if auto-deploy is enabled.'
+                    : 'Files synced automatically on save. The extension applies the lightest safe update and falls back to full redeploy when needed.'}
+                </span>
+              </div>
+            </label>
+            <label class="radio-option" class:selected={syncMode === 'manual'}>
+              <input type="radio" bind:group={syncMode} value="manual" />
+              <div class="radio-content">
+                <span class="radio-label">Manual</span>
+                <span class="radio-desc">You control when to redeploy from the dashboard or tree.</span>
+              </div>
+            </label>
           </div>
+        </div>
 
+        {#if formType === 'exploded'}
           <div class="form-field">
             <label class="checkbox-label">
               <input type="checkbox" class="field-checkbox" bind:checked={hotReload} />
@@ -387,7 +391,7 @@
         {:else}
           <div class="info-banner">
             <Icon name="info" size={16} />
-            <span>WAR deployments are always manual. The file is copied to webapps/ on deploy.</span>
+            <span>WAR deploy copies the packaged file to webapps/. Use Redeploy for a full refresh on demand when sync is manual.</span>
           </div>
         {/if}
       </div>

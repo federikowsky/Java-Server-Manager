@@ -13,6 +13,15 @@ const mockShowOpenDialog = vi.fn();
 const mockShowTextDocument = vi.fn();
 const mockWriteFile = vi.fn();
 const mockReadFile = vi.fn();
+const mockWithProgress = vi.fn(async (_options: unknown, task: (progress: { report: ReturnType<typeof vi.fn> }, token: { isCancellationRequested: boolean; onCancellationRequested: (listener: () => void) => { dispose: ReturnType<typeof vi.fn> } }) => unknown) =>
+  task(
+    { report: vi.fn() },
+    {
+      isCancellationRequested: false,
+      onCancellationRequested: () => ({ dispose: vi.fn() }),
+    },
+  ),
+);
 
 vi.mock('fs/promises', () => ({
   writeFile: (...args: unknown[]) => mockWriteFile(...args),
@@ -31,6 +40,7 @@ vi.mock('vscode', () => ({
     showSaveDialog: mockShowSaveDialog,
     showOpenDialog: mockShowOpenDialog,
     showTextDocument: mockShowTextDocument,
+    withProgress: mockWithProgress,
     createTreeView: vi.fn(() => ({ dispose: vi.fn() })),
   },
   workspace: {
@@ -49,6 +59,7 @@ vi.mock('vscode', () => ({
     joinPath: vi.fn((base: { fsPath: string }, ...segments: string[]) =>
       ({ fsPath: [base.fsPath, ...segments].join('/'), path: [base.path, ...segments].join('/') })),
   },
+  ProgressLocation: { Notification: 15 },
   ViewColumn: { One: 1 },
   TreeItemCollapsibleState: { None: 0, Collapsed: 1, Expanded: 2 },
   TreeItem: class {
@@ -110,10 +121,17 @@ function createServerNodeWithWorkspace(
 function mockDeps() {
   return {
     lifecycle: {
-      start: vi.fn(),
-      stop: vi.fn(),
-      restart: vi.fn(),
+      start: vi.fn(() => ok(undefined)),
+      stop: vi.fn(() => ok(undefined)),
+      restart: vi.fn(() => ok(undefined)),
       cancel: vi.fn(),
+      enqueueDeployUndeployed: vi.fn(() => ok(undefined)),
+      enqueueRedeployAll: vi.fn(() => ok(undefined)),
+      enqueueRunDeploymentHealthChecks: vi.fn(() => ok(undefined)),
+      waitUntilQueueIdle: vi.fn(async () => {}),
+      getAndClearQueueDrainFailure: vi.fn(() => undefined),
+      refreshStatus: vi.fn(() => ok(undefined)),
+      getServerKeysInState: vi.fn(() => []),
     },
     pluginRegistry: {
       get: vi.fn(() => ({
@@ -133,9 +151,6 @@ function mockDeps() {
     },
     provisioningService: {
       removeServer: vi.fn(),
-    },
-    deployService: {
-      redeployAll: vi.fn(),
     },
     diagnosticsService: {
       generateBundleText: vi.fn(() => 'diag'),
@@ -268,7 +283,7 @@ describe('Server Commands', () => {
       });
     });
 
-    it('jsm.server.add should provision a server from SPA form data', async () => {
+    it('jsm.server.add should provision a server from the canonical server draft payload', async () => {
       const createdServer = makeServer('srv-2', 'Created Server');
       const createServer = vi.fn(async () => ok(createdServer));
       deps.workspaceRegistry.getEntry.mockReturnValue({
@@ -277,35 +292,44 @@ describe('Server Commands', () => {
 
       const result = await invoke('jsm.server.add', {
         workspaceFolderUri: 'file:///ws',
-        formData: {
+        draft: {
           name: 'Created Server',
-          'runtime.homePath': '/opt/tomcat',
+          type: 'tomcat',
+          runtimeHomePath: '/opt/tomcat',
           javaHome: '/usr/lib/jvm/java-17',
           host: '127.0.0.1',
-          'ports.http': 8080,
-          'ports.debug': 5005,
-          'debug.bind': '127.0.0.1',
-          'run.vmArgs': ['-Xmx512m'],
-          'pluginConfig.ssl.enabled': true,
-          'pluginConfig.ssl.port': 8443,
-          'pluginConfig.ssl.keystorePath': '/tmp/server.p12',
-          'pluginConfig.ssl.keystorePassword': 'secret',
-          'pluginConfig.ssl.keystoreType': 'PKCS12',
+          httpPort: 8080,
+          debugPort: 5005,
+          debugBind: '127.0.0.1',
+          vmArgs: ['-Xmx512m'],
+          hooks: [],
+          pluginConfig: {
+            type: 'tomcat',
+            ssl: {
+              enabled: true,
+              port: 8443,
+              keystorePath: '/tmp/server.p12',
+              keystorePassword: 'secret',
+              keystoreType: 'PKCS12',
+            },
+          },
         },
       });
 
       expect(deps.workspaceRegistry.getEntry).toHaveBeenCalledWith('file:///ws');
       expect(createServer).toHaveBeenCalledWith(expect.objectContaining({
         name: 'Created Server',
+        type: 'tomcat',
         runtimeHomePath: '/opt/tomcat',
         javaHome: '/usr/lib/jvm/java-17',
+        host: '127.0.0.1',
         httpPort: 8080,
         debugPort: 5005,
+        debugBind: '127.0.0.1',
         vmArgs: ['-Xmx512m'],
+        hooks: [],
         pluginConfig: expect.objectContaining({
           type: 'tomcat',
-          shutdownPort: 8005,
-          disableAjp: true,
           ssl: expect.objectContaining({
             enabled: true,
             port: 8443,
@@ -321,6 +345,38 @@ describe('Server Commands', () => {
           workspaceFolderUri: 'file:///ws',
         },
       }));
+    });
+
+    it('jsm.server.add should surface untrusted-workspace errors from provisioning', async () => {
+      const createServer = vi.fn(async () => err(new JsmError({
+        code: ErrorCode.WorkspaceUntrusted,
+        message: 'Grant workspace trust to provision managed servers.',
+      })));
+      deps.workspaceRegistry.getEntry.mockReturnValue({
+        provisioningService: { createServer },
+      });
+
+      const result = await invoke('jsm.server.add', {
+        workspaceFolderUri: 'file:///ws',
+        draft: {
+          name: 'Created Server',
+          type: 'tomcat',
+          runtimeHomePath: '/opt/tomcat',
+          javaHome: '/usr/lib/jvm/java-17',
+          host: '127.0.0.1',
+          httpPort: 8080,
+          debugPort: 5005,
+          debugBind: '127.0.0.1',
+          vmArgs: [],
+          hooks: [],
+        },
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        message: 'Grant workspace trust to provision managed servers.',
+      });
+      expect(deps.treeProvider.requestRefresh).not.toHaveBeenCalled();
     });
   });
 

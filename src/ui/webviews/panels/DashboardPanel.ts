@@ -3,21 +3,24 @@ import * as crypto from 'crypto';
 import type { WorkspaceServiceRegistry } from '@app/config';
 import type { ServerLifecycle } from '@app/server/ServerLifecycle';
 import type { TemplateService } from '@app/templates/TemplateService';
+import {
+  formDataToServerConfig,
+  formDataToTemplateDraft,
+  serverConfigToFormData,
+  templateDraftToTemplate,
+  templateToServerFormData,
+  validateServerForm,
+} from '@core/authoring';
 import type { PluginRegistry } from '@plugins/registry/PluginRegistry';
 import type { ServerDiscoveryService } from '@app/server/ServerDiscoveryService';
-import type { Logger, ServerTemplate } from '@core/types';
+import type { Logger } from '@core/types';
 import type { DashboardNavigationTarget, HostToWebview, FormSchema, WebviewToHost } from '../protocol';
 import { WEBVIEW_PROTOCOL_VERSION } from '../protocol';
 import { EventBus } from '@core/events/EventBus';
 import { v4 as uuid } from 'uuid';
-import { normalizeHookList } from '../hookForm';
 import { areHookTaskOptionsEqual, fetchHookTaskOptions, type HookTaskOption } from '../hookTaskOptions';
-import {
-  formDataToServerConfig,
-  serverConfigToFormData,
-  templateToServerFormData,
-  validateServerForm,
-} from './ServerFormPanel';
+import { requireWorkspaceTrust } from '@core/policy';
+import type { TrustGate } from '@core/types/runtime';
 
 type CommandExecutionResult = {
   ok: boolean;
@@ -35,6 +38,7 @@ export interface DashboardPanelDeps {
   deployService?: { getDeploymentState(serverId: string, deploymentId: string): string };
   logger: Logger;
   bus: EventBus;
+  trustGate?: TrustGate;
 }
 
 export class DashboardPanel implements vscode.Disposable {
@@ -252,10 +256,6 @@ export class DashboardPanel implements vscode.Disposable {
         this.currentFormTargetScope = undefined;
         break;
 
-      case 'loadData':
-        await this.handleLoadData(msg.id);
-        break;
-
       case 'requestWorkspaceFolders':
         this.postMessage({
           v: WEBVIEW_PROTOCOL_VERSION,
@@ -273,14 +273,6 @@ export class DashboardPanel implements vscode.Disposable {
         }
         break;
 
-      case 'updateServer':
-        await this.handleUpdateServer(msg.serverId, msg.config, msg.workspaceFolderUri);
-        break;
-
-      case 'createServer':
-        await this.handleCreateServer(msg.config, msg.workspaceFolderUri);
-        break;
-
       case 'deleteServer':
         await this.handleDeleteServer(msg.serverId, msg.workspaceFolderUri);
         break;
@@ -293,14 +285,6 @@ export class DashboardPanel implements vscode.Disposable {
         await this.handleDeleteTemplate(msg.templateId, msg.scope);
         break;
 
-      case 'requestDefaults':
-        this.postMessage({
-          v: WEBVIEW_PROTOCOL_VERSION,
-          command: 'defaults',
-          data: {},
-        });
-        break;
-
       default:
         this.deps.logger.warn(`[DashboardPanel] Unhandled message type: ${(msg as any).command}`);
         break;
@@ -308,37 +292,6 @@ export class DashboardPanel implements vscode.Disposable {
   }
 
   // ── CRUD Handlers ──────────────────────────────────────────────────────────
-
-  private async handleUpdateServer(serverId: string, config: unknown, workspaceFolderUri: string): Promise<void> {
-    try {
-      const result = await this.deps.workspaceRegistry.updateServer(
-        { workspaceFolderUri, serverId },
-        config as any,
-      );
-      if (!result.ok) {
-        this.postError(result.error.message);
-        return;
-      }
-      this.syncState();
-    } catch (e) {
-      this.deps.logger.error('Error updating server', e);
-      this.postError(`Error updating server: ${String(e)}`);
-    }
-  }
-
-  private async handleCreateServer(config: unknown, workspaceFolderUri: string): Promise<void> {
-    try {
-      const result = await this.deps.workspaceRegistry.addServer(workspaceFolderUri, config as any);
-      if (!result.ok) {
-        this.postError(result.error.message);
-        return;
-      }
-      this.syncState();
-    } catch (e) {
-      this.deps.logger.error('Error creating server', e);
-      this.postError(`Error creating server: ${String(e)}`);
-    }
-  }
 
   private async handleDeleteServer(serverId: string, workspaceFolderUri: string): Promise<void> {
     try {
@@ -1111,45 +1064,16 @@ export class DashboardPanel implements vscode.Disposable {
       return;
     }
 
-    const scopeValue = lastSubmittedData['scope'];
-    const pluginTypeValue = lastSubmittedData['pluginType'];
-    const scope: 'global' | 'workspace' = scopeValue === 'global' ? 'global' : scopeValue === 'workspace'
-      ? 'workspace'
-      : existingEntry?.scope ?? this.currentFormTargetScope ?? 'workspace';
-    const pluginType: 'tomcat' = typeof pluginTypeValue === 'string' && pluginTypeValue === 'tomcat'
-      ? 'tomcat'
-      : existingEntry?.template.pluginType ?? 'tomcat';
-    const pluginConfig = this.buildTemplatePluginConfig(lastSubmittedData, pluginType);
-
-    const template = {
+    const templateDraft = formDataToTemplateDraft(lastSubmittedData, {
+      fallbackScope: existingEntry?.scope ?? this.currentFormTargetScope ?? 'workspace',
+      fallbackPluginType: existingEntry?.template.pluginType ?? 'tomcat',
+    });
+    const template = templateDraftToTemplate({
       id: existingEntry?.template.id ?? uuid(),
-      name: String(lastSubmittedData['name'] ?? '').trim(),
-      description: String(lastSubmittedData['description'] ?? '').trim() || undefined,
-      pluginType,
-      serverDefaults: {
-        runtime: this.stringValue(lastSubmittedData, 'runtime.homePath')
-          ? { homePath: this.stringValue(lastSubmittedData, 'runtime.homePath') }
-          : undefined,
-        javaHome: this.stringValue(lastSubmittedData, 'javaHome'),
-        host: this.stringValue(lastSubmittedData, 'host'),
-        ports: {
-          http: this.numberValue(lastSubmittedData, 'ports.http'),
-          debug: this.numberValue(lastSubmittedData, 'ports.debug'),
-        },
-        run: {
-          vmArgs: Array.isArray(lastSubmittedData['run.vmArgs'])
-            ? (lastSubmittedData['run.vmArgs'] as string[]).filter(Boolean)
-            : [],
-        },
-        debug: {
-          bind: this.stringValue(lastSubmittedData, 'debug.bind'),
-        },
-        hooks: normalizeHookList(lastSubmittedData['hooks']),
-        pluginConfig,
-      },
-    };
+      draft: templateDraft,
+    });
 
-    const result = await this.deps.templateService.save(template, scope);
+    const result = await this.deps.templateService.save(template, templateDraft.scope);
     // Clear cached submit payload once handled.
     this.lastSubmittedFormData = undefined;
 
@@ -1160,61 +1084,6 @@ export class DashboardPanel implements vscode.Disposable {
 
     this.syncState();
   }
-
-  private stringValue(data: Record<string, unknown>, key: string): string | undefined {
-    const raw = data[key];
-    if (typeof raw !== 'string') return undefined;
-    const trimmed = raw.trim();
-    return trimmed.length > 0 ? trimmed : undefined;
-  }
-
-  private numberValue(data: Record<string, unknown>, key: string): number | undefined {
-    const raw = data[key];
-    if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
-    if (typeof raw !== 'string' || raw.trim().length === 0) return undefined;
-    const parsed = Number(raw);
-    return Number.isFinite(parsed) ? parsed : undefined;
-  }
-
-  private buildTemplatePluginConfig(
-    data: Record<string, unknown>,
-    pluginType: string,
-  ): ServerTemplate['serverDefaults']['pluginConfig'] {
-    if (pluginType !== 'tomcat') {
-      return undefined;
-    }
-
-    const sslEnabled = data['pluginConfig.ssl.enabled'] === true;
-    if (!sslEnabled) {
-      return undefined;
-    }
-
-    const keystorePath = this.stringValue(data, 'pluginConfig.ssl.keystorePath');
-    const keystorePassword = this.stringValue(data, 'pluginConfig.ssl.keystorePassword');
-    const keystoreType = this.stringValue(data, 'pluginConfig.ssl.keystoreType');
-    const clientAuth = data['pluginConfig.ssl.clientAuth'] === true;
-    const truststorePath = this.stringValue(data, 'pluginConfig.ssl.truststorePath');
-    const truststorePassword = this.stringValue(data, 'pluginConfig.ssl.truststorePassword');
-    const truststoreType = this.stringValue(data, 'pluginConfig.ssl.truststoreType');
-
-    return {
-      type: 'tomcat',
-      shutdownPort: 8005,
-      disableAjp: true,
-      ssl: {
-        enabled: true,
-        port: this.numberValue(data, 'pluginConfig.ssl.port') ?? 8443,
-        keystorePath: keystorePath ?? '',
-        keystorePassword: keystorePassword ?? '',
-        keystoreType: keystoreType === 'JKS' ? 'JKS' : 'PKCS12',
-        clientAuth,
-        ...(truststorePath ? { truststorePath } : {}),
-        ...(truststorePassword ? { truststorePassword } : {}),
-        ...(truststoreType ? { truststoreType: truststoreType === 'JKS' ? 'JKS' : 'PKCS12' } : {}),
-      },
-    };
-  }
-
   private async handleBrowse(
     field: string,
     kind: 'file' | 'directory',
@@ -1245,20 +1114,16 @@ export class DashboardPanel implements vscode.Disposable {
       return { ok: false, message: 'Invalid settings data' };
     }
 
+    const trustResult = requireWorkspaceTrust(this.deps.trustGate, 'modify JSM settings');
+    if (!trustResult.ok) {
+      this.postError(trustResult.error.message);
+      return { ok: false, message: trustResult.error.message };
+    }
+
     try {
-      // Persist settings to workspace configuration
       const config = vscode.workspace.getConfiguration('jsm');
       const s = settings as Record<string, unknown>;
-      
-      if ('autoDiscovery' in s) {
-        await config.update('autoDiscovery.enabled', s.autoDiscovery, vscode.ConfigurationTarget.Global);
-      }
-      if ('scanEnvVars' in s) {
-        await config.update('autoDiscovery.scanEnvVars', s.scanEnvVars, vscode.ConfigurationTarget.Global);
-      }
-      if ('scanCommonPaths' in s) {
-        await config.update('autoDiscovery.scanCommonPaths', s.scanCommonPaths, vscode.ConfigurationTarget.Global);
-      }
+
       if ('defaultHttpPort' in s) {
         await config.update('defaults.httpPort', s.defaultHttpPort, vscode.ConfigurationTarget.Global);
       }
@@ -1280,24 +1145,6 @@ export class DashboardPanel implements vscode.Disposable {
       const message = `Error saving settings: ${String(e)}`;
       this.postError(message);
       return { ok: false, message };
-    }
-  }
-
-  private async handleLoadData(_id?: string): Promise<void> {
-    if (!this.panel) return;
-
-    if (this.currentFormId === 'jsm.serverForm' && this.currentFormMode === 'edit' && this.currentFormTargetId) {
-      const record = this.deps.workspaceRegistry.getAllServers().find(item =>
-        item.serverId === this.currentFormTargetId
-        && item.workspaceFolderUri === this.currentFormTargetWorkspaceFolderUri,
-      );
-      if (record) {
-        this.postMessage({
-          v: WEBVIEW_PROTOCOL_VERSION,
-          command: 'loaded',
-          data: serverConfigToFormData(record.config),
-        });
-      }
     }
   }
 
@@ -1360,12 +1207,8 @@ export class DashboardPanel implements vscode.Disposable {
       name: s.name,
     }));
 
-    // Load global settings
     const config = vscode.workspace.getConfiguration('jsm');
     const settings = {
-      autoDiscovery: config.get('autoDiscovery.enabled', true),
-      scanEnvVars: config.get('autoDiscovery.scanEnvVars', true),
-      scanCommonPaths: config.get('autoDiscovery.scanCommonPaths', true),
       defaultHttpPort: config.get('defaults.httpPort', 8080),
       defaultDebugPort: config.get('defaults.debugPort', 5005),
       defaultJavaHome: config.get('defaults.javaHome', ''),

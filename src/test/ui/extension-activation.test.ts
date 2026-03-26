@@ -13,6 +13,9 @@ const mockTreeProviderRequestRefresh = vi.fn();
 const mockTreeProviderForceRefresh = vi.fn();
 const mockLogChannelDetach = vi.fn();
 const mockAutoSyncSuspend = vi.fn();
+const mockAutoSyncDisable = vi.fn();
+const mockAutoSyncPurgeServerWatchState = vi.fn();
+const mockAutoSyncRebindWatchers = vi.fn();
 const mockLifecycleUpdateConfig = vi.fn();
 const mockLifecycleUnregister = vi.fn();
 
@@ -213,7 +216,10 @@ vi.mock('@app/deployment', () => ({
 vi.mock('@app/sync', () => ({
   AutoSyncService: class {
     enable = vi.fn();
+    rebindWatchers = mockAutoSyncRebindWatchers;
     suspend = mockAutoSyncSuspend;
+    disable = mockAutoSyncDisable;
+    purgeServerWatchState = mockAutoSyncPurgeServerWatchState;
     dispose = vi.fn();
   },
 }));
@@ -274,25 +280,10 @@ vi.mock('@ui/tree', () => ({
   },
 }));
 
-// Panels
-vi.mock('@ui/webviews/panels/ServerFormPanel', () => ({
-  ServerFormPanel: class {
-    open = vi.fn();
-    dispose = vi.fn();
-  },
-}));
-vi.mock('@ui/webviews/panels/DeploymentFormPanel', () => ({
-  DeploymentFormPanel: class {
-    open = vi.fn();
-    dispose = vi.fn();
-  },
-}));
-
 // Commands
 vi.mock('@ui/commands', () => ({
   registerServerCommands: vi.fn(() => [{ dispose: vi.fn() }]),
   registerDeploymentCommands: vi.fn(() => [{ dispose: vi.fn() }]),
-  registerTemplateCommands: vi.fn(() => [{ dispose: vi.fn() }]),
 }));
 
 // SchemaValidator
@@ -456,7 +447,7 @@ describe('Extension Activation', () => {
 
     expect(mockLifecycleUnregister).toHaveBeenCalledWith('srv-1');
     expect(mockLogChannelDetach).toHaveBeenCalledWith('srv-1');
-    expect(mockAutoSyncSuspend).toHaveBeenCalledWith('srv-1');
+    expect(mockAutoSyncPurgeServerWatchState).toHaveBeenCalledWith('srv-1');
     expect(mockTreeProviderRequestRefresh).toHaveBeenCalled();
   });
 
@@ -486,6 +477,7 @@ describe('Extension Activation', () => {
 
     expect(mockLogChannelDetach).not.toHaveBeenCalled();
     expect(mockAutoSyncSuspend).toHaveBeenCalledWith('srv-1');
+    expect(mockAutoSyncDisable).toHaveBeenCalledWith('srv-1');
     expect(mockTreeProviderRequestRefresh).toHaveBeenCalled();
   });
 
@@ -510,6 +502,7 @@ describe('Extension Activation', () => {
     expect(mockLogChannelInstance?.showLogs).toHaveBeenCalledWith('srv-1', 'Test');
     // autosync should be enabled for running server
     expect(mockAutoSyncSuspend).not.toHaveBeenCalled();
+    expect(mockAutoSyncRebindWatchers).toHaveBeenCalledWith('srv-1', server);
   });
 
   /* ── Negative Path: config load failure ──────────────────────────────── */

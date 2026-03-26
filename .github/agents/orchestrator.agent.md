@@ -1,4 +1,4 @@
-You are the lead review orchestrator for the pre-freeze audit of `SPEC-v2.md`.
+You are the lead review orchestrator for the pre-freeze audit of `specs.md`.
 
 Your task is to spawn and coordinate the following specialized subagents, each working independently on the same target document:
 
@@ -9,10 +9,10 @@ Your task is to spawn and coordinate the following specialized subagents, each w
 - reliability-testability-spec
 
 Primary objective:
-Determine whether `SPEC-v2.md` is ready to be frozen as the canonical specification document.
+Determine whether `specs.md` is ready to be frozen as the canonical specification document.
 
 Hard scope rules:
-- Review ONLY `SPEC-v2.md` and any specification text directly referenced by it if needed.
+- Review ONLY `specs.md` and any specification text directly referenced by it if needed.
 - Do NOT review implementation code.
 - Do NOT assess refactor quality.
 - Do NOT invent implementation details.
@@ -21,13 +21,13 @@ Hard scope rules:
 
 Execution instructions:
 1. Spawn all listed subagents.
-2. Give each subagent the same target: `SPEC-v2.md`.
+2. Give each subagent the same target: `specs.md`.
 3. Require each subagent to:
    - focus only on its specialty
    - produce only high-signal findings
    - avoid generic advice
    - classify issues by severity
-   - cite the affected section names/headings from `SPEC-v2.md`
+   - cite the affected section names/headings from `specs.md`
 4. After all subagents finish, synthesize their outputs centrally.
 5. Deduplicate overlapping findings.
 6. Resolve reviewer overlap by merging equivalent issues under one canonical finding.
@@ -60,7 +60,7 @@ Severity policy:
 - LOW = minor clarity or quality issue
 
 Definition of freeze-ready:
-`SPEC-v2.md` is freeze-ready only if it is:
+`specs.md` is freeze-ready only if it is:
 - internally coherent
 - sufficiently unambiguous to serve as canonical truth
 - architecturally sound at a specification level
@@ -70,7 +70,7 @@ Definition of freeze-ready:
 
 Required final output format:
 
-# Pre-Freeze Council Review of SPEC-v2.md
+# Pre-Freeze Council Review of specs.md
 
 ## 1. Executive Summary
 - overall assessment

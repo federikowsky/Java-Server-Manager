@@ -95,6 +95,19 @@ function mockHookRunner() {
   };
 }
 
+function mockDeployService() {
+  return {
+    fullRedeploy: vi.fn(async () => ok(undefined)),
+    undeploy: vi.fn(async () => ok(undefined)),
+    redeployAll: vi.fn(async () => {}),
+    deployUndeployed: vi.fn(async () => {}),
+    runHealthChecksForServer: vi.fn(async () => {}),
+    sync: vi.fn(async () => ok(undefined)),
+    getDeploymentState: vi.fn(() => 'undeployed' as const),
+    getDeploymentHealth: vi.fn(),
+  };
+}
+
 function makeHook(event: HookConfig['event']): HookConfig {
   return {
     id: `hook-${event}`,
@@ -135,6 +148,7 @@ describe('ServerLifecycle', () => {
       debugAttacher: debugAttacher as never,
       logger: mockLogger(),
       hookRunner: hookRunner as never,
+      deployService: mockDeployService() as never,
     });
   });
 
@@ -185,6 +199,7 @@ describe('ServerLifecycle', () => {
         debugAttacher: debugAttacher as never,
         logger,
         getOutputSink: () => ({ append, appendLine, clear }),
+        deployService: mockDeployService() as never,
       });
 
       lifecycle.register('srv-1', makeServer(), queue as never);
@@ -228,8 +243,22 @@ describe('ServerLifecycle', () => {
 
       await executor({ kind: 'LifecycleStart', meta: { mode: 'run' } });
 
-      expect(hookRunner.runHooks).toHaveBeenNthCalledWith(1, 'srv-1', 'pre', 'lifecycle.start', config.hooks);
-      expect(hookRunner.runHooks).toHaveBeenNthCalledWith(2, 'srv-1', 'post', 'lifecycle.start', config.hooks);
+      const [preCall, postCall] = hookRunner.runHooks.mock.calls;
+      expect(preCall[0]).toEqual(expect.objectContaining({
+        phase: 'pre',
+        event: 'lifecycle.start',
+        hooks: config.hooks,
+        parent: expect.objectContaining({
+          serverId: 'srv-1',
+          kind: 'LifecycleStart',
+        }),
+      }));
+      expect(postCall[0]).toEqual(expect.objectContaining({
+        phase: 'post',
+        event: 'lifecycle.start',
+        hooks: config.hooks,
+      }));
+      expect(postCall[0].parent).toBe(preCall[0].parent);
     });
 
     it('uses startupMonitor when provided and skips readiness probing', async () => {
@@ -335,6 +364,42 @@ describe('ServerLifecycle', () => {
       expect(startupMonitor.dispose).toHaveBeenCalledOnce();
     });
 
+    it('cancels an active start operation instead of only clearing queued work', async () => {
+      const queue = mockQueue();
+      const runtime = lifecycle.register('srv-1', makeServer(), queue as never);
+      const pluginStart = vi.fn(async () => ok({
+        pid: 123,
+        httpUrl: 'http://127.0.0.1:8080',
+        hints: [],
+      }));
+
+      pluginRegistry.get.mockReturnValue({
+        start: pluginStart,
+        stop: vi.fn(),
+        getStatus: vi.fn(),
+        detect: vi.fn(),
+      });
+      portScanner.probe.mockResolvedValue(false);
+
+      const executor = queue.setExecutor.mock.calls[0][0] as (entry: { kind: string; meta?: Record<string, unknown> }) => Promise<void>;
+      const running = executor({ kind: 'LifecycleStart', meta: { mode: 'run' } });
+
+      await vi.waitFor(() => {
+        expect(runtime.state).toBe('starting');
+      });
+
+      lifecycle.cancel('srv-1');
+      await running;
+
+      expect(queue.clear).toHaveBeenCalledOnce();
+      expect(runtime.state).toBe('error');
+      expect(bus.emit).toHaveBeenCalledWith('OperationFailed', expect.objectContaining({
+        serverId: 'srv-1',
+        kind: 'LifecycleStart',
+        error: expect.objectContaining({ code: ErrorCode.Cancelled }),
+      }));
+    });
+
     it('runs only lifecycle.restart hooks for restart operations', async () => {
       const queue = mockQueue();
       const config = {
@@ -365,8 +430,22 @@ describe('ServerLifecycle', () => {
 
       await executor({ kind: 'LifecycleRestart', meta: { mode: 'run' } });
 
-      expect(hookRunner.runHooks).toHaveBeenNthCalledWith(1, 'srv-1', 'pre', 'lifecycle.restart', config.hooks);
-      expect(hookRunner.runHooks).toHaveBeenNthCalledWith(2, 'srv-1', 'post', 'lifecycle.restart', config.hooks);
+      const [preCall, postCall] = hookRunner.runHooks.mock.calls;
+      expect(preCall[0]).toEqual(expect.objectContaining({
+        phase: 'pre',
+        event: 'lifecycle.restart',
+        hooks: config.hooks,
+        parent: expect.objectContaining({
+          serverId: 'srv-1',
+          kind: 'LifecycleRestart',
+        }),
+      }));
+      expect(postCall[0]).toEqual(expect.objectContaining({
+        phase: 'post',
+        event: 'lifecycle.restart',
+        hooks: config.hooks,
+      }));
+      expect(postCall[0].parent).toBe(preCall[0].parent);
       expect(hookRunner.runHooks).toHaveBeenCalledTimes(2);
     });
   });
@@ -579,6 +658,7 @@ describe('ServerLifecycle', () => {
         debugAttacher: debugAttacher as never,
         logger: mockLogger(),
         trustGate: { isTrusted: () => false },
+        deployService: mockDeployService() as never,
       });
     });
 
@@ -616,6 +696,7 @@ describe('ServerLifecycle', () => {
         debugAttacher: debugAttacher as never,
         logger: mockLogger(),
         trustGate: { isTrusted: () => true },
+        deployService: mockDeployService() as never,
       });
       const queue = mockQueue();
       trustedLifecycle.register('srv-1', makeServer(), queue as never);

@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
+  import { applyTemplateToServerDraft, createServerDraft } from '@core/authoring';
+  import type { PluginConfig } from '@core/types';
   import { spaState, activeEntity, browseResult, lastCommandResult } from '../../../stores';
   import { postToHost } from '../../../bridge';
   import { WEBVIEW_PROTOCOL_VERSION } from '../../../../protocol';
@@ -38,20 +40,14 @@
   let vmArgDraft = $state('');
   let debugBind = $state('127.0.0.1');
   let selectedWorkspace = $state('');
-  let templateHooks = $state<any[]>([]);
-  let userHooks = $state<any[]>([]);
-  let templatePluginConfig = $state<Record<string, unknown>>({});
+  let hooks = $state<any[]>([]);
+  let draftPluginConfig = $state<PluginConfig | undefined>(undefined);
 
   let pluginMeta = $derived(state.capabilities[selectedType] || {});
   let runtimeLabel = $derived(pluginMeta.runtimeHomeLabel || 'Server Home');
   let runtimeHelp = $derived(pluginMeta.runtimeHomeHelp || 'Absolute path to the server installation directory.');
   let defaultName = $derived(pluginMeta.defaultName || `My ${pluginMeta.displayName || 'Server'}`);
   let pluginDisplayName = $derived(pluginMeta.displayName || selectedType);
-  let selectedTemplateName = $derived(
-    selectedTemplateId
-      ? availableTemplates.find((template: any) => template.template?.id === selectedTemplateId)?.template?.name || ''
-      : ''
-  );
   let selectedWorkspaceName = $derived(
     state.workspaceFolders.find(folder => folder.uri === selectedWorkspace)?.name || 'No workspace selected'
   );
@@ -78,50 +74,80 @@
     return JSON.parse(JSON.stringify(value)) as T;
   }
 
-  function flattenTemplatePluginConfig(pluginConfig: any): Record<string, unknown> {
-    if (!pluginConfig?.ssl) {
-      return {};
-    }
-
-    const ssl = pluginConfig.ssl;
+  function creationDefaults() {
     return {
-      'pluginConfig.ssl.enabled': ssl.enabled === true,
-      'pluginConfig.ssl.port': ssl.port,
-      'pluginConfig.ssl.keystorePath': ssl.keystorePath,
-      'pluginConfig.ssl.keystorePassword': ssl.keystorePassword,
-      'pluginConfig.ssl.keystoreType': ssl.keystoreType,
-      'pluginConfig.ssl.keyAlias': ssl.keyAlias,
-      'pluginConfig.ssl.clientAuth': ssl.clientAuth === true,
-      'pluginConfig.ssl.truststorePath': ssl.truststorePath,
-      'pluginConfig.ssl.truststorePassword': ssl.truststorePassword,
-      'pluginConfig.ssl.truststoreType': ssl.truststoreType,
+      defaultJavaHome: state.settings?.defaultJavaHome ?? '',
+      defaultHttpPort: state.settings?.defaultHttpPort ?? 8080,
+      defaultDebugPort: state.settings?.defaultDebugPort ?? 5005,
     };
   }
 
-  function clearTemplateDefaults(): void {
-    templateHooks = [];
-    templatePluginConfig = {};
+  function applyDraft(draft: {
+    name: string;
+    type: string;
+    runtimeHomePath: string;
+    javaHome: string;
+    host: string;
+    httpPort: number;
+    debugPort?: number;
+    debugBind: string;
+    vmArgs: string[];
+    hooks: unknown[];
+    pluginConfig?: PluginConfig;
+  }): void {
+    serverName = draft.name;
+    selectedType = draft.type;
+    runtimeHome = draft.runtimeHomePath;
+    javaHome = draft.javaHome;
+    host = draft.host;
+    httpPort = draft.httpPort;
+    debugPort = draft.debugPort;
+    debugBind = draft.debugBind;
+    vmArgs = [...draft.vmArgs];
+    hooks = cloneValue(draft.hooks);
+    draftPluginConfig = cloneValue(draft.pluginConfig);
   }
 
-  function applyTemplate(nextTemplateId: string) {
+  function resetToScratchDraft(): void {
+    applyDraft(createServerDraft({
+      defaults: creationDefaults(),
+      fallbackType: selectedType as any,
+      overrides: {
+        name: serverName.trim(),
+      },
+    }));
+  }
+
+  function buildDraftOverrides() {
+    return {
+      name: serverName.trim(),
+      type: selectedType,
+      runtimeHomePath: runtimeHome.trim(),
+      javaHome: javaHome.trim(),
+      host: host.trim(),
+      httpPort,
+      debugPort,
+      debugBind: debugBind.trim(),
+      vmArgs: [...vmArgs],
+      hooks: cloneValue(hooks),
+      pluginConfig: cloneValue(draftPluginConfig),
+    };
+  }
+
+  function applyTemplate(nextTemplateId: string): void {
     const tpl = availableTemplates.find((template: any) => template.template?.id === nextTemplateId);
     if (!tpl) {
-      clearTemplateDefaults();
+      resetToScratchDraft();
       return;
     }
 
-    const defaults = tpl.template?.serverDefaults || {};
-    if (defaults.runtime?.homePath) runtimeHome = defaults.runtime.homePath;
-    if (defaults.javaHome) javaHome = defaults.javaHome;
-    if (defaults.host) host = defaults.host;
-    if (defaults.ports?.http) httpPort = defaults.ports.http;
-    if (defaults.ports?.debug !== undefined) debugPort = defaults.ports.debug;
-    if (defaults.run?.vmArgs) vmArgs = [...defaults.run.vmArgs];
-    if (defaults.debug?.bind) debugBind = defaults.debug.bind;
-    if (tpl.template?.pluginType) selectedType = tpl.template.pluginType;
-
-    templateHooks = Array.isArray(defaults.hooks) ? cloneValue(defaults.hooks) : [];
-    templatePluginConfig = flattenTemplatePluginConfig(defaults.pluginConfig);
+    applyDraft(applyTemplateToServerDraft({
+      template: tpl.template,
+      defaults: creationDefaults(),
+      overrides: {
+        name: serverName.trim(),
+      },
+    }));
   }
 
   const unsubscribeBrowse = browseResult.subscribe(result => {
@@ -180,11 +206,19 @@
     }
 
     selectedWorkspace = state.workspaceFolders[0]?.uri || '';
-    javaHome = state.settings?.defaultJavaHome ?? '';
-    httpPort = state.settings?.defaultHttpPort ?? 8080;
-    debugPort = state.settings?.defaultDebugPort ?? 5005;
+    applyDraft(createServerDraft({
+      defaults: creationDefaults(),
+      fallbackType: availableTypes[0]?.type || 'tomcat',
+      overrides: {
+        name: serverName.trim(),
+      },
+    }));
 
     if (templateId) {
+      const hasTemplate = availableTemplates.some((template: any) => template.template?.id === templateId);
+      if (!hasTemplate) {
+        return;
+      }
       creationMode = 'template';
       selectedTemplateId = templateId;
       applyTemplate(templateId);
@@ -238,7 +272,7 @@
     creationMode = mode;
     if (mode === 'scratch') {
       selectedTemplateId = '';
-      clearTemplateDefaults();
+      resetToScratchDraft();
       errors = { ...errors, selectedTemplateId: '' };
       return;
     }
@@ -336,22 +370,11 @@
       return;
     }
 
-    const formData: Record<string, unknown> = {
-      name: serverName.trim(),
-      type: selectedType,
-      'runtime.homePath': runtimeHome.trim(),
-      javaHome: javaHome.trim(),
-      host: host.trim(),
-      'ports.http': httpPort,
-      'debug.bind': debugBind,
-      'run.vmArgs': [...vmArgs],
-      hooks: [...cloneValue(templateHooks), ...cloneValue(userHooks)],
-      ...templatePluginConfig,
-    };
-
-    if (debugPort !== undefined) {
-      formData['ports.debug'] = debugPort;
-    }
+    const draft = createServerDraft({
+      defaults: creationDefaults(),
+      fallbackType: selectedType as any,
+      overrides: buildDraftOverrides(),
+    });
 
     submitState = 'submitting';
     submitError = '';
@@ -363,7 +386,7 @@
       command: 'executeCommand',
       id: 'jsm.server.add',
       requestId: pendingRequestId,
-      args: [{ formData, workspaceFolderUri: selectedWorkspace }],
+      args: [{ draft, workspaceFolderUri: selectedWorkspace }],
     });
   }
 </script>
@@ -684,8 +707,8 @@
           <label class="field-label">Hooks</label>
           <HookList
             def={{ name: 'hooks', label: 'Hooks', type: 'hooks', hookOptions: { taskOptions: state.hookTaskOptions || [] } }}
-            value={userHooks}
-            onChange={(v) => userHooks = v}
+            value={hooks}
+            onChange={(v) => hooks = v}
             id="server-hooks"
           />
           <p class="field-help">Configure hooks as terminal commands or VS Code tasks for lifecycle events.</p>

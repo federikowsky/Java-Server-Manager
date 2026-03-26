@@ -1,7 +1,9 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import { applyTemplateToServerDraft, createServerDraft } from '@core/authoring';
-  import type { PluginConfig } from '@core/types';
+  import type { HookConfig, PluginConfig, ServerType } from '@core/types';
+  import { capabilityUiSlice } from '../../../capabilityUi';
+  import { findServerTemplateById, hasServerTemplateId } from '../../../templateLookup';
   import { get } from 'svelte/store';
   import { spaState, activeEntity, browseResult, lastCommandResult, hooksEditorSession } from '../../../stores';
   import { postToHost } from '../../../bridge';
@@ -23,9 +25,9 @@
     Object.keys(state.capabilities).length > 0
       ? Object.keys(state.capabilities).map(type => ({
         type,
-        displayName: state.capabilities[type]?.displayName || type,
+        displayName: capabilityUiSlice(state.capabilities, type).displayName || type,
       }))
-      : [{ type: 'tomcat', displayName: 'Tomcat' }]
+      : [{ type: 'tomcat' as ServerType, displayName: 'Tomcat' }]
   );
 
   let creationMode = $state<'scratch' | 'template'>('scratch');
@@ -40,7 +42,7 @@
     }
   });
 
-  let selectedType = $state('tomcat');
+  let selectedType = $state<ServerType>('tomcat');
   let serverName = $state('');
   let runtimeHome = $state('');
   let javaHome = $state('');
@@ -51,10 +53,10 @@
   let vmArgDraft = $state('');
   let debugBind = $state('127.0.0.1');
   let selectedWorkspace = $state('');
-  let hooks = $state<any[]>([]);
+  let hooks = $state<HookConfig[]>([]);
   let draftPluginConfig = $state<PluginConfig | undefined>(undefined);
 
-  let pluginMeta = $derived(state.capabilities[selectedType] || {});
+  let pluginMeta = $derived(capabilityUiSlice(state.capabilities, selectedType));
   let runtimeLabel = $derived(pluginMeta.runtimeHomeLabel || 'Server Home');
   let runtimeHelp = $derived(pluginMeta.runtimeHomeHelp || 'Absolute path to the server installation directory.');
   let defaultName = $derived(pluginMeta.defaultName || `My ${pluginMeta.displayName || 'Server'}`);
@@ -124,7 +126,7 @@
   function resetToScratchDraft(): void {
     applyDraft(createServerDraft({
       defaults: creationDefaults(),
-      fallbackType: selectedType as any,
+      fallbackType: selectedType,
       overrides: {
         name: serverName.trim(),
       },
@@ -148,14 +150,14 @@
   }
 
   function applyTemplate(nextTemplateId: string): void {
-    const tpl = availableTemplates.find((template: any) => template.template?.id === nextTemplateId);
-    if (!tpl) {
+    const template = findServerTemplateById(availableTemplates, nextTemplateId);
+    if (!template) {
       resetToScratchDraft();
       return;
     }
 
     applyDraft(applyTemplateToServerDraft({
-      template: tpl.template,
+      template,
       defaults: creationDefaults(),
       overrides: {
         name: serverName.trim(),
@@ -211,7 +213,7 @@
 
   $effect(() => {
     if (!availableTypes.some(type => type.type === selectedType)) {
-      selectedType = availableTypes[0]?.type || 'tomcat';
+      selectedType = (availableTypes[0]?.type as ServerType) || 'tomcat';
     }
   });
 
@@ -229,14 +231,14 @@
     selectedWorkspace = state.workspaceFolders[0]?.uri || '';
     applyDraft(createServerDraft({
       defaults: creationDefaults(),
-      fallbackType: availableTypes[0]?.type || 'tomcat',
+      fallbackType: (availableTypes[0]?.type as ServerType) || 'tomcat',
       overrides: {
         name: serverName.trim(),
       },
     }));
 
     if (templateId) {
-      const hasTemplate = availableTemplates.some((template: any) => template.template?.id === templateId);
+      const hasTemplate = hasServerTemplateId(availableTemplates, templateId);
       if (!hasTemplate) {
         return;
       }
@@ -294,7 +296,7 @@
       return;
     }
 
-    if (templateId && availableTemplates.some((template: any) => template.template?.id === templateId)) {
+    if (templateId && hasServerTemplateId(availableTemplates, templateId)) {
       selectedTemplateId = templateId;
       applyTemplate(templateId);
     }
@@ -410,7 +412,7 @@
     try {
       const draft = createServerDraft({
         defaults: creationDefaults(),
-        fallbackType: selectedType as any,
+        fallbackType: selectedType,
         overrides: buildDraftOverrides(),
       });
 
@@ -507,7 +509,7 @@
             <ModeSelector
               ariaLabel="Server type"
               value={selectedType}
-              onChange={(v) => (selectedType = v)}
+              onChange={(v) => (selectedType = v as ServerType)}
               options={availableTypes.map(t => ({ value: t.type, label: t.displayName }))}
             />
           </div>

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import { formDataToDeploymentDraft } from '@core/authoring';
+  import type { ServerConfig } from '@core/types';
   import { spaState, activeEntity, browseResult, lastCommandResult } from '../../../stores';
   import { postToHost } from '../../../bridge';
   import { WEBVIEW_PROTOCOL_VERSION } from '../../../../protocol';
@@ -28,10 +29,10 @@
   let state = $state($spaState);
   const unsubscribeSpaState = spaState.subscribe(s => { state = s; });
 
-  let serverRecord = $derived(state.servers.find(s => s.config.id === serverId));
-  let config = $derived(serverRecord?.config);
+  let serverRecord = $derived(state.servers.find(s => (s.config as ServerConfig).id === serverId));
+  let config = $derived(serverRecord ? (serverRecord.config as ServerConfig) : undefined);
   let existingDeployment = $derived(
-    deploymentId ? config?.deployments?.find((d: any) => d.id === deploymentId) : undefined
+    deploymentId ? config?.deployments?.find(d => d.id === deploymentId) : undefined
   );
 
   let formType = $state<'exploded' | 'war'>('exploded');

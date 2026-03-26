@@ -1,4 +1,5 @@
 <script lang="ts">
+  import type { DeploymentConfig, ServerConfig } from '@core/types';
   import { spaState, activeEntity } from '../../stores';
   import { postToHost } from '../../bridge';
   import { WEBVIEW_PROTOCOL_VERSION } from '../../../protocol';
@@ -12,8 +13,8 @@
     state = s;
   });
 
-  let serverRecord = $derived(state.servers.find(s => s.config.id === serverId));
-  let config = $derived(serverRecord?.config);
+  let serverRecord = $derived(state.servers.find(s => (s.config as ServerConfig).id === serverId));
+  let config = $derived(serverRecord ? (serverRecord.config as ServerConfig) : undefined);
   let deployments = $derived(config?.deployments || []);
 
   let depStates = $derived(serverRecord ? (state.deploymentStates?.[serverRecord.serverKey] || {}) : {});
@@ -38,7 +39,7 @@
     }
   }
 
-  function handleAction(cmd: string, deployment: any) {
+  function handleAction(cmd: string, deployment: DeploymentConfig) {
     const workspaceFolderUri = serverRecord?.workspaceFolderUri;
     const serverKey = serverRecord?.serverKey ?? (workspaceFolderUri ? `${workspaceFolderUri}::${serverId}` : serverId);
     postToHost({

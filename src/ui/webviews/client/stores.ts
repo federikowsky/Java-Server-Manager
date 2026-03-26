@@ -5,6 +5,9 @@
 import { writable } from 'svelte/store';
 import type { DashboardNavigationTarget, FormSchema, SpaServerRecord, SpaSettings } from '../protocol';
 
+/** Mirrors `syncState` payload in protocol (host → webview). */
+export type SpaTemplateRow = { template: unknown; scope: 'global' | 'workspace' };
+
 /** The form schema sent by the host on init. */
 export const schema = writable<FormSchema | null>(null);
 
@@ -34,7 +37,6 @@ export const globalError = writable<string>('');
 
 // ── SPA Mode Stores ─────────────────────────────────────────────────────────
 
-export type EntityType = DashboardNavigationTarget['type'];
 export type ActiveEntity = DashboardNavigationTarget;
 
 export const activeEntity = writable<ActiveEntity>({ type: 'welcome' });
@@ -42,10 +44,10 @@ export const activeEntity = writable<ActiveEntity>({ type: 'welcome' });
 export const spaState = writable<{
   initialized: boolean;
   servers: SpaServerRecord[];
-  runtimeStates: Record<string, any>;
+  runtimeStates: Record<string, unknown>;
   deploymentStates: Record<string, Record<string, string>>; // serverKey -> deploymentId -> state
-  templates: Array<{ template: any; scope: 'global' | 'workspace' }>;
-  capabilities: Record<string, any>;
+  templates: SpaTemplateRow[];
+  capabilities: Record<string, unknown>;
   workspaceFolders: Array<{ uri: string; name: string }>;
   currentFormSchema?: import('../protocol').FormSchema;
   currentFormId?: string;

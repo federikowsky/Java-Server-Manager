@@ -1,6 +1,6 @@
 <script lang="ts">
   import { get } from 'svelte/store';
-  import type { FormFieldDef } from '../../protocol';
+  import { WEBVIEW_PROTOCOL_VERSION, type FormFieldDef } from '../../protocol';
   import { formData, fieldErrors, formId, activeEntity, spaState, hooksEditorSession } from '../stores';
   import { sendValidateField, sendBrowse, postToHost } from '../bridge';
   import TextInput from './inputs/TextInput.svelte';
@@ -53,7 +53,7 @@
 
   function handleActionClick(actionId: string): void {
     postToHost({
-      v: 1, // WEBVIEW_PROTOCOL_VERSION
+      v: WEBVIEW_PROTOCOL_VERSION,
       command: 'invokeFieldAction',
       field: def.name,
       actionId,

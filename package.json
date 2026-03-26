@@ -155,6 +155,11 @@
         "icon": "$(output)"
       },
       {
+        "command": "jsm.deployment.revealSource",
+        "title": "Reveal Deployment Source",
+        "icon": "$(folder-opened)"
+      },
+      {
         "command": "jsm.server.attachDebug",
         "title": "Attach Debugger",
         "icon": "$(debug-alt)"

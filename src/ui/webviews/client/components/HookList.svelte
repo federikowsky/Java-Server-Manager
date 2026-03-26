@@ -203,7 +203,7 @@
             <code class="hook-spec-cell hook-spec-cmd">{getCommandCell(hook)}</code>
             <div class="hook-spec-actions">
               <button type="button" class="hook-text-action" onclick={() => toggleEdit(index)}>
-                {editingIndex === index ? 'Collapse' : 'Edit'}
+                Edit
               </button>
               <span class="hook-action-sep" aria-hidden="true">|</span>
               <button type="button" class="hook-text-action hook-text-action-danger" onclick={() => removeHook(index)}>

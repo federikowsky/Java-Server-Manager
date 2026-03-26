@@ -4,7 +4,6 @@
   import BackControl from '../ds/BackControl.svelte';
   import SectionBlock from '../ds/SectionBlock.svelte';
   import DetailRows from '../ds/DetailRows.svelte';
-  import ContextTag from '../ds/ContextTag.svelte';
 
   const { templateId }: { templateId: string } = $props();
 
@@ -29,11 +28,19 @@
     activeEntity.set({ type: 'edit-template', id: templateId });
   }
 
+  let scopeDisplay = $derived(
+    tpl?.scope === 'global'
+      ? 'Global'
+      : tpl?.scope === 'workspace'
+        ? 'Workspace'
+        : String(tpl?.scope ?? ''),
+  );
+
   let detailRows = $derived(
     t
       ? [
           { label: 'Name', value: String(t.name ?? '') },
-          { label: 'Scope', value: String(tpl?.scope ?? '') },
+          { label: 'Scope', value: scopeDisplay },
           { label: 'Server Type', value: String(t.pluginType ?? '') },
           { label: 'Description', value: String(t.description ?? '—') },
         ]
@@ -60,11 +67,8 @@
     <header class="tpl-head">
       <h1 class="jsm-type-page-title">{String(t.name ?? '')}</h1>
       <p class="jsm-type-meta">
-        {tpl.scope} template · {String(t.pluginType ?? '')}
+        {scopeDisplay} template · {String(t.pluginType ?? '')}
       </p>
-      <div class="tpl-tags">
-        <ContextTag text={String(t.pluginType ?? '').toUpperCase()} />
-      </div>
     </header>
 
     <SectionBlock title="Details">
@@ -101,8 +105,5 @@
   }
   .tpl-head {
     margin-bottom: var(--jsm-space-sm);
-  }
-  .tpl-tags {
-    margin-top: var(--jsm-space-sm);
   }
 </style>

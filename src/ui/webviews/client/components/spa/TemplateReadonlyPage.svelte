@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
+  import type { HookConfig } from '@core/types';
   import { activeEntity, spaState } from '../../stores';
   import BackControl from '../ds/BackControl.svelte';
   import SectionBlock from '../ds/SectionBlock.svelte';
@@ -54,6 +55,34 @@
     { label: 'HTTP Port', value: String(ports.http ?? '—') },
     { label: 'Debug Port', value: String(ports.debug ?? '—') },
   ]);
+
+  let templateHooks = $derived.by((): HookConfig[] => {
+    const raw = defaults.hooks;
+    if (!Array.isArray(raw) || raw.length === 0) {
+      return [];
+    }
+    return raw as HookConfig[];
+  });
+
+  function hookDetailRows(h: HookConfig): { label: string; value: string }[] {
+    const typeLabel = h.kind === 'vscodeTask' ? 'VS Code task' : 'Shell command';
+    const rows: { label: string; value: string }[] = [
+      { label: 'Event', value: String(h.event ?? '—') },
+      { label: 'Phase', value: String(h.phase ?? '—') },
+      { label: 'Type', value: typeLabel },
+      { label: 'Enabled', value: h.enabled !== false ? 'Yes' : 'No' },
+    ];
+    if (h.kind === 'vscodeTask') {
+      rows.push({ label: 'Task', value: (h.vscodeTask?.taskName ?? '').trim() || '—' });
+    } else {
+      rows.push({ label: 'Command', value: (h.command?.line ?? '').trim() || '—' });
+    }
+    rows.push({ label: 'Timeout', value: `${Number.isFinite(h.timeoutMs) ? h.timeoutMs : 60_000} ms` });
+    if (h.continueOnError === true) {
+      rows.push({ label: 'On error', value: 'Continue' });
+    }
+    return rows;
+  }
 </script>
 
 {#if tpl && t}
@@ -82,6 +111,22 @@
     <SectionBlock title="Provisioning Defaults">
       <DetailRows rows={provisionRows} />
     </SectionBlock>
+
+    {#if templateHooks.length > 0}
+      <SectionBlock title="Hooks">
+        <p class="hooks-lead jsm-type-meta">
+          {templateHooks.length} hook{templateHooks.length === 1 ? '' : 's'} in provisioning defaults
+        </p>
+        <div class="tpl-hooks-list">
+          {#each templateHooks as hook, idx (hook.id ? `${hook.id}-${idx}` : `hook-${idx}`)}
+            <div class="tpl-hook-entry">
+              <p class="tpl-hook-title">{String(hook.id || `Hook ${idx + 1}`)}</p>
+              <DetailRows rows={hookDetailRows(hook)} />
+            </div>
+          {/each}
+        </div>
+      </SectionBlock>
+    {/if}
   </div>
 {:else}
   <div class="tpl-readonly jsm-page-padding">
@@ -109,5 +154,32 @@
   }
   .tpl-head {
     margin-bottom: var(--jsm-space-sm);
+  }
+
+  .hooks-lead {
+    margin: 0 0 var(--jsm-space-md);
+  }
+
+  .tpl-hooks-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--jsm-space-lg);
+  }
+
+  .tpl-hook-entry {
+    padding-top: var(--jsm-space-md);
+    border-top: 1px solid var(--jsm-color-border-secondary);
+  }
+
+  .tpl-hook-entry:first-child {
+    padding-top: 0;
+    border-top: none;
+  }
+
+  .tpl-hook-title {
+    margin: 0 0 var(--jsm-space-sm);
+    font-size: var(--jsm-font-size-sm);
+    font-weight: var(--jsm-font-weight-semibold);
+    color: var(--jsm-color-fg);
   }
 </style>

@@ -475,7 +475,8 @@
   }
 
   .overview-sections {
-    max-width: 52rem;
+    width: 100%;
+    max-width: none;
   }
   .note {
     color: var(--vscode-descriptionForeground);

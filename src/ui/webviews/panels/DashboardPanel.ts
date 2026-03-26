@@ -274,18 +274,29 @@ export class DashboardPanel implements vscode.Disposable {
         break;
       }
 
-      case 'submit':
+      case 'submit': {
         // Store last submitted data so we can persist it when the host handler runs.
         this.lastSubmittedFormData = msg.data;
 
-        if (this.currentFormId === 'jsm.serverForm') {
-          await this.handleServerFormSubmit();
-        } else if (this.currentFormId === 'jsm.templateForm') {
-          await this.handleTemplateFormSubmit();
-        } else {
-          this.postError('Submit is not supported in the current view.');
+        try {
+          if (this.currentFormId === 'jsm.serverForm') {
+            await this.handleServerFormSubmit();
+          } else if (this.currentFormId === 'jsm.templateForm') {
+            await this.handleTemplateFormSubmit();
+          } else {
+            this.postError('Submit is not supported in the current view.');
+          }
+        } catch (e) {
+          this.deps.logger.error('[DashboardPanel] Form submit failed', e);
+          this.postError(`Save failed: ${String(e)}`);
+        } finally {
+          this.postMessage({
+            v: WEBVIEW_PROTOCOL_VERSION,
+            command: 'submitFinished',
+          });
         }
         break;
+      }
 
       case 'validate':
         // Basic pass-through validation; forms can opt-in to more complex checks if needed.
@@ -659,18 +670,23 @@ export class DashboardPanel implements vscode.Disposable {
   private syncState(): void {
     if (!this.panel) return;
 
-    const payload = buildDashboardSyncStatePayload(this.deps);
+    try {
+      const payload = buildDashboardSyncStatePayload(this.deps);
 
-    this.panelLog.debug('syncState.pushed', {
-      serverCount: payload.servers.length,
-      serverIds: payload.servers.map(s => (s.config as { id?: string }).id),
-    });
+      this.panelLog.debug('syncState.pushed', {
+        serverCount: payload.servers.length,
+        serverIds: payload.servers.map(s => (s.config as { id?: string }).id),
+      });
 
-    this.postMessage({
-      v: WEBVIEW_PROTOCOL_VERSION,
-      command: 'syncState',
-      ...payload,
-    });
+      this.postMessage({
+        v: WEBVIEW_PROTOCOL_VERSION,
+        command: 'syncState',
+        ...payload,
+      });
+    } catch (e) {
+      this.deps.logger.error('[DashboardPanel] syncState failed', e);
+      this.postError(`Failed to refresh dashboard state: ${String(e)}`);
+    }
   }
 
   private normalizeCommandResult(result: unknown): CommandExecutionResult {

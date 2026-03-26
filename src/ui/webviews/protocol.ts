@@ -152,4 +152,6 @@ export type HostToWebview =
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'configChanged' }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'workspaceFoldersResult'; folders: Array<{ uri: string; name: string }> }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'navigate'; target: DashboardNavigationTarget }
-  | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'commandResult'; requestId: string; ok: boolean; message?: string; data?: Record<string, unknown> };
+  | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'commandResult'; requestId: string; ok: boolean; message?: string; data?: Record<string, unknown> }
+  /** Host ack after form submit handler completes; clears webview `submitting` even if syncState fails to post. */
+  | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'submitFinished' };

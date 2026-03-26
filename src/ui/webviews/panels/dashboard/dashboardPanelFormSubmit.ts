@@ -5,6 +5,7 @@ import {
   validateServerForm,
 } from '@core/authoring';
 import { v4 as uuid } from 'uuid';
+import type { ServerTemplate } from '@core/types';
 import type { HostToWebview } from '../../protocol';
 import { WEBVIEW_PROTOCOL_VERSION } from '../../protocol';
 import type { DashboardPanelDeps } from './dashboardPanelTypes';
@@ -135,7 +136,16 @@ export async function submitTemplateConfigForm(params: {
     draft: templateDraft,
   });
 
-  const result = await deps.templateService.save(template, templateDraft.scope);
+  // Strip any non-plain values (e.g. accidental proxies) before persistence / webview sync serialization.
+  let toSave: ServerTemplate;
+  try {
+    toSave = JSON.parse(JSON.stringify(template)) as ServerTemplate;
+  } catch (e) {
+    postError(`Template data could not be serialized: ${String(e)}`);
+    return;
+  }
+
+  const result = await deps.templateService.save(toSave, templateDraft.scope);
   onClearLastSubmitted();
 
   if (!result.ok) {

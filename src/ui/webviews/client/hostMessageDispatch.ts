@@ -153,6 +153,9 @@ export function handleHostToWebviewMessage(msg: HostToWebview): void {
       hostError.set(msg.message);
       submitting.set(false);
       break;
+    case 'submitFinished':
+      submitting.set(false);
+      break;
     default:
       break;
   }

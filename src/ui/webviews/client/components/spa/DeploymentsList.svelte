@@ -5,6 +5,8 @@
   import { WEBVIEW_PROTOCOL_VERSION } from '../../../protocol';
   import Icon from '../Icon.svelte';
   import SectionBlock from '../ds/SectionBlock.svelte';
+  import DsOverflowMenu from '../ds/DsOverflowMenu.svelte';
+  import type { DsOverflowMenuItem } from '../ds/DsOverflowMenu.svelte';
 
   const { serverId }: { serverId: string } = $props();
 
@@ -66,6 +68,44 @@
   function handleEditDeployment(deploymentId: string) {
     activeEntity.set({ type: 'deployment', id: deploymentId, serverId, mode: 'edit' });
   }
+
+  function overflowItems(dep: DeploymentConfig): DsOverflowMenuItem[] {
+    const deploying = isDeploying(dep.id);
+    const items: DsOverflowMenuItem[] = [];
+    if (deploying) {
+      items.push({
+        id: 'redeploy',
+        label: 'Redeploy',
+        icon: 'refresh',
+        disabled: true,
+        onSelect: () => {},
+      });
+    }
+    items.push(
+      {
+        id: 'reveal',
+        label: 'Reveal source',
+        icon: 'download',
+        disabled: deploying,
+        onSelect: () => handleAction('jsm.deployment.revealSource', dep),
+      },
+      {
+        id: 'logs',
+        label: 'Open logs',
+        icon: 'terminal',
+        onSelect: () => handleAction('jsm.deployment.openLogs', dep),
+      },
+      {
+        id: 'remove',
+        label: 'Remove deployment',
+        icon: 'trash',
+        danger: true,
+        disabled: deploying,
+        onSelect: () => handleAction('jsm.deployment.remove', dep),
+      },
+    );
+    return items;
+  }
 </script>
 
 <div class="deployments-view jsm-stack-lg">
@@ -114,52 +154,27 @@
               <td class="status-cell">{formatStatus(depStates[dep.id])}</td>
               <td class="actions-cell">
                 {#if isDeploying(dep.id)}
-                  <span class="deploying-indicator" title="Deployment in progress">
+                  <span class="deploying-indicator" title="Deployment in progress" aria-live="polite">
                     <Icon name="loading" size={14} />
                   </span>
-                {:else}
-                  <!-- Spec §17.3 / §42.4: ↻ ↓ Edit >_ 🗑 -->
-                  <button
-                    type="button"
-                    class="act-icon"
-                    aria-label="Redeploy"
-                    title="Redeploy"
-                    onclick={() => handleAction('jsm.deployment.redeploy', dep)}
-                  >
-                    <Icon name="refresh" size={14} />
-                  </button>
-                  <button
-                    type="button"
-                    class="act-icon"
-                    aria-label="Reveal source in explorer"
-                    title="Reveal source"
-                    onclick={() => handleAction('jsm.deployment.revealSource', dep)}
-                  >
-                    <Icon name="download" size={14} />
-                  </button>
                 {/if}
                 <button type="button" class="act-text" onclick={() => handleEditDeployment(dep.id)}>
                   Edit
                 </button>
-                <button
-                  type="button"
-                  class="act-icon"
-                  aria-label="Logs"
-                  title="Logs"
-                  onclick={() => handleAction('jsm.deployment.openLogs', dep)}
-                >
-                  <Icon name="terminal" size={14} />
-                </button>
-                <button
-                  type="button"
-                  class="act-icon danger"
-                  aria-label="Remove"
-                  title="Remove"
-                  onclick={() => handleAction('jsm.deployment.remove', dep)}
-                  disabled={isDeploying(dep.id)}
-                >
-                  <Icon name="trash" size={14} />
-                </button>
+                {#if !isDeploying(dep.id)}
+                  <button
+                    type="button"
+                    class="act-text"
+                    title="Redeploy / sync artifact"
+                    onclick={() => handleAction('jsm.deployment.redeploy', dep)}
+                  >
+                    Redeploy
+                  </button>
+                {/if}
+                <DsOverflowMenu
+                  ariaLabel="More deployment actions"
+                  items={overflowItems(dep)}
+                />
               </td>
             </tr>
           {/each}
@@ -266,7 +281,7 @@
   .col-actions {
     width: 1%;
     white-space: nowrap;
-    min-width: 11.5rem;
+    min-width: 7.5rem;
   }
 
   .cell-name {
@@ -323,38 +338,34 @@
     flex-wrap: nowrap;
     align-items: center;
     justify-content: flex-end;
-    gap: var(--jsm-space-2xs);
+    gap: var(--jsm-space-xs);
+    position: relative;
+    overflow: visible;
   }
 
-  .act-icon,
   .act-text {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     flex: 0 0 auto;
-    gap: var(--jsm-space-2xs);
-    padding: var(--jsm-space-2xs) var(--jsm-space-xs);
+    padding: var(--jsm-space-2xs) var(--jsm-space-sm);
     border: none;
     border-radius: var(--jsm-radius-xs);
     background: transparent;
     color: var(--jsm-color-fg);
     font-family: var(--jsm-font-family);
     font-size: var(--jsm-font-size-sm);
+    font-weight: var(--jsm-font-weight-medium);
     cursor: pointer;
   }
 
-  .act-icon:hover,
   .act-text:hover {
     background: var(--jsm-color-bg-hover);
   }
 
-  .act-icon.danger:hover {
-    color: var(--jsm-color-error);
-  }
-
-  .act-icon:disabled {
-    opacity: 0.35;
-    cursor: not-allowed;
+  .act-text:focus-visible {
+    outline: 2px solid var(--vscode-focusBorder);
+    outline-offset: 2px;
   }
 
   .deploying-indicator {

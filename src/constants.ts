@@ -7,6 +7,7 @@ export const WORKSPACE_TEMPLATES_FILENAME = 'jsm.templates.json';
 
 // ── Channel Names ───────────────────────────────────────────────────────────
 export const MAIN_OUTPUT_CHANNEL = 'JSM';
+
 export const SERVER_CHANNEL_PREFIX = 'JSM: ';
 
 // ── Tree View ───────────────────────────────────────────────────────────────

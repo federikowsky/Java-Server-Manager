@@ -89,6 +89,12 @@
   --jsm-status-error: var(--vscode-testing-iconFailed);
   --jsm-status-stopped: var(--vscode-testing-iconUnset);
 
+  /* ── Shell (top bar + context headers) ─────────────────────────────────── */
+  --jsm-topbar-bg: var(--vscode-sideBar-background);
+  --jsm-topbar-border: var(--vscode-panel-border);
+  --jsm-context-header-bg: color-mix(in srgb, var(--vscode-sideBar-background) 88%, var(--vscode-editor-background));
+  --jsm-context-header-border: var(--vscode-panel-border);
+
   /* ── Component: Sidebar ────────────────────────────────────────────────── */
   --jsm-sidebar-width: 260px;
   --jsm-sidebar-bg: var(--vscode-sideBar-background);

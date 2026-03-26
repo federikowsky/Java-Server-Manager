@@ -2,6 +2,7 @@ export {
   ServerTreeViewProvider,
   ServerNode,
   DeploymentNode,
+  WorkspaceNode,
   registerTreeView,
 } from './ServerTreeViewProvider';
 export type { TreeDataSource } from './ServerTreeViewProvider';

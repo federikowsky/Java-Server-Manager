@@ -54,6 +54,10 @@ export const spaState = writable<{
   currentFormTargetScope?: 'global' | 'workspace';
   settings?: SpaSettings;
   hookTaskOptions?: Array<{ value: string; label: string }>;
+  /** Primary shell tab (tree = inventory; SPA = detail / templates / settings). */
+  globalTab: 'home' | 'templates' | 'settings';
+  /** From host syncState; false limits side-effecting actions (plan §7.2). */
+  workspaceTrusted: boolean;
 }>({
   initialized: false,
   servers: [],
@@ -63,7 +67,14 @@ export const spaState = writable<{
   capabilities: {},
   workspaceFolders: [],
   hookTaskOptions: [],
+  globalTab: 'home',
+  workspaceTrusted: true,
 });
+
+/**
+ * MRU server ids opened from tree/dashboard (in-memory only; plan §7.2 recently opened).
+ */
+export const homeRecentServerIds = writable<string[]>([]);
 
 /** Browse dialog result — updated when host sends 'browsed' message */
 export const browseResult = writable<{ field: string; path: string } | null>(null);

@@ -61,6 +61,8 @@ export interface DashboardNavigationTarget {
   serverId?: string;
   mode?: 'create' | 'edit';
   templateId?: string;
+  /** Top-level shell tab; default inferred from `type` when omitted. */
+  globalTab?: 'home' | 'templates' | 'settings';
 }
 
 export interface SpaSettings {
@@ -97,7 +99,9 @@ export type WebviewToHost =
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'deleteServer'; serverId: string; workspaceFolderUri: string }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'saveTemplate'; template: unknown; scope: 'global' | 'workspace' }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'deleteTemplate'; templateId: string; scope: 'global' | 'workspace' }
-  | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'requestWorkspaceFolders' };
+  | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'requestWorkspaceFolders' }
+  /** Forward webview diagnostics to host logger (Output: JSM). */
+  | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'traceLog'; message: string; data?: unknown };
 
 // ── Messages: Host → Webview ────────────────────────────────────────────────
 
@@ -130,6 +134,8 @@ export type HostToWebview =
       capabilities: Record<string, unknown>;
       workspaceFolders: Array<{ uri: string; name: string }>;
       settings: SpaSettings;
+      /** Workspace trust; plan §2 principle 6 / §7.2 environment hints. */
+      workspaceTrusted: boolean;
     }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'serverStateChanged'; serverKey: string; state: unknown }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'deploymentStateChanged'; serverKey: string; deploymentId: string; state: string }

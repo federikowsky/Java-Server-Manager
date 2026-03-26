@@ -16,6 +16,19 @@
   let serverRecord = $derived(state.servers.find(s => s.config.id === serverId));
   let config = $derived(serverRecord?.config);
   let runtimeState = $derived(serverRecord ? state.runtimeStates[serverRecord.serverKey] : undefined);
+
+  let typeLabel = $derived(
+    config ? config.type.charAt(0).toUpperCase() + config.type.slice(1) : '',
+  );
+
+  let baseUrl = $derived.by(() => {
+    if (!config) return '';
+    const pc = config.pluginConfig as { ssl?: { enabled?: boolean; port?: number } } | undefined;
+    if (pc?.ssl?.enabled && pc.ssl.port != null) {
+      return `https://${config.host}:${pc.ssl.port}`;
+    }
+    return `http://${config.host}:${config.ports?.http ?? ''}`;
+  });
   let isConfigFormReady = $derived(
     activeTab === 'config'
     && !!state.currentFormSchema
@@ -125,23 +138,36 @@
 
 {#if config}
   <div class="server-detail">
-    <!-- Header -->
-    <div class="header">
-      <div class="header-main">
-        <h1>{config.name}</h1>
-        <span class="badge {runtimeState?.state || 'stopped'}">
-          {runtimeState?.state || 'stopped'}
-        </span>
+    <header class="context-header">
+      <div class="context-header-text">
+        <div class="context-title-row">
+          <h1 class="context-title">{config.name}</h1>
+          <span class="badge {runtimeState?.state || 'stopped'}">
+            {runtimeState?.state || 'stopped'}
+          </span>
+        </div>
+        <p class="context-subtitle">{typeLabel} · {baseUrl}</p>
+        {#if serverRecord?.workspaceFolderName}
+          <p class="context-meta">
+            <Icon name="folder" size={12} />
+            <span>{serverRecord.workspaceFolderName}</span>
+          </p>
+        {/if}
       </div>
       <div class="header-actions">
+        <button
+          type="button"
+          class="action-btn"
+          title="Open server output log"
+          onclick={() => handleAction('jsm.server.showLogs')}
+        >
+          <Icon name="terminal" size={14} />
+          <span>Logs</span>
+        </button>
         {#if runtimeState?.state === 'stopped' || runtimeState?.state === 'error'}
           <button class="action-btn primary" onclick={() => handleAction('jsm.server.startRun')}>
             <Icon name="play" size={14} />
             <span>Start</span>
-          </button>
-          <button class="action-btn" onclick={() => handleAction('jsm.server.startDebug')}>
-            <Icon name="debug" size={14} />
-            <span>Debug</span>
           </button>
         {:else if runtimeState?.state === 'running'}
           <button class="action-btn" onclick={() => handleAction('jsm.server.restartRun')}>
@@ -154,7 +180,7 @@
           </button>
         {/if}
       </div>
-    </div>
+    </header>
 
     <!-- Tabs -->
     <div class="tabs">
@@ -254,22 +280,46 @@
     flex-direction: column;
     height: 100%;
   }
-  .header {
-    padding: var(--jsm-space-xl);
-    border-bottom: 1px solid var(--jsm-color-border);
+  .context-header {
+    padding: var(--jsm-space-lg) var(--jsm-space-xl);
+    border-bottom: 1px solid var(--jsm-context-header-border);
+    background: var(--jsm-context-header-bg);
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: var(--jsm-space-xl);
   }
-  .header-main {
+  .context-header-text {
+    min-width: 0;
+    flex: 1;
+  }
+  .context-title-row {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: var(--jsm-space-lg);
+    gap: var(--jsm-space-md);
   }
-  .header-main h1 {
+  .context-title {
     margin: 0;
     font-size: var(--jsm-font-size-2xl);
-    font-weight: var(--jsm-font-weight-medium);
+    font-weight: var(--jsm-font-weight-semibold);
+    color: var(--jsm-color-fg);
+    line-height: var(--jsm-line-height-tight);
+  }
+  .context-subtitle {
+    margin: var(--jsm-space-xs) 0 0;
+    font-size: var(--jsm-font-size-sm);
+    color: var(--jsm-color-fg-secondary);
+    font-family: var(--jsm-font-family);
+    word-break: break-all;
+  }
+  .context-meta {
+    margin: var(--jsm-space-xs) 0 0;
+    display: flex;
+    align-items: center;
+    gap: var(--jsm-space-xs);
+    font-size: var(--jsm-font-size-xs);
+    color: var(--jsm-color-fg-muted);
   }
   .header-actions {
     display: flex;
@@ -289,6 +339,10 @@
     gap: var(--jsm-space-xs);
     transition: background-color var(--jsm-transition-fast);
   }
+  .action-btn:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder);
+    outline-offset: 1px;
+  }
   .action-btn:hover {
     background: var(--jsm-color-secondary-hover);
   }
@@ -306,7 +360,7 @@
   }
   .action-btn.danger:hover {
     background: var(--jsm-color-error);
-    color: white;
+    color: var(--vscode-button-foreground);
   }
   
   .badge {
@@ -315,11 +369,29 @@
     font-size: var(--jsm-font-size-sm);
     font-weight: var(--jsm-font-weight-semibold);
     text-transform: uppercase;
+    border: 1px solid transparent;
   }
-  .badge.running { background: var(--jsm-status-running); color: white; }
-  .badge.stopped { background: var(--jsm-status-stopped); color: white; }
-  .badge.error { background: var(--jsm-status-error); color: white; }
-  .badge.starting, .badge.stopping { background: var(--jsm-status-starting); color: white; }
+  .badge.running {
+    background: color-mix(in srgb, var(--jsm-status-running) 20%, transparent);
+    color: var(--jsm-status-running);
+    border-color: color-mix(in srgb, var(--jsm-status-running) 42%, transparent);
+  }
+  .badge.stopped {
+    background: color-mix(in srgb, var(--jsm-status-stopped) 20%, transparent);
+    color: var(--jsm-status-stopped);
+    border-color: color-mix(in srgb, var(--jsm-status-stopped) 42%, transparent);
+  }
+  .badge.error {
+    background: color-mix(in srgb, var(--jsm-status-error) 20%, transparent);
+    color: var(--jsm-status-error);
+    border-color: color-mix(in srgb, var(--jsm-status-error) 42%, transparent);
+  }
+  .badge.starting,
+  .badge.stopping {
+    background: color-mix(in srgb, var(--jsm-status-starting) 22%, transparent);
+    color: var(--jsm-status-starting);
+    border-color: color-mix(in srgb, var(--jsm-status-starting) 45%, transparent);
+  }
 
   .tabs {
     display: flex;
@@ -347,6 +419,11 @@
   .tab.active {
     color: var(--vscode-tab-activeForeground);
     border-bottom-color: var(--vscode-tab-activeBorder);
+  }
+  .tab:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder);
+    outline-offset: -1px;
+    border-radius: var(--jsm-radius-xs);
   }
 
   .tab-content {

@@ -27,7 +27,7 @@ import { HookRunner } from '@app/hooks';
 import type { HookExecutor } from '@app/hooks';
 import { OutputSinkAdapter, MementoAdapter, DebugAdapter, FileWatcherAdapter } from '@ui/adapters';
 import { ServerLogChannel } from '@ui/channels';
-import { ServerTreeViewProvider } from '@ui/tree';
+import { ServerTreeViewProvider, ServerNode, DeploymentNode, WorkspaceNode } from '@ui/tree';
 import { DashboardPanel } from '@ui/webviews/panels/DashboardPanel';
 import { registerServerCommands, registerDeploymentCommands } from '@ui/commands';
 import {
@@ -341,6 +341,41 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
   });
   disposables.push(treeView);
 
+  const treePrimaryNavLog = logger.child?.('webview.dashboard') ?? logger;
+  disposables.push(
+    treeView.onDidChangeSelection((ev) => {
+      if (ev.selection.length !== 1) return;
+      const item = ev.selection[0];
+      if (item instanceof ServerNode) {
+        treePrimaryNavLog.debug('tree.selection.open', { kind: 'server', serverId: item.serverId });
+        void vscode.commands.executeCommand('jsm.dashboard.open', {
+          type: 'server',
+          id: item.serverId,
+          globalTab: 'home',
+        });
+      } else if (item instanceof DeploymentNode) {
+        treePrimaryNavLog.debug('tree.selection.open', {
+          kind: 'deployment',
+          serverId: item.serverId,
+          deploymentId: item.deploymentId,
+        });
+        void vscode.commands.executeCommand('jsm.dashboard.open', {
+          type: 'deployment',
+          serverId: item.serverId,
+          id: item.deploymentId,
+          mode: 'edit',
+          globalTab: 'home',
+        });
+      } else if (item instanceof WorkspaceNode) {
+        treePrimaryNavLog.debug('tree.selection.open', { kind: 'welcome' });
+        void vscode.commands.executeCommand('jsm.dashboard.open', {
+          type: 'welcome',
+          globalTab: 'home',
+        });
+      }
+    }),
+  );
+
   disposables.push(
     eventBus.on('OperationStarted', () => {
       treeProvider.requestRefresh();
@@ -373,9 +408,21 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
     vscode.commands.registerCommand('jsm.dashboard.open', (target) => {
       dashboardPanel.show(target);
     }),
+    vscode.commands.registerCommand('jsm.dashboard.focusServersView', async () => {
+      await vscode.commands.executeCommand('workbench.view.extension.javaServerManager');
+    }),
+    vscode.commands.registerCommand('jsm.dashboard.openDocumentation', async () => {
+      const ext = vscode.extensions.getExtension('federikowsky.java-server-manager');
+      const raw = ext?.packageJSON?.homepage as string | undefined;
+      const url = raw && /^https?:\/\//i.test(raw)
+        ? raw
+        : 'https://github.com/federikowsky/Java-Server-Manager#readme';
+      await vscode.env.openExternal(vscode.Uri.parse(url));
+    }),
     ...registerServerCommands({
       lifecycle,
       pluginRegistry,
+      logChannel,
       workspaceRegistry: workspaceServiceRegistry,
       discoveryService,
       treeProvider,

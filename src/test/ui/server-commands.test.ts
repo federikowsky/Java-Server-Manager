@@ -77,6 +77,7 @@ vi.mock('vscode', () => ({
 
 const { registerServerCommands } = await import('@ui/commands/server-commands');
 const { ServerNode } = await import('@ui/tree/ServerTreeViewProvider');
+const { makeWorkspaceServerKey } = await import('@app/config');
 
 function makeServer(id = 'srv-1', name = 'My Tomcat'): ServerConfig {
   return {
@@ -140,7 +141,7 @@ function mockDeps() {
     },
     workspaceRegistry: {
       addServer: vi.fn(async () => ok(undefined)),
-      getServer: vi.fn(),
+      getServer: vi.fn(() => undefined),
       getEntry: vi.fn(),
       getWorkspaceScopes: vi.fn(() => [{ uri: 'file:///ws', name: 'ws', fsPath: '/ws' }]),
       getServers: vi.fn(() => []),
@@ -265,11 +266,54 @@ describe('Server Commands', () => {
     expect(mockOpenTextDocument).not.toHaveBeenCalled();
   });
 
+  describe('jsm.server.showLogs', () => {
+    it('shows logs for tree ServerNode', () => {
+      const node = createServerNodeWithWorkspace('file:///ws');
+      invoke('jsm.server.showLogs', node);
+      expect(deps.logChannel.showLogs).toHaveBeenCalledWith(node.serverKey, node.serverConfig.name);
+    });
+
+    it('shows logs for SPA-shaped arg with resolved server name', () => {
+      const srv = makeServer('srv-2', 'SpaTomcat');
+      deps.workspaceRegistry.getServer.mockReturnValue(srv);
+      invoke('jsm.server.showLogs', {
+        serverId: 'srv-2',
+        workspaceFolderUri: 'file:///ws',
+        serverKey: 'file:///ws::srv-2',
+      });
+      expect(deps.logChannel.showLogs).toHaveBeenCalledWith('file:///ws::srv-2', 'SpaTomcat');
+    });
+
+    it('does nothing when arg is not a server context', () => {
+      invoke('jsm.server.showLogs', undefined);
+      expect(deps.logChannel.showLogs).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('SPA-shaped lifecycle args', () => {
+    it('jsm.server.startRun uses workspace key when serverKey omitted', async () => {
+      const srv = makeServer('srv-1', 'Tom');
+      deps.workspaceRegistry.getServer.mockReturnValue(srv);
+      deps.lifecycle.start.mockReturnValue(ok(undefined));
+      await invoke('jsm.server.startRun', {
+        serverId: 'srv-1',
+        workspaceFolderUri: 'file:///ws',
+      });
+      expect(deps.lifecycle.start).toHaveBeenCalledWith(
+        makeWorkspaceServerKey('file:///ws', 'srv-1'),
+        'run',
+      );
+    });
+  });
+
   describe('dashboard entry points', () => {
     it('jsm.server.add should open the dashboard create flow when called without args', async () => {
       await invoke('jsm.server.add');
 
-      expect(mockExecuteCommand).toHaveBeenCalledWith('jsm.dashboard.open', { type: 'new-server' });
+      expect(mockExecuteCommand).toHaveBeenCalledWith('jsm.dashboard.open', {
+        type: 'new-server',
+        globalTab: 'home',
+      });
     });
 
     it('jsm.server.edit should open the dashboard server detail view', async () => {
@@ -280,6 +324,7 @@ describe('Server Commands', () => {
       expect(mockExecuteCommand).toHaveBeenCalledWith('jsm.dashboard.open', {
         type: 'server',
         id: 'srv-1',
+        globalTab: 'home',
       });
     });
 

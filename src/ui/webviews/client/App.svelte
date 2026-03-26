@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { activeEntity, schema, mode, formId, formData, fieldErrors, submitting, globalError, spaState, browseResult, hostError, lastCommandResult } from './stores';
+  import { activeEntity, schema, mode, formId, formData, fieldErrors, submitting, globalError, spaState, browseResult, hostError, lastCommandResult, homeRecentServerIds } from './stores';
   import { sendReady, onHostMessage } from './bridge';
   import type { HostToWebview, FormSchema } from '../protocol';
   import FormHeader from './components/FormHeader.svelte';
@@ -97,6 +97,7 @@
           capabilities: msg.capabilities,
           workspaceFolders: msg.workspaceFolders,
           settings: msg.settings,
+          workspaceTrusted: msg.workspaceTrusted,
         }));
         submitting.set(false);
         break;
@@ -146,9 +147,26 @@
       case 'workspaceFoldersResult':
         spaState.update(state => ({ ...state, workspaceFolders: msg.folders }));
         break;
-      case 'navigate':
+      case 'navigate': {
         activeEntity.set(msg.target);
+        spaState.update(s => ({
+          ...s,
+          globalTab: msg.target.globalTab ?? s.globalTab,
+        }));
+        const t = msg.target;
+        const recentId = t.type === 'server' && t.id
+          ? t.id
+          : t.type === 'deployment' && t.serverId
+            ? t.serverId
+            : undefined;
+        if (recentId) {
+          homeRecentServerIds.update(list => {
+            const next = [recentId, ...list.filter(id => id !== recentId)];
+            return next.slice(0, 8);
+          });
+        }
         break;
+      }
       case 'commandResult':
         lastCommandResult.set({
           requestId: msg.requestId,

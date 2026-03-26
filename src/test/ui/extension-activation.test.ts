@@ -36,7 +36,10 @@ const mockCreateOutputChannel = vi.fn(() => ({
   show: vi.fn(),
   dispose: vi.fn(),
 }));
-const mockCreateTreeView = vi.fn(() => ({ dispose: vi.fn() }));
+const mockCreateTreeView = vi.fn(() => ({
+  dispose: vi.fn(),
+  onDidChangeSelection: vi.fn(() => ({ dispose: vi.fn() })),
+}));
 const mockRegisterCommand = vi.fn((_id: string, _handler: unknown) => ({ dispose: vi.fn() }));
 const mockOnDidEndTaskProcess = vi.fn(() => ({ dispose: vi.fn() }));
 

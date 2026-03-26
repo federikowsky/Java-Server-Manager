@@ -21,6 +21,7 @@ import { v4 as uuid } from 'uuid';
 import { areHookTaskOptionsEqual, fetchHookTaskOptions, type HookTaskOption } from '../hookTaskOptions';
 import { requireWorkspaceTrust } from '@core/policy';
 import type { TrustGate } from '@core/types/runtime';
+import { normalizeDashboardNavigationTarget } from '../dashboardNavigation';
 
 type CommandExecutionResult = {
   ok: boolean;
@@ -54,8 +55,11 @@ export class DashboardPanel implements vscode.Disposable {
   private lastSubmittedFormData?: Record<string, unknown>;
   private pendingNavigationTarget?: DashboardNavigationTarget;
   private hookTaskOptions: HookTaskOption[] = [];
+  private readonly panelLog: Logger;
 
   constructor(private readonly deps: DashboardPanelDeps) {
+    this.panelLog = deps.logger.child?.('webview.dashboard') ?? deps.logger;
+
     // Listen to events to push state changes to webview
     this.deps.bus.on('ServerStateChanged', (e) => {
       this.postMessage({
@@ -66,12 +70,52 @@ export class DashboardPanel implements vscode.Disposable {
       });
     });
 
-    this.deps.bus.on('ConfigChanged', () => {
+    this.deps.bus.on('ConfigChanged', (e) => {
+      this.panelLog.debug('event.ConfigChanged', {
+        source: e.source,
+        workspaceFolderUri: e.workspaceFolderUri,
+      });
       this.postMessage({
         v: WEBVIEW_PROTOCOL_VERSION,
         command: 'configChanged',
       });
       this.syncState();
+    });
+
+    const inventorySync = (reason: string, extra?: Record<string, unknown>) => {
+      this.panelLog.debug('syncState.trigger', { reason, ...extra });
+      this.syncState();
+    };
+
+    this.deps.bus.on('ServerAdded', e => {
+      inventorySync('ServerAdded', { serverId: e.serverId, workspaceFolderUri: e.workspaceFolderUri });
+    });
+    this.deps.bus.on('ServerDeleted', e => {
+      inventorySync('ServerDeleted', { serverId: e.serverId, workspaceFolderUri: e.workspaceFolderUri });
+    });
+    this.deps.bus.on('ServerUpdated', e => {
+      inventorySync('ServerUpdated', { serverId: e.serverId, workspaceFolderUri: e.workspaceFolderUri });
+    });
+    this.deps.bus.on('DeploymentAdded', e => {
+      inventorySync('DeploymentAdded', {
+        serverId: e.serverId,
+        deploymentId: e.deploymentId,
+        workspaceFolderUri: e.workspaceFolderUri,
+      });
+    });
+    this.deps.bus.on('DeploymentUpdated', e => {
+      inventorySync('DeploymentUpdated', {
+        serverId: e.serverId,
+        deploymentId: e.deploymentId,
+        workspaceFolderUri: e.workspaceFolderUri,
+      });
+    });
+    this.deps.bus.on('DeploymentRemoved', e => {
+      inventorySync('DeploymentRemoved', {
+        serverId: e.serverId,
+        deploymentId: e.deploymentId,
+        workspaceFolderUri: e.workspaceFolderUri,
+      });
     });
 
     this.deps.bus.on('DeploymentStateChanged', (e: any) => {
@@ -87,7 +131,14 @@ export class DashboardPanel implements vscode.Disposable {
 
   show(target?: DashboardNavigationTarget): void {
     if (target) {
-      this.pendingNavigationTarget = target;
+      const normalized = normalizeDashboardNavigationTarget(target);
+      this.panelLog.debug('navigate.show', {
+        type: normalized.type,
+        globalTab: normalized.globalTab,
+        id: normalized.id,
+        serverId: normalized.serverId,
+      });
+      this.pendingNavigationTarget = normalized;
     }
     if (this.panel) {
       this.panel.reveal(vscode.ViewColumn.One);
@@ -159,6 +210,10 @@ export class DashboardPanel implements vscode.Disposable {
 
   private async handleMessage(msg: WebviewToHost): Promise<void> {
     switch (msg.command) {
+      case 'traceLog':
+        this.panelLog.debug('client.trace', { message: msg.message, data: msg.data });
+        break;
+
       case 'ready':
         this.isWebviewReady = true;
         this.currentFormId = undefined;
@@ -193,6 +248,27 @@ export class DashboardPanel implements vscode.Disposable {
             commandResult = await this.handleTemplateDelete(templateId);
           } else if (msg.id === 'jsm.settings.save') {
             commandResult = await this.handleSettingsSave(msg.args?.[0]);
+          } else if (msg.id === 'jsm.server.add') {
+            const first = msg.args?.[0];
+            const argShape = first && typeof first === 'object'
+              ? {
+                  hasWorkspaceFolderUri: 'workspaceFolderUri' in (first as object),
+                  hasDraft: 'draft' in (first as object),
+                  hasConfig: 'config' in (first as object),
+                  workspaceFolderUriLen: typeof (first as { workspaceFolderUri?: string }).workspaceFolderUri === 'string'
+                    ? (first as { workspaceFolderUri: string }).workspaceFolderUri.length
+                    : undefined,
+                }
+              : { note: 'first arg missing or not object' };
+            this.panelLog.debug('command.jsm.server.add.before', { requestId: msg.requestId, argShape });
+            const raw = await vscode.commands.executeCommand(msg.id, ...(msg.args || []));
+            commandResult = this.normalizeCommandResult(raw);
+            this.panelLog.debug('command.jsm.server.add.after', {
+              requestId: msg.requestId,
+              ok: commandResult.ok,
+              message: commandResult.message,
+              dataServerId: commandResult.data?.serverId,
+            });
           } else {
             commandResult = this.normalizeCommandResult(
               await vscode.commands.executeCommand(msg.id, ...(msg.args || [])),
@@ -1215,6 +1291,13 @@ export class DashboardPanel implements vscode.Disposable {
       showStatusInSidebar: config.get('ui.showStatusInSidebar', true),
     };
 
+    this.panelLog.debug('syncState.pushed', {
+      serverCount: servers.length,
+      serverIds: servers.map(s => s.config.id),
+    });
+
+    const workspaceTrusted = this.deps.trustGate?.isTrusted() ?? vscode.workspace.isTrusted;
+
     this.postMessage({
       v: WEBVIEW_PROTOCOL_VERSION,
       command: 'syncState',
@@ -1225,6 +1308,7 @@ export class DashboardPanel implements vscode.Disposable {
       capabilities,
       workspaceFolders,
       settings,
+      workspaceTrusted,
     });
   }
 
@@ -1249,6 +1333,12 @@ export class DashboardPanel implements vscode.Disposable {
   }
 
   private postCommandResult(requestId: string, result: CommandExecutionResult): void {
+    this.panelLog.debug('commandResult.postMessage', {
+      requestId,
+      ok: result.ok,
+      message: result.message,
+      dataKeys: result.data ? Object.keys(result.data) : undefined,
+    });
     this.postMessage({
       v: WEBVIEW_PROTOCOL_VERSION,
       command: 'commandResult',
@@ -1260,15 +1350,20 @@ export class DashboardPanel implements vscode.Disposable {
   }
 
   private navigate(target: DashboardNavigationTarget): void {
+    const normalized = normalizeDashboardNavigationTarget(target);
     if (!this.isWebviewReady) {
-      this.pendingNavigationTarget = target;
+      this.pendingNavigationTarget = normalized;
       return;
     }
 
+    this.panelLog.debug('navigate.postMessage', {
+      type: normalized.type,
+      globalTab: normalized.globalTab,
+    });
     this.postMessage({
       v: WEBVIEW_PROTOCOL_VERSION,
       command: 'navigate',
-      target,
+      target: normalized,
     });
     this.pendingNavigationTarget = undefined;
   }

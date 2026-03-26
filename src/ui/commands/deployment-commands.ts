@@ -122,6 +122,7 @@ export function registerDeploymentCommands(
         type: 'deployment',
         serverId: arg.serverId,
         mode: 'create',
+        globalTab: 'home',
       });
       return undefined;
     }],
@@ -262,6 +263,7 @@ export function registerDeploymentCommands(
         id: arg.deploymentId,
         serverId: arg.serverId,
         mode: 'edit',
+        globalTab: 'home',
       });
       return undefined;
     }],

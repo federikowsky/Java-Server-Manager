@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import { applyTemplateToServerDraft, createServerDraft } from '@core/authoring';
   import type { PluginConfig } from '@core/types';
   import { spaState, activeEntity, browseResult, lastCommandResult } from '../../../stores';
@@ -62,15 +62,18 @@
   let pendingRequestId = $state('');
   let defaultsHydrated = $state(false);
 
+  /** Plain deep clone for payloads (createServerDraft / postMessage). Svelte $state arrays are Proxies — structuredClone throws. */
   function cloneValue<T>(value: T): T {
     if (value === undefined) {
       return value;
     }
-
-    if (typeof structuredClone === 'function') {
-      return structuredClone(value);
+    try {
+      if (typeof structuredClone === 'function') {
+        return structuredClone(value);
+      }
+    } catch {
+      /* fall through */
     }
-
     return JSON.parse(JSON.stringify(value)) as T;
   }
 
@@ -165,7 +168,10 @@
   });
 
   const unsubscribeCommandResult = lastCommandResult.subscribe(result => {
-    if (!result || !pendingRequestId || result.requestId !== pendingRequestId) {
+    if (!result) {
+      return;
+    }
+    if (!pendingRequestId || result.requestId !== pendingRequestId) {
       return;
     }
 
@@ -180,6 +186,11 @@
     submitError = '';
     const createdServerId = typeof result.data?.serverId === 'string' ? result.data.serverId : undefined;
     activeEntity.set(createdServerId ? { type: 'server', id: createdServerId } : { type: 'welcome' });
+  });
+
+  onMount(() => {
+    submitState = 'idle';
+    pendingRequestId = '';
   });
 
   onDestroy(() => {
@@ -332,7 +343,11 @@
   }
 
   function handleCancel() {
+    submitState = 'idle';
+    pendingRequestId = '';
+    submitError = '';
     if (templateId) {
+      spaState.update(s => ({ ...s, globalTab: 'templates' }));
       activeEntity.set({ type: 'template', id: templateId });
       return;
     }
@@ -341,6 +356,10 @@
   }
 
   async function handleSubmit() {
+    if (submitState === 'submitting') {
+      return;
+    }
+
     const allErrors: Record<string, string> = {};
     if (creationMode === 'template' && !selectedTemplateId) allErrors.selectedTemplateId = 'Choose a template';
     if (!serverName.trim()) allErrors.serverName = 'Server name is required';
@@ -370,24 +389,31 @@
       return;
     }
 
-    const draft = createServerDraft({
-      defaults: creationDefaults(),
-      fallbackType: selectedType as any,
-      overrides: buildDraftOverrides(),
-    });
+    try {
+      const draft = createServerDraft({
+        defaults: creationDefaults(),
+        fallbackType: selectedType as any,
+        overrides: buildDraftOverrides(),
+      });
 
-    submitState = 'submitting';
-    submitError = '';
-    pendingRequestId = crypto.randomUUID();
-    lastCommandResult.set(null);
+      submitState = 'submitting';
+      submitError = '';
+      pendingRequestId = crypto.randomUUID();
+      lastCommandResult.set(null);
 
-    postToHost({
-      v: WEBVIEW_PROTOCOL_VERSION,
-      command: 'executeCommand',
-      id: 'jsm.server.add',
-      requestId: pendingRequestId,
-      args: [{ draft, workspaceFolderUri: selectedWorkspace }],
-    });
+      postToHost({
+        v: WEBVIEW_PROTOCOL_VERSION,
+        command: 'executeCommand',
+        id: 'jsm.server.add',
+        requestId: pendingRequestId,
+        args: [{ draft, workspaceFolderUri: selectedWorkspace }],
+      });
+    } catch (e) {
+      submitState = 'idle';
+      pendingRequestId = '';
+      const msg = e instanceof Error ? e.message : String(e);
+      submitError = msg;
+    }
   }
 </script>
 
@@ -725,7 +751,7 @@
   {/if}
 
   <svelte:fragment slot="footer">
-    <button type="button" class="btn btn-secondary" onclick={handleCancel} disabled={submitState === 'submitting'}>
+    <button type="button" class="btn btn-secondary" onclick={handleCancel}>
       <Icon name="x" size={14} />
       <span>Cancel</span>
     </button>

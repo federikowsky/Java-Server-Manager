@@ -1,15 +1,21 @@
 <script lang="ts">
   import { spaState, hostError } from '../../stores';
-  import Sidebar from './Sidebar.svelte';
+  import TopBar from './TopBar.svelte';
   import DetailPane from './DetailPane.svelte';
+  import TemplatesTabPane from './TemplatesTabPane.svelte';
+  import SettingsView from './SettingsView.svelte';
   import GlobalError from '../GlobalError.svelte';
   import Icon from '../Icon.svelte';
 
   let state = $state($spaState);
-  spaState.subscribe(s => { state = s; });
+  spaState.subscribe(s => {
+    state = s;
+  });
 
   let error = $state('');
-  hostError.subscribe(e => { error = e; });
+  hostError.subscribe(e => {
+    error = e;
+  });
 
   let loading = $derived(!state.initialized && !error);
 </script>
@@ -20,20 +26,26 @@
       <GlobalError message={error} />
     </div>
   {/if}
+  <TopBar />
   <div class="main-content">
-    <div class="sidebar-container">
-      <Sidebar />
-    </div>
-    <div class="detail-container">
-      {#if loading}
-        <div class="loading-state">
-          <Icon name="loading" size={32} />
-          <p>Loading...</p>
-        </div>
-      {:else}
+    {#if loading}
+      <div class="loading-state">
+        <Icon name="loading" size={32} />
+        <p>Loading...</p>
+      </div>
+    {:else if state.globalTab === 'home'}
+      <div class="detail-container">
         <DetailPane />
-      {/if}
-    </div>
+      </div>
+    {:else if state.globalTab === 'templates'}
+      <div class="detail-container detail-container--stretch">
+        <TemplatesTabPane />
+      </div>
+    {:else}
+      <div class="detail-container detail-container--stretch">
+        <SettingsView />
+      </div>
+    {/if}
   </div>
 </div>
 
@@ -53,27 +65,27 @@
   .main-content {
     display: flex;
     flex: 1;
-    overflow: hidden;
-  }
-  .sidebar-container {
-    width: var(--jsm-sidebar-width);
-    min-width: 200px;
-    border-right: 1px solid var(--jsm-sidebar-border);
-    background: var(--jsm-sidebar-bg);
-    display: flex;
     flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
   }
   .detail-container {
     flex: 1;
-    overflow-y: auto;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
     background: var(--jsm-color-bg);
+  }
+  .detail-container--stretch {
+    overflow: hidden;
   }
   .loading-state {
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    height: 100%;
+    flex: 1;
     gap: var(--jsm-space-md);
     color: var(--jsm-color-fg-secondary);
   }

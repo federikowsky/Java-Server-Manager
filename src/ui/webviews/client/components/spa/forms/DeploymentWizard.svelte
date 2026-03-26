@@ -21,6 +21,7 @@
 
   let serverRecord = $derived(state.servers.find(s => s.config.id === serverId));
   let config = $derived(serverRecord?.config);
+  let workspaceFolderLabel = $derived(serverRecord?.workspaceFolderName ?? '');
   let existingDeployment = $derived(
     deploymentId ? config?.deployments?.find((d: any) => d.id === deploymentId) : undefined
   );
@@ -241,11 +242,39 @@
   }
 </script>
 
+{#if config}
+  <div class="deployment-wizard-root">
+    <header class="context-header">
+      <div class="context-header-text">
+        <div class="context-title-row">
+          <h1 class="context-title">{config.name}</h1>
+          <span
+            class="badge"
+            class:mode-create={mode === 'create'}
+            class:mode-edit={mode === 'edit'}
+          >
+            {mode === 'create' ? 'new' : 'edit'}
+          </span>
+        </div>
+        <p class="context-subtitle">
+          {config.type || 'Server'} · {mode === 'create'
+            ? 'Add deployment'
+            : (existingDeployment?.deployName ?? 'Edit deployment')}
+        </p>
+        {#if workspaceFolderLabel}
+          <p class="context-meta">
+            <Icon name="folder" size={12} />
+            <span>{workspaceFolderLabel}</span>
+          </p>
+        {/if}
+      </div>
+    </header>
+
 <FormPage
   icon="package"
   eyebrow={mode === 'create' ? 'New Deployment' : 'Edit Deployment'}
   title={mode === 'create' ? 'Add Deployment' : 'Edit Deployment'}
-  subtitle={`Deploy content into ${config?.name || 'the selected server'} with the same inline workflow used by the dashboard deployments tab.`}
+  subtitle="Choose source paths, artifact type, sync behaviour, and optional health check."
   alignStart={true}
 >
   <svelte:fragment slot="actions">
@@ -499,8 +528,94 @@
     </button>
   </svelte:fragment>
 </FormPage>
+  </div>
+{:else}
+  <div class="empty-state">Server not found</div>
+{/if}
 
 <style>
+  .deployment-wizard-root {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+  }
+
+  .context-header {
+    padding: var(--jsm-space-lg) var(--jsm-space-xl);
+    border-bottom: 1px solid var(--jsm-context-header-border);
+    background: var(--jsm-context-header-bg);
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: var(--jsm-space-xl);
+    flex-shrink: 0;
+  }
+
+  .context-header-text {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .context-title-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--jsm-space-md);
+  }
+
+  .context-title {
+    margin: 0;
+    font-size: var(--jsm-font-size-2xl);
+    font-weight: var(--jsm-font-weight-semibold);
+    color: var(--jsm-color-fg);
+    line-height: var(--jsm-line-height-tight);
+  }
+
+  .context-subtitle {
+    margin: var(--jsm-space-xs) 0 0;
+    font-size: var(--jsm-font-size-sm);
+    color: var(--jsm-color-fg-secondary);
+    font-family: var(--jsm-font-family);
+    word-break: break-word;
+  }
+
+  .context-meta {
+    margin: var(--jsm-space-xs) 0 0;
+    display: flex;
+    align-items: center;
+    gap: var(--jsm-space-xs);
+    font-size: var(--jsm-font-size-xs);
+    color: var(--jsm-color-fg-muted);
+  }
+
+  .badge {
+    padding: var(--jsm-badge-padding-y) var(--jsm-badge-padding-x);
+    border-radius: var(--jsm-badge-radius);
+    font-size: var(--jsm-font-size-sm);
+    font-weight: var(--jsm-font-weight-semibold);
+    text-transform: uppercase;
+    border: 1px solid transparent;
+  }
+
+  .badge.mode-create {
+    background: color-mix(in srgb, var(--jsm-color-primary) 20%, transparent);
+    color: var(--jsm-color-primary);
+    border-color: color-mix(in srgb, var(--jsm-color-primary) 42%, transparent);
+  }
+
+  .badge.mode-edit {
+    background: var(--jsm-color-bg-secondary);
+    color: var(--jsm-color-fg-secondary);
+    border-color: var(--jsm-color-border-secondary);
+  }
+
+  .empty-state {
+    padding: var(--jsm-space-xl);
+    color: var(--jsm-color-fg-secondary);
+    font-family: var(--jsm-font-family);
+  }
+
   .wizard-content {
     display: flex;
     flex-direction: column;

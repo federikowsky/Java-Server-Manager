@@ -7,7 +7,6 @@
 
 import type { WebviewToHost, HostToWebview } from '../protocol';
 import { WEBVIEW_PROTOCOL_VERSION } from '../protocol';
-
 // The VS Code webview API is injected into the iframe by the host.
 interface VsCodeApi {
   postMessage(msg: unknown): void;

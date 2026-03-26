@@ -182,6 +182,7 @@ describe('Deployment Commands', () => {
         type: 'deployment',
         serverId: 'srv-1',
         mode: 'create',
+        globalTab: 'home',
       });
     });
 
@@ -193,6 +194,7 @@ describe('Deployment Commands', () => {
         id: 'dep-1',
         serverId: 'srv-1',
         mode: 'edit',
+        globalTab: 'home',
       });
     });
 

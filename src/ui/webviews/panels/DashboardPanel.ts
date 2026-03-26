@@ -1,46 +1,31 @@
 import * as vscode from 'vscode';
-import * as crypto from 'crypto';
-import type { WorkspaceServiceRegistry } from '@app/config';
-import type { ServerLifecycle } from '@app/server/ServerLifecycle';
-import type { TemplateService } from '@app/templates/TemplateService';
 import {
-  formDataToServerConfig,
-  formDataToTemplateDraft,
   serverConfigToFormData,
-  templateDraftToTemplate,
   templateToServerFormData,
-  validateServerForm,
 } from '@core/authoring';
-import type { PluginRegistry } from '@plugins/registry/PluginRegistry';
-import type { ServerDiscoveryService } from '@app/server/ServerDiscoveryService';
 import type { Logger } from '@core/types';
-import type { DashboardNavigationTarget, HostToWebview, FormSchema, WebviewToHost } from '../protocol';
+import type { DashboardNavigationTarget, HostToWebview, WebviewToHost } from '../protocol';
 import { WEBVIEW_PROTOCOL_VERSION } from '../protocol';
-import { EventBus } from '@core/events/EventBus';
-import { v4 as uuid } from 'uuid';
 import { areHookTaskOptionsEqual, fetchHookTaskOptions, type HookTaskOption } from '../hookTaskOptions';
 import { requireWorkspaceTrust } from '@core/policy';
-import type { TrustGate } from '@core/types/runtime';
 import { normalizeDashboardNavigationTarget } from '../dashboardNavigation';
+import type { CommandExecutionResult, DashboardPanelDeps } from './dashboard/dashboardPanelTypes';
+import { buildDashboardPanelHtml } from './dashboard/buildDashboardPanelHtml';
+import { buildServerFormSchema, type ServerFormUiMeta } from './dashboard/buildServerFormSchema';
+import { buildTemplateFormSchema } from './dashboard/buildTemplateFormSchema';
+import { collectJavaInstallationCandidates } from './dashboard/javaInstallationCandidates';
+import { buildDashboardSyncStatePayload } from './dashboard/buildDashboardSyncStatePayload';
+import {
+  deleteServerWithConfirm,
+  deleteTemplateWithConfirm,
+  saveTemplateFromWebview,
+} from './dashboard/dashboardPanelTemplateCrud';
+import {
+  submitServerConfigForm,
+  submitTemplateConfigForm,
+} from './dashboard/dashboardPanelFormSubmit';
 
-type CommandExecutionResult = {
-  ok: boolean;
-  message?: string;
-  data?: Record<string, unknown>;
-};
-
-export interface DashboardPanelDeps {
-  extensionUri: vscode.Uri;
-  workspaceRegistry: WorkspaceServiceRegistry;
-  lifecycle: ServerLifecycle;
-  templateService: TemplateService;
-  pluginRegistry: PluginRegistry;
-  discoveryService: ServerDiscoveryService;
-  deployService?: { getDeploymentState(serverId: string, deploymentId: string): string };
-  logger: Logger;
-  bus: EventBus;
-  trustGate?: TrustGate;
-}
+export type { DashboardPanelDeps } from './dashboard/dashboardPanelTypes';
 
 export class DashboardPanel implements vscode.Disposable {
   static readonly viewType = 'jsm.dashboard';
@@ -162,7 +147,7 @@ export class DashboardPanel implements vscode.Disposable {
       }
     );
 
-    this.panel.webview.html = this.buildHtml(this.panel.webview, distWebview);
+    this.panel.webview.html = buildDashboardPanelHtml(this.panel.webview, distWebview);
 
     this.panel.webview.onDidReceiveMessage(
       async (raw: unknown) => {
@@ -350,88 +335,38 @@ export class DashboardPanel implements vscode.Disposable {
         break;
 
       case 'deleteServer':
-        await this.handleDeleteServer(msg.serverId, msg.workspaceFolderUri);
+        await deleteServerWithConfirm(
+          this.deps,
+          m => this.postError(m),
+          () => this.syncState(),
+          msg.serverId,
+          msg.workspaceFolderUri,
+        );
         break;
 
       case 'saveTemplate':
-        await this.handleSaveTemplate(msg.template, msg.scope);
+        await saveTemplateFromWebview(
+          this.deps,
+          m => this.postError(m),
+          () => this.syncState(),
+          msg.template,
+          msg.scope,
+        );
         break;
 
       case 'deleteTemplate':
-        await this.handleDeleteTemplate(msg.templateId, msg.scope);
+        await deleteTemplateWithConfirm(
+          this.deps,
+          m => this.postError(m),
+          () => this.syncState(),
+          msg.templateId,
+          msg.scope,
+        );
         break;
 
       default:
         this.deps.logger.warn(`[DashboardPanel] Unhandled message type: ${(msg as any).command}`);
         break;
-    }
-  }
-
-  // ── CRUD Handlers ──────────────────────────────────────────────────────────
-
-  private async handleDeleteServer(serverId: string, workspaceFolderUri: string): Promise<void> {
-    try {
-      const confirmation = await vscode.window.showWarningMessage(
-        'Are you sure you want to delete this server?',
-        { modal: true },
-        'Delete',
-      );
-      if (confirmation !== 'Delete') {
-        return;
-      }
-
-      const result = await this.deps.workspaceRegistry.removeServer({ workspaceFolderUri, serverId });
-      if (!result.ok) {
-        this.postError(result.error.message);
-        return;
-      }
-      this.syncState();
-    } catch (e) {
-      this.deps.logger.error('Error deleting server', e);
-      this.postError(`Error deleting server: ${String(e)}`);
-    }
-  }
-
-  private async handleSaveTemplate(template: unknown, scope: 'global' | 'workspace'): Promise<CommandExecutionResult> {
-    try {
-      const result = await this.deps.templateService.save(template as any, scope);
-      if (!result.ok) {
-        this.postError(result.error.message);
-        return { ok: false, message: result.error.message };
-      }
-      this.syncState();
-      return { ok: true };
-    } catch (e) {
-      this.deps.logger.error('Error saving template', e);
-      const message = `Error saving template: ${String(e)}`;
-      this.postError(message);
-      return { ok: false, message };
-    }
-  }
-
-  private async handleDeleteTemplate(templateId: string, scope: 'global' | 'workspace'): Promise<CommandExecutionResult> {
-    try {
-      const confirmation = await vscode.window.showWarningMessage(
-        'Are you sure you want to delete this template?',
-        { modal: true },
-        'Delete',
-      );
-      if (confirmation !== 'Delete') {
-        return { ok: false, message: 'Template deletion cancelled.' };
-      }
-
-      const result = await this.deps.templateService.delete(templateId, scope);
-      if (!result.ok) {
-        this.postError(result.error.message);
-        return { ok: false, message: result.error.message };
-      }
-      this.syncState();
-      return { ok: true };
-    } catch (e) {
-      this.deps.logger.error('Error deleting template', e);
-      const message = `Error deleting template: ${String(e)}`;
-      this.postError(message);
-      return { ok: false, message };
     }
   }
 
@@ -458,197 +393,15 @@ export class DashboardPanel implements vscode.Disposable {
       : undefined;
     const serverType = record?.config.type ?? 'tomcat';
     const plugin = this.deps.pluginRegistry.get(serverType as any);
-    const uiMeta = plugin?.getUIMetadata();
-    const capabilities = plugin?.getCapabilities();
-    const config = vscode.workspace.getConfiguration('jsm');
+    const jsmConfig = vscode.workspace.getConfiguration('jsm');
 
-    const schema: FormSchema = {
-      title: mode === 'create' ? `Add ${uiMeta?.displayName ?? 'Server'}` : `Edit ${uiMeta?.displayName ?? 'Server'}`,
-      sections: [
-        {
-          id: 'runtime',
-          title: 'Runtime',
-          fields: [
-            {
-              name: 'runtime.homePath',
-              label: `Server Home (${uiMeta?.runtimeHomeLabel ?? 'Server Home'})`,
-              type: 'path',
-              required: true,
-              browse: { kind: 'directory' },
-              actionButtons: [
-                { id: 'autodiscover', icon: 'search', title: 'Autodiscover Server Installation' },
-              ],
-              helpText: uiMeta?.runtimeHomeHelp ?? 'Absolute path to the server installation directory.',
-            },
-          ],
-        },
-        {
-          id: 'identity',
-          title: 'Server Identity',
-          fields: [
-            {
-              name: 'name',
-              label: 'Server Name',
-              type: 'text',
-              required: true,
-              placeholder: uiMeta?.defaultName ?? 'My Server',
-            },
-            {
-              name: 'ports.http',
-              label: 'HTTP Port',
-              type: 'port',
-              required: true,
-              defaultValue: config.get('defaults.httpPort', 8080),
-              validation: { min: 1, max: 65535 },
-            },
-          ],
-        },
-        {
-          id: 'java',
-          title: 'Java',
-          fields: [
-            {
-              name: 'javaHome',
-              label: 'JAVA_HOME',
-              type: 'path',
-              required: true,
-              browse: { kind: 'directory' },
-              helpText: 'Path to JDK installation. Must contain bin/java.',
-            },
-          ],
-        },
-        {
-          id: 'advanced',
-          title: 'Advanced',
-          collapsible: true,
-          fields: [
-            {
-              name: 'host',
-              label: 'Bind Host',
-              type: 'text',
-              defaultValue: '127.0.0.1',
-            },
-            {
-              name: 'run.vmArgs',
-              label: 'VM Arguments',
-              type: 'tags',
-              helpText: 'JVM arguments (one per tag).',
-            },
-            {
-              name: 'debug.bind',
-              label: 'Debug Bind Address',
-              type: 'select',
-              defaultValue: '127.0.0.1',
-              options: [
-                { value: '127.0.0.1', label: '127.0.0.1' },
-                { value: 'localhost', label: 'localhost' },
-                { value: '::1', label: '::1' },
-              ],
-            },
-            {
-              name: 'ports.debug',
-              label: 'Debug Port',
-              type: 'port',
-              helpText: 'Optional. Leave empty to auto-assign a free port.',
-              validation: { min: 1, max: 65535 },
-            },
-            {
-              name: 'hooks',
-              label: 'Hooks',
-              type: 'hooks',
-              defaultValue: [],
-              helpText: 'Configure server hooks as terminal commands or VS Code tasks.',
-              hookOptions: {
-                taskOptions: this.hookTaskOptions,
-              },
-            },
-          ],
-        },
-        ...(capabilities?.supportsSsl
-          ? [{
-            id: 'ssl',
-            title: 'SSL/TLS',
-            collapsible: true,
-            fields: [
-              {
-                name: 'pluginConfig.ssl.enabled',
-                label: 'Enable SSL/HTTPS',
-                type: 'checkbox',
-                defaultValue: false,
-              },
-              {
-                name: 'pluginConfig.ssl.port',
-                label: 'HTTPS Port',
-                type: 'port',
-                defaultValue: 8443,
-                validation: { min: 1, max: 65535 },
-                visibleWhen: { field: 'pluginConfig.ssl.enabled', equals: true },
-              },
-              {
-                name: 'pluginConfig.ssl.keystorePath',
-                label: 'Keystore File',
-                type: 'path',
-                browse: { kind: 'file', filters: { Keystore: ['p12', 'pfx', 'jks'] } },
-                visibleWhen: { field: 'pluginConfig.ssl.enabled', equals: true },
-              },
-              {
-                name: 'pluginConfig.ssl.keystorePassword',
-                label: 'Keystore Password',
-                type: 'password',
-                visibleWhen: { field: 'pluginConfig.ssl.enabled', equals: true },
-              },
-              {
-                name: 'pluginConfig.ssl.keystoreType',
-                label: 'Keystore Type',
-                type: 'select',
-                defaultValue: 'PKCS12',
-                options: [
-                  { value: 'PKCS12', label: 'PKCS12 (recommended)' },
-                  { value: 'JKS', label: 'JKS' },
-                ],
-                visibleWhen: { field: 'pluginConfig.ssl.enabled', equals: true },
-              },
-              {
-                name: 'pluginConfig.ssl.keyAlias',
-                label: 'Key Alias',
-                type: 'text',
-                visibleWhen: { field: 'pluginConfig.ssl.enabled', equals: true },
-              },
-              {
-                name: 'pluginConfig.ssl.clientAuth',
-                label: 'Client Certificate Authentication (mTLS)',
-                type: 'checkbox',
-                defaultValue: false,
-                visibleWhen: { field: 'pluginConfig.ssl.enabled', equals: true },
-              },
-              {
-                name: 'pluginConfig.ssl.truststorePath',
-                label: 'Truststore File',
-                type: 'path',
-                browse: { kind: 'file', filters: { Truststore: ['p12', 'pfx', 'jks'] } },
-                visibleWhen: { field: 'pluginConfig.ssl.clientAuth', equals: true },
-              },
-              {
-                name: 'pluginConfig.ssl.truststorePassword',
-                label: 'Truststore Password',
-                type: 'password',
-                visibleWhen: { field: 'pluginConfig.ssl.clientAuth', equals: true },
-              },
-              {
-                name: 'pluginConfig.ssl.truststoreType',
-                label: 'Truststore Type',
-                type: 'select',
-                defaultValue: 'PKCS12',
-                options: [
-                  { value: 'PKCS12', label: 'PKCS12 (recommended)' },
-                  { value: 'JKS', label: 'JKS' },
-                ],
-                visibleWhen: { field: 'pluginConfig.ssl.clientAuth', equals: true },
-              },
-            ],
-          } as FormSchema['sections'][number]] : []),
-      ],
-    };
+    const schema = buildServerFormSchema({
+      mode,
+      uiMeta: plugin?.getUIMetadata() as ServerFormUiMeta | undefined,
+      supportsSsl: plugin?.getCapabilities()?.supportsSsl,
+      hookTaskOptions: this.hookTaskOptions,
+      defaultHttpPort: jsmConfig.get('defaults.httpPort', 8080),
+    });
 
     this.postMessage({
       v: WEBVIEW_PROTOCOL_VERSION,
@@ -660,169 +413,6 @@ export class DashboardPanel implements vscode.Disposable {
       targetId: record?.serverId,
       targetWorkspaceFolderUri: record?.workspaceFolderUri,
     });
-  }
-
-  private buildTemplateSchema(): FormSchema {
-    const supportedTypes = this.deps.pluginRegistry.getSupportedTypes();
-    const typeOptions = supportedTypes.map(type => ({
-      value: type,
-      label: this.deps.pluginRegistry.get(type)?.getUIMetadata().displayName ?? type,
-    }));
-
-    return {
-      title: 'Template',
-      sections: [
-        {
-          id: 'details',
-          title: 'Details',
-          fields: [
-            {
-              name: 'name',
-              label: 'Template Name',
-              type: 'text',
-              required: true,
-              placeholder: 'My Template',
-            },
-            {
-              name: 'description',
-              label: 'Description',
-              type: 'textarea',
-            },
-            {
-              name: 'scope',
-              label: 'Scope',
-              type: 'select',
-              required: true,
-              defaultValue: 'workspace',
-              options: [
-                { value: 'workspace', label: 'Workspace' },
-                { value: 'global', label: 'Global' },
-              ],
-            },
-            {
-              name: 'pluginType',
-              label: 'Server Type',
-              type: 'select',
-              required: true,
-              defaultValue: typeOptions[0]?.value ?? 'tomcat',
-              options: typeOptions,
-            },
-          ],
-        },
-        {
-          id: 'defaults',
-          title: 'Defaults',
-          fields: [
-            {
-              name: 'runtime.homePath',
-              label: 'Runtime Home',
-              type: 'path',
-              helpText: 'Optional default runtime home for servers created from this template.',
-            },
-            {
-              name: 'javaHome',
-              label: 'JAVA_HOME',
-              type: 'path',
-              helpText: 'Optional default JDK path for servers created from this template.',
-            },
-            {
-              name: 'host',
-              label: 'Host',
-              type: 'text',
-              defaultValue: '127.0.0.1',
-              helpText: 'Optional default host for servers created from this template.',
-            },
-            {
-              name: 'ports.http',
-              label: 'HTTP Port',
-              type: 'port',
-              defaultValue: 8080,
-              helpText: 'Optional default HTTP port for servers created from this template.',
-            },
-            {
-              name: 'ports.debug',
-              label: 'Debug Port',
-              type: 'port',
-              defaultValue: 5005,
-              helpText: 'Optional default debug port for servers created from this template.',
-            },
-            {
-              name: 'run.vmArgs',
-              label: 'JVM Arguments',
-              type: 'tags',
-              helpText: 'Optional default JVM arguments for servers created from this template.',
-            },
-            {
-              name: 'debug.bind',
-              label: 'Debug Bind',
-              type: 'select',
-              defaultValue: '127.0.0.1',
-              options: [
-                { value: '127.0.0.1', label: '127.0.0.1' },
-                { value: 'localhost', label: 'localhost' },
-                { value: '::1', label: '::1' },
-              ],
-            },
-            {
-              name: 'hooks',
-              label: 'Hooks',
-              type: 'hooks',
-              defaultValue: [],
-              helpText: 'Default hooks applied to servers created from this template.',
-              hookOptions: {
-                taskOptions: this.hookTaskOptions,
-              },
-            },
-          ],
-        },
-        {
-          id: 'ssl',
-          title: 'SSL/TLS',
-          collapsible: true,
-          fields: [
-            {
-              name: 'pluginConfig.ssl.enabled',
-              label: 'Enable SSL/HTTPS',
-              type: 'checkbox',
-              defaultValue: false,
-              visibleWhen: { field: 'pluginType', equals: 'tomcat' },
-            },
-            {
-              name: 'pluginConfig.ssl.port',
-              label: 'HTTPS Port',
-              type: 'port',
-              defaultValue: 8443,
-              validation: { min: 1, max: 65535 },
-              visibleWhen: { field: 'pluginConfig.ssl.enabled', equals: true },
-            },
-            {
-              name: 'pluginConfig.ssl.keystorePath',
-              label: 'Keystore File',
-              type: 'path',
-              browse: { kind: 'file', filters: { Keystore: ['p12', 'pfx', 'jks'] } },
-              visibleWhen: { field: 'pluginConfig.ssl.enabled', equals: true },
-            },
-            {
-              name: 'pluginConfig.ssl.keystorePassword',
-              label: 'Keystore Password',
-              type: 'password',
-              visibleWhen: { field: 'pluginConfig.ssl.enabled', equals: true },
-            },
-            {
-              name: 'pluginConfig.ssl.keystoreType',
-              label: 'Keystore Type',
-              type: 'select',
-              defaultValue: 'PKCS12',
-              options: [
-                { value: 'PKCS12', label: 'PKCS12 (recommended)' },
-                { value: 'JKS', label: 'JKS' },
-              ],
-              visibleWhen: { field: 'pluginConfig.ssl.enabled', equals: true },
-            },
-          ],
-        },
-      ],
-    };
   }
 
   private async handleTemplateSchemaRequest(mode: 'create' | 'edit', templateId?: string): Promise<void> {
@@ -841,7 +431,7 @@ export class DashboardPanel implements vscode.Disposable {
       command: 'init',
       formId: 'jsm.templateForm',
       mode,
-      schema: this.buildTemplateSchema(),
+      schema: buildTemplateFormSchema(this.deps.pluginRegistry, this.hookTaskOptions),
       data: record
         ? {
           name: record.template.name,
@@ -899,86 +489,7 @@ export class DashboardPanel implements vscode.Disposable {
   }
 
   private async handleJavaDetect(): Promise<void> {
-    const candidates: Array<{ label: string; description: string; path: string }> = [];
-
-    // 1. Check JAVA_HOME env var
-    const envJavaHome = process.env.JAVA_HOME;
-    if (envJavaHome?.trim()) {
-      const javaExe = process.platform === 'win32' ? 'java.exe' : 'java';
-      const javaPath = require('path').join(envJavaHome.trim(), 'bin', javaExe);
-      try {
-        await require('fs/promises').access(javaPath);
-        candidates.push({
-          label: `$(environment) JAVA_HOME`,
-          description: envJavaHome.trim(),
-          path: envJavaHome.trim(),
-        });
-      } catch {
-        // JAVA_HOME set but invalid
-      }
-    }
-
-    // 2. Check common paths based on platform
-    const fs = require('fs/promises');
-    const pathModule = require('path');
-    const isWindows = process.platform === 'win32';
-    const isMac = process.platform === 'darwin';
-
-    const commonPaths: string[] = [];
-    if (isMac) {
-      commonPaths.push(
-        '/Library/Java/JavaVirtualMachines',
-        '/opt/homebrew/opt',
-        '/usr/local/opt',
-      );
-    } else if (isWindows) {
-      commonPaths.push(
-        'C:\\Program Files\\Java',
-        'C:\\Program Files\\Eclipse Adoptium',
-        'C:\\Program Files\\Microsoft',
-      );
-    } else {
-      commonPaths.push(
-        '/usr/lib/jvm',
-        '/usr/java',
-        '/opt/java',
-        '/snap/java',
-      );
-    }
-
-    for (const basePath of commonPaths) {
-      try {
-        const entries = await fs.readdir(basePath, { withFileTypes: true });
-        for (const entry of entries) {
-          if (!entry.isDirectory()) continue;
-          let javaHome: string;
-          if (isMac && basePath.includes('JavaVirtualMachines')) {
-            javaHome = pathModule.join(basePath, entry.name, 'Contents', 'Home');
-          } else if (basePath.includes('opt') || basePath.includes('local')) {
-            javaHome = pathModule.join(basePath, entry.name, 'libexec', 'openjdk.jdk', 'Contents', 'Home');
-          } else {
-            javaHome = pathModule.join(basePath, entry.name);
-          }
-          const javaExe = isWindows ? 'java.exe' : 'java';
-          const javaPath = pathModule.join(javaHome, 'bin', javaExe);
-          try {
-            await fs.access(javaPath);
-            if (!candidates.some(c => c.path === javaHome)) {
-              candidates.push({
-                label: `$(folder) ${entry.name}`,
-                description: javaHome,
-                path: javaHome,
-              });
-            }
-          } catch {
-            // No java executable in this path
-          }
-        }
-      } catch {
-        // Directory doesn't exist or not readable
-      }
-    }
-
+    const candidates = await collectJavaInstallationCandidates();
     if (candidates.length === 0) {
       vscode.window.showInformationMessage('No Java installations found. Set JAVA_HOME manually.');
       return;
@@ -1049,51 +560,18 @@ export class DashboardPanel implements vscode.Disposable {
       return;
     }
 
-    const lastSubmittedData = this.lastSubmittedFormData;
-    if (!lastSubmittedData) {
-      this.postError('No form data received.');
-      return;
-    }
-
-    const errors = validateServerForm(lastSubmittedData);
-    if (errors.length > 0) {
-      this.postMessage({
-        v: WEBVIEW_PROTOCOL_VERSION,
-        command: 'validationErrors',
-        errors,
-      });
-      return;
-    }
-
-    if (!this.currentFormTargetId || !this.currentFormTargetWorkspaceFolderUri) {
-      this.postError('Server target not found.');
-      return;
-    }
-
-    const record = this.deps.workspaceRegistry.getAllServers().find(item =>
-      item.serverId === this.currentFormTargetId
-      && item.workspaceFolderUri === this.currentFormTargetWorkspaceFolderUri,
-    );
-    if (!record) {
-      this.postError('Server not found.');
-      return;
-    }
-
-    const result = await this.deps.workspaceRegistry.updateServer(
-      {
-        workspaceFolderUri: record.workspaceFolderUri,
-        serverId: record.serverId,
+    await submitServerConfigForm({
+      deps: this.deps,
+      lastSubmittedData: this.lastSubmittedFormData,
+      currentFormTargetId: this.currentFormTargetId,
+      currentFormTargetWorkspaceFolderUri: this.currentFormTargetWorkspaceFolderUri,
+      postError: m => this.postError(m),
+      postMessage: m => this.postMessage(m),
+      syncState: () => this.syncState(),
+      onClearLastSubmitted: () => {
+        this.lastSubmittedFormData = undefined;
       },
-      formDataToServerConfig(lastSubmittedData, record.config),
-    );
-    this.lastSubmittedFormData = undefined;
-
-    if (!result.ok) {
-      this.postError(result.error.message);
-      return;
-    }
-
-    this.syncState();
+    });
   }
 
   private async handleTemplateFormSubmit(): Promise<void> {
@@ -1102,63 +580,19 @@ export class DashboardPanel implements vscode.Disposable {
       return;
     }
 
-    // Collect form values from the webview by requesting a load (the webview keeps state in formData,
-    // we can rely on it being sent back via the protocol, but as a simple approach we'll just
-    // treat the current form as already synchronized and assume the last submitted data is correct.
-    // The SPA will send the data on its own as part of the message; here we're only asked to
-    // handle the save semantics.
-
-    // We cannot access the SPA formData directly from the host, so we rely on the fact that
-    // the SPA sends a submit with the data; we already receive it (msg.data) in handleMessage.
-    // To avoid rewriting the message plumbing, we store the last submitted payload in a field.
-
-    const lastSubmittedData = this.lastSubmittedFormData;
-    if (!lastSubmittedData) {
-      this.postError('No form data received.');
-      return;
-    }
-
-    const templateId = this.currentFormMode === 'edit' ? this.currentFormTargetId : undefined;
-
-    const existingEntry = templateId
-      ? this.deps.templateService.listScoped().find(item => item.template.id === templateId)
-      : undefined;
-
-    const validationErrors: Array<{ field: string; message: string }> = [];
-    if (String(lastSubmittedData['name'] ?? '').trim().length === 0) {
-      validationErrors.push({
-        field: 'name',
-        message: 'Template name is required.',
-      });
-    }
-    if (validationErrors.length > 0) {
-      this.postMessage({
-        v: WEBVIEW_PROTOCOL_VERSION,
-        command: 'validationErrors',
-        errors: validationErrors,
-      });
-      return;
-    }
-
-    const templateDraft = formDataToTemplateDraft(lastSubmittedData, {
-      fallbackScope: existingEntry?.scope ?? this.currentFormTargetScope ?? 'workspace',
-      fallbackPluginType: existingEntry?.template.pluginType ?? 'tomcat',
+    await submitTemplateConfigForm({
+      deps: this.deps,
+      lastSubmittedData: this.lastSubmittedFormData,
+      currentFormMode: this.currentFormMode,
+      currentFormTargetId: this.currentFormTargetId,
+      currentFormTargetScope: this.currentFormTargetScope,
+      postError: m => this.postError(m),
+      postMessage: m => this.postMessage(m),
+      syncState: () => this.syncState(),
+      onClearLastSubmitted: () => {
+        this.lastSubmittedFormData = undefined;
+      },
     });
-    const template = templateDraftToTemplate({
-      id: existingEntry?.template.id ?? uuid(),
-      draft: templateDraft,
-    });
-
-    const result = await this.deps.templateService.save(template, templateDraft.scope);
-    // Clear cached submit payload once handled.
-    this.lastSubmittedFormData = undefined;
-
-    if (!result.ok) {
-      this.postError(result.error.message);
-      return;
-    }
-
-    this.syncState();
   }
   private async handleBrowse(
     field: string,
@@ -1227,88 +661,17 @@ export class DashboardPanel implements vscode.Disposable {
   private syncState(): void {
     if (!this.panel) return;
 
-    const servers = this.deps.workspaceRegistry.getAllServers().map(r => ({
-      serverKey: r.serverKey,
-      config: r.config,
-      workspaceFolderUri: r.workspaceFolderUri,
-      workspaceFolderName: r.workspaceFolderName,
-    }));
-
-    const runtimeStates: Record<string, unknown> = {};
-    for (const server of servers) {
-      const runtime = this.deps.lifecycle.getRuntime(server.serverKey);
-      if (runtime) {
-        runtimeStates[server.serverKey] = runtime.getState();
-      }
-    }
-
-    // Gather deployment states
-    const deploymentStates: Record<string, Record<string, string>> = {};
-    if (this.deps.deployService) {
-      for (const server of servers) {
-        const serverKey = server.serverKey;
-        const deps: Record<string, string> = {};
-        for (const dep of server.config.deployments || []) {
-          try {
-            deps[dep.id] = this.deps.deployService.getDeploymentState(serverKey, dep.id);
-          } catch {
-            deps[dep.id] = 'undeployed';
-          }
-        }
-        if (Object.keys(deps).length > 0) {
-          deploymentStates[serverKey] = deps;
-        }
-      }
-    }
-
-    const templates = this.deps.templateService.listScoped().map(t => ({
-      template: t.template,
-      scope: t.scope,
-    }));
-
-    // Gather capabilities and UI metadata for registered plugins
-    const capabilities: Record<string, unknown> = {};
-    for (const type of this.deps.pluginRegistry.getSupportedTypes()) {
-      const plugin = this.deps.pluginRegistry.get(type);
-      if (plugin) {
-        capabilities[type] = {
-          ...plugin.getCapabilities(),
-          ...plugin.getUIMetadata(),
-        };
-      }
-    }
-
-    const workspaceFolders = this.deps.workspaceRegistry.getWorkspaceScopes().map(s => ({
-      uri: s.uri,
-      name: s.name,
-    }));
-
-    const config = vscode.workspace.getConfiguration('jsm');
-    const settings = {
-      defaultHttpPort: config.get('defaults.httpPort', 8080),
-      defaultDebugPort: config.get('defaults.debugPort', 5005),
-      defaultJavaHome: config.get('defaults.javaHome', ''),
-      showStatusInSidebar: config.get('ui.showStatusInSidebar', true),
-    };
+    const payload = buildDashboardSyncStatePayload(this.deps);
 
     this.panelLog.debug('syncState.pushed', {
-      serverCount: servers.length,
-      serverIds: servers.map(s => s.config.id),
+      serverCount: payload.servers.length,
+      serverIds: payload.servers.map(s => (s.config as { id?: string }).id),
     });
-
-    const workspaceTrusted = this.deps.trustGate?.isTrusted() ?? vscode.workspace.isTrusted;
 
     this.postMessage({
       v: WEBVIEW_PROTOCOL_VERSION,
       command: 'syncState',
-      servers,
-      runtimeStates,
-      deploymentStates,
-      templates,
-      capabilities,
-      workspaceFolders,
-      settings,
-      workspaceTrusted,
+      ...payload,
     });
   }
 
@@ -1392,33 +755,6 @@ export class DashboardPanel implements vscode.Disposable {
     if (typeof raw !== 'object' || raw === null) return false;
     const msg = raw as Record<string, unknown>;
     return msg['v'] === WEBVIEW_PROTOCOL_VERSION && typeof msg['command'] === 'string';
-  }
-
-  private buildHtml(webview: vscode.Webview, distWebview: vscode.Uri): string {
-    const nonce = crypto.randomBytes(16).toString('base64');
-    const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(distWebview, 'webview.js'));
-    const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(distWebview, 'webview.css'));
-    const cspSource = webview.cspSource;
-
-    return /* html */ `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy"
-    content="default-src 'none'; style-src ${cspSource}; script-src 'nonce-${nonce}'; font-src ${cspSource}; img-src data:;">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <link rel="stylesheet" href="${styleUri}">
-  <title>Java Server Manager</title>
-</head>
-<body>
-  <div id="root"></div>
-  <script nonce="${nonce}">
-    // Signal SPA mode
-    window.__JSM_SPA_MODE__ = true;
-  </script>
-  <script nonce="${nonce}" src="${scriptUri}"></script>
-</body>
-</html>`;
   }
 
   dispose(): void {

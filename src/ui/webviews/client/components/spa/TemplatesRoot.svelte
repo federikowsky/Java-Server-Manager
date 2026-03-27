@@ -25,6 +25,21 @@
 
   let search = $state('');
 
+  /** Max characters for Description column in the list (full text on hover when truncated). */
+  const MAX_DESCRIPTION_LIST_CHARS = 100;
+
+  function listDescriptionCell(description: unknown): { text: string; title: string | undefined } {
+    const raw = description == null ? '' : String(description).trim();
+    if (raw.length === 0) {
+      return { text: '—', title: undefined };
+    }
+    if (raw.length <= MAX_DESCRIPTION_LIST_CHARS) {
+      return { text: raw, title: undefined };
+    }
+    const cut = raw.slice(0, MAX_DESCRIPTION_LIST_CHARS).trimEnd();
+    return { text: `${cut}…`, title: raw };
+  }
+
   let filtered = $derived(
     state.templates.filter(({ template: t }) => {
       const q = search.trim().toLowerCase();
@@ -122,6 +137,7 @@
           </thead>
           <tbody>
             {#each filtered as row (row.template.id)}
+              {@const descCell = listDescriptionCell(row.template.description)}
               <tr
                 class="row-click"
                 tabindex="0"
@@ -132,7 +148,7 @@
                 <td class="cell-strong">{row.template.name}</td>
                 <td>{row.scope}</td>
                 <td>{row.template.pluginType}</td>
-                <td class="cell-muted">{row.template.description ?? '—'}</td>
+                <td class="cell-muted cell-desc" title={descCell.title}>{descCell.text}</td>
                 <td class="cell-muted">{formatUpdated(row.template)}</td>
               </tr>
             {/each}
@@ -214,6 +230,11 @@
   }
   .cell-muted {
     color: var(--jsm-color-fg-secondary);
+  }
+  .cell-desc {
+    max-width: 28rem;
+    overflow: hidden;
+    word-break: break-word;
   }
   .hint {
     margin: 0;

@@ -501,8 +501,6 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
         channel.clear();
         logChannel.showLogs(serverId, name);
       } else if (state === 'running') {
-        const channel = logChannel.getChannel(serverId, name);
-        channel.clear();
         logChannel.showLogs(serverId, name);
         if (config) autoSyncService.rebindWatchers(serverId, config);
       } else if (state === 'stopped' || state === 'error') {

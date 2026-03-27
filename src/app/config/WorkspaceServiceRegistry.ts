@@ -63,6 +63,16 @@ export class WorkspaceServiceRegistry {
     }
   }
 
+  /** Add or replace the entry for {@link WorkspaceServiceEntry.scope.uri}. */
+  registerEntry(entry: WorkspaceServiceEntry): void {
+    this.entriesByUri.set(entry.scope.uri, entry);
+  }
+
+  /** Remove a workspace folder; returns whether an entry existed. */
+  removeEntry(workspaceFolderUri: string): boolean {
+    return this.entriesByUri.delete(workspaceFolderUri);
+  }
+
   getWorkspaceScopes(): WorkspaceScope[] {
     return [...this.entriesByUri.values()].map(entry => entry.scope);
   }

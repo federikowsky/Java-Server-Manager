@@ -2,7 +2,7 @@
  * Extended coverage: WorkspaceServiceRegistry multi-workspace and key parsing (Stateful / Negative / Corner).
  * Maps to feature F-WORKSPACE-REGISTRY.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
@@ -170,6 +170,30 @@ describe('WorkspaceServiceRegistry (extended)', () => {
     await reg.addServer(uriA, makeServer('bare', 'Bare'));
     const rec = reg.getServerRecordByKey('bare');
     expect(rec).toBeUndefined();
+  });
+
+  it('EXT-WSR-007: registerEntry and removeEntry update lookup', () => {
+    const reg = buildRegistry();
+    expect(reg.getEntry(uriA)).toBeDefined();
+    reg.removeEntry(uriA);
+    expect(reg.getEntry(uriA)).toBeUndefined();
+    const logger = mockLogger();
+    const v = new SchemaValidator();
+    v.addSchema('server-config', { type: 'object' });
+    const svc = new ConfigService({
+      repo: new ConfigRepo(tmpA, logger),
+      validator: v,
+      bus: busA,
+      logger,
+      workspaceFolderUri: uriA,
+    });
+    reg.registerEntry({
+      scope: { uri: uriA, name: 'a2', fsPath: tmpA },
+      configService: svc,
+      provisioningService: {} as never,
+      configFilePath: path.join(tmpA, '.vscode', 'jsm.servers.json'),
+    });
+    expect(reg.getEntry(uriA)?.scope.name).toBe('a2');
   });
 
   it('EXT-WSR-006: server key with :: in serverId parses using last separator (documented corner)', async () => {

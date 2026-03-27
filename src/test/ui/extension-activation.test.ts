@@ -70,6 +70,7 @@ vi.mock('vscode', () => ({
     get workspaceFolders() { return workspaceFolders; },
     openTextDocument: vi.fn(async () => ({})),
     isTrusted: true,
+    onDidChangeWorkspaceFolders: vi.fn(() => ({ dispose: vi.fn() })),
   },
   env: {
     clipboard: { writeText: vi.fn() },

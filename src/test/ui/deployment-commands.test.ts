@@ -116,6 +116,12 @@ function createDeploymentNode(
 function mockDeps() {
   const getLogSources = vi.fn(async () => ok<{ primary?: { id: string; title: string; kind: 'file'; path: string }; others: unknown[] }>({ others: [] }));
   return {
+    logger: {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    },
     configService: {
       getServer: vi.fn((_id: string) => makeServer(_id)),
       removeDeployment: vi.fn(async () => ok(undefined)),
@@ -166,6 +172,7 @@ describe('Deployment Commands', () => {
       'jsm.deployment.undeploy', 'jsm.deployment.toggleAutosync',
       'jsm.deployment.configureIgnoreGlobs', 'jsm.deployment.edit',
       'jsm.deployment.remove', 'jsm.deployment.openLogs',
+      'jsm.deployment.revealSource',
     ];
     for (const id of expected) {
       expect(registeredHandlers[id], `Missing: ${id}`).toBeDefined();
@@ -182,6 +189,7 @@ describe('Deployment Commands', () => {
         type: 'deployment',
         serverId: 'srv-1',
         mode: 'create',
+        globalTab: 'home',
       });
     });
 
@@ -193,6 +201,7 @@ describe('Deployment Commands', () => {
         id: 'dep-1',
         serverId: 'srv-1',
         mode: 'edit',
+        globalTab: 'home',
       });
     });
 

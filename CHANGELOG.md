@@ -6,55 +6,89 @@ The format follows Keep a Changelog and this project adheres to Semantic Version
 
 ## [Unreleased]
 
-### Added
-- ongoing improvements after the first public beta release
+### Planned
 
-## [0.1.2] - 2026-03-25
+- ongoing improvements toward stable readiness
 
-### Autosync
-
-- File-change batches are submitted through the per-server operation queue on `ServerLifecycle` (`enqueueDeploySync`) instead of bypassing core orchestration.
-- When a sync cannot be enqueued or the queue executor reports a deploy-sync failure, `AutoSyncService.recordFailure` runs so storm protection and failure-window cooldown behave as intended.
-
-### Unified per-server operation queue (tree and commands)
-
-- Tree-driven server lifecycle (start/stop/restart/debug), pre-start deploy of undeployed apps, redeploy-all, deployment redeploy/undeploy, and refresh-driven deployment health checks are scheduled on the same per-server `OperationQueue` under `ServerLifecycle`.
-- Progress notification **Cancel** calls `lifecycle.cancel` (aligned with **Cancel Operation** on busy servers), not a separate VS Code–only cancellation path.
-- The server tree exposes a busy context when the queue has work so cancel is discoverable; queue drain errors can surface back to the UI after the queue goes idle.
-
-## [0.1.1] - 2026-03-18
+## [0.1.2] - 2026-03-27
 
 ### Summary
-- added explicit manifest licensing metadata required by OpenVSX validation
-- aligned release metadata for dual publication (VS Code Marketplace and OpenVSX)
+
+- Second beta (pre-release): dashboard and templates UX hardening, deployment actions from the SPA, autosync wired through the server operation queue, dynamic multi-root workspace registration, and registry release verification for OpenVSX.
+- Add Server opens the dashboard via direct panel wiring (no nested command); template create/edit navigates to the template detail view after save; template delete from the detail page; second edit session reliably re-requests the host form schema.
 
 ### Beta Disclaimer
+
 - this is a beta prerelease intended for validation and feedback
 - behavior and feature surface may change before the first stable release
 
 ### Known Limitations
+
 - only Tomcat is supported in this release
 - some advanced workflows and hardening tasks are still in progress
 
 ### Added
+
+- **Autosync**: file watching and deploy synchronization through `AutoSyncService`, with failure recording, `rebindWatchers`, and queue-backed `enqueueDeploySync` on `ServerLifecycle`.
+- **Deployments (SPA)**: overflow menu for per-deployment actions; **Reveal source** command; safer webview messaging (avoid structured-clone failures from reactive proxies).
+- **Templates**: delete from template detail view; description truncated in the list with full text in tooltip; navigate to read-only detail after successful save.
+- **Workspace**: `WorkspaceServiceRegistry` `registerEntry` / `removeEntry` and `onDidChangeWorkspaceFolders` so folders added or removed after activation stay in sync with services and lifecycle.
+- **Release tooling**: OpenVSX version verification script and related release documentation updates.
+
+### Changed
+
+- **Operation queue**: tree and commands schedule lifecycle, deploy, redeploy, and related work on the same per-server `OperationQueue`; progress cancel aligns with lifecycle cancel; tree reflects queue busy state.
+- **Dashboard / webview**: SPA layout for forms (`FormBody`, schema utilities); streamlined host message handling; hooks editor and dashboard navigation refinements; removal of the standalone `DeploymentForm` in favor of integrated flows.
+- **Server commands**: `openDashboard` callback to `DashboardPanel.show` for Add Server; webview panel `reveal` on first open after `createPanel`.
+- **Java**: Java home detection flow updates in the webview.
+- **Logs**: server output channel is cleared only when entering **starting** (not again on **running**) so startup lines are not wiped at ready.
+
+### Fixed
+
+- **Templates**: host and webview form context stay aligned (`clearSpaFormMirror` on navigate and key template routes) so a second edit/save after the first no longer hits “Submit is not supported in the current view.”
+- **Deployments**: workspace folder URI handling and deployment command/webview wiring for overflow actions.
+
+## [0.1.1] - 2026-03-18
+
+### Summary
+
+- added explicit manifest licensing metadata required by OpenVSX validation
+- aligned release metadata for dual publication (VS Code Marketplace and OpenVSX)
+
+### Beta Disclaimer
+
+- this is a beta prerelease intended for validation and feedback
+- behavior and feature surface may change before the first stable release
+
+### Known Limitations
+
+- only Tomcat is supported in this release
+- some advanced workflows and hardening tasks are still in progress
+
+### Added
+
 - added MIT license declaration and repository license file for registry compliance
 - added publisher field to the extension manifest for deterministic release identity checks
 
 ## [0.1.0] - 2026-03-18
 
 ### Summary
+
 - first public beta release of Java Server Manager
 - Tomcat-first extension architecture with plugin-oriented foundations
 
 ### Beta Disclaimer
+
 - this is a beta prerelease intended for validation and feedback
 - behavior and feature surface may change before the first stable release
 
 ### Known Limitations
+
 - only Tomcat is supported in this release
 - some advanced workflows and hardening tasks are still in progress
 
 ### Added
+
 - server discovery and local server lifecycle operations for Tomcat
 - deployment and auto-sync foundations with runtime safety gates
 - release governance, deterministic preflight checks, and Marketplace release workflow

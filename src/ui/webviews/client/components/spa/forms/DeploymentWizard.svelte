@@ -1,12 +1,16 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import { formDataToDeploymentDraft } from '@core/authoring';
+  import type { ServerConfig } from '@core/types';
   import { spaState, activeEntity, browseResult, lastCommandResult } from '../../../stores';
   import { postToHost } from '../../../bridge';
   import { WEBVIEW_PROTOCOL_VERSION } from '../../../../protocol';
   import Icon from '../../Icon.svelte';
-  import AccordionSection from './AccordionSection.svelte';
   import FormPage from '../FormPage.svelte';
+  import SectionBlock from '../../ds/SectionBlock.svelte';
+  import AdvancedCollapse from '../../ds/AdvancedCollapse.svelte';
+  import ModeSelector from '../../ds/ModeSelector.svelte';
+  import ContextTag from '../../ds/ContextTag.svelte';
 
   interface Props {
     serverId: string;
@@ -16,13 +20,19 @@
 
   let { serverId, deploymentId, mode = 'create' }: Props = $props();
 
+  let pageSubtitle = $derived(
+    mode === 'create'
+      ? 'Choose source path, artifact type, sync behaviour, and optional health check.'
+      : 'Update source paths, sync behaviour, and health checks.',
+  );
+
   let state = $state($spaState);
   const unsubscribeSpaState = spaState.subscribe(s => { state = s; });
 
-  let serverRecord = $derived(state.servers.find(s => s.config.id === serverId));
-  let config = $derived(serverRecord?.config);
+  let serverRecord = $derived(state.servers.find(s => (s.config as ServerConfig).id === serverId));
+  let config = $derived(serverRecord ? (serverRecord.config as ServerConfig) : undefined);
   let existingDeployment = $derived(
-    deploymentId ? config?.deployments?.find((d: any) => d.id === deploymentId) : undefined
+    deploymentId ? config?.deployments?.find(d => d.id === deploymentId) : undefined
   );
 
   let formType = $state<'exploded' | 'war'>('exploded');
@@ -35,7 +45,6 @@
   let ignoreGlobs = $state<string[]>([]);
   let ignoreGlobDraft = $state('');
 
-  let expandedSection = $state<'advanced' | ''>('');
   let errors = $state<Record<string, string>>({});
   let touched = $state<Record<string, boolean>>({});
 
@@ -66,6 +75,7 @@
     }
 
     submitError = '';
+    spaState.update(s => ({ ...s, serverDetailResumeTab: 'deployments' }));
     activeEntity.set({ type: 'server', id: serverId });
   });
 
@@ -97,7 +107,6 @@
     healthCheckTimeoutMs = existingDeployment?.healthCheckTimeoutMs;
     ignoreGlobs = existingDeployment?.ignoreGlobs ? [...existingDeployment.ignoreGlobs] : [];
     ignoreGlobDraft = '';
-    expandedSection = '';
     errors = {};
     touched = {};
     submitState = 'idle';
@@ -133,10 +142,6 @@
     touched = { ...touched, [field]: true };
   }
 
-  function toggleAdvanced() {
-    expandedSection = expandedSection === 'advanced' ? '' : 'advanced';
-  }
-
   function handleBrowse() {
     postToHost({
       v: WEBVIEW_PROTOCOL_VERSION,
@@ -170,7 +175,8 @@
     ignoreGlobs = ignoreGlobs.filter((_, i) => i !== index);
   }
 
-  function handleCancel() {
+  function handleBack() {
+    spaState.update(s => ({ ...s, serverDetailResumeTab: 'deployments' }));
     activeEntity.set({ type: 'server', id: serverId });
   }
 
@@ -241,62 +247,42 @@
   }
 </script>
 
+{#if config}
+  <div class="deployment-wizard-root">
 <FormPage
-  icon="package"
-  eyebrow={mode === 'create' ? 'New Deployment' : 'Edit Deployment'}
+  variant="editor"
+  backLabel="Deployments"
+  onBack={handleBack}
   title={mode === 'create' ? 'Add Deployment' : 'Edit Deployment'}
-  subtitle={`Deploy content into ${config?.name || 'the selected server'} with the same inline workflow used by the dashboard deployments tab.`}
+  subtitle={pageSubtitle}
   alignStart={true}
 >
   <svelte:fragment slot="actions">
-    <span class="meta-chip">{formType === 'exploded' ? 'Exploded' : 'WAR'}</span>
-    <span class="meta-chip subtle">{config?.type || 'Server'}</span>
+    <ContextTag text={formType === 'exploded' ? 'EXPLODED' : 'WAR'} />
+    <ContextTag text={String(config?.type || 'server').toUpperCase()} />
   </svelte:fragment>
 
   <div class="wizard-content">
-    <!-- Section 1: Source & Type (Flat) -->
-    <div class="form-section">
-      <h3 class="section-title">
-        <Icon name="folder" size={16} />
-        <span>Source & Type</span>
-      </h3>
+    <div class="wizard-unified">
+    <SectionBlock title="Source & Type">
       <div class="section-grid">
-        <!-- Deployment Type — Segmented Control -->
         <div class="form-field">
           <label class="field-label">Deployment Type</label>
-          <div class="segmented-control" role="radiogroup" aria-label="Deployment type">
-            <button
-              type="button"
-              class="segment"
-              class:selected={formType === 'exploded'}
-              role="radio"
-              aria-checked={formType === 'exploded'}
-              onclick={() => formType = 'exploded'}
-            >
-              <Icon name="folder-open" size={14} />
-              <span>Exploded Directory</span>
-            </button>
-            <button
-              type="button"
-              class="segment"
-              class:selected={formType === 'war'}
-              role="radio"
-              aria-checked={formType === 'war'}
-              onclick={() => formType = 'war'}
-            >
-              <Icon name="package" size={14} />
-              <span>WAR File</span>
-            </button>
-          </div>
-          <p class="field-help">
-            {formType === 'exploded' ? 'Hot-reload ready for iterative development.' : 'Packaged archive for explicit deploy steps.'}
-          </p>
+          <ModeSelector
+            ariaLabel="Deployment type"
+            value={formType}
+            onChange={(v) => (formType = v as 'exploded' | 'war')}
+            options={[
+              { value: 'exploded', label: 'Exploded Directory' },
+              { value: 'war', label: 'WAR File' },
+            ]}
+          />
         </div>
 
         <!-- Source Path -->
         <div class="form-field">
           <label class="field-label" for="source-path">
-            Source Path <span class="required">*</span>
+            {formType === 'war' ? 'WAR File' : 'Source Path'} <span class="required">*</span>
           </label>
           <div class="path-input-row">
             <input
@@ -317,7 +303,11 @@
           {#if errors.sourcePath && touched.sourcePath}
             <p class="field-error">{errors.sourcePath}</p>
           {:else}
-            <p class="field-help">Path to the {formType === 'war' ? 'WAR file' : 'exploded directory'}.</p>
+            <p class="field-help">
+              {formType === 'war'
+                ? 'Path to the deployable WAR artifact.'
+                : 'Path to the exploded directory.'}
+            </p>
           {/if}
         </div>
 
@@ -345,14 +335,9 @@
           {/if}
         </div>
       </div>
-    </div>
+    </SectionBlock>
 
-    <!-- Section 2: Sync & Options (Flat) -->
-    <div class="form-section">
-      <h3 class="section-title">
-        <Icon name="refresh" size={16} />
-        <span>Sync & Options</span>
-      </h3>
+    <AdvancedCollapse title="Sync & Options" defaultOpen={true}>
       <div class="section-grid">
         <div class="form-field">
           <label class="field-label">Synchronization Mode</label>
@@ -362,9 +347,7 @@
               <div class="radio-content">
                 <span class="radio-label">Auto</span>
                 <span class="radio-desc">
-                  {formType === 'war'
-                    ? 'When the WAR file changes, it is copied to webapps/ again; Tomcat picks up the update if auto-deploy is enabled.'
-                    : 'Files synced automatically on save. The extension applies the lightest safe update and falls back to full redeploy when needed.'}
+                  Files sync automatically on save. Applies the lightest safe update and falls back when needed.
                 </span>
               </div>
             </label>
@@ -372,7 +355,7 @@
               <input type="radio" bind:group={syncMode} value="manual" />
               <div class="radio-content">
                 <span class="radio-label">Manual</span>
-                <span class="radio-desc">You control when to redeploy from the dashboard or tree.</span>
+                <span class="radio-desc">You control redeploy from the dashboard or tree.</span>
               </div>
             </label>
           </div>
@@ -384,26 +367,15 @@
               <input type="checkbox" class="field-checkbox" bind:checked={hotReload} />
               <div class="checkbox-content">
                 <span class="checkbox-label-text">Enable Hot Reload</span>
-                <span class="checkbox-desc">Apply changes without full redeploy. Only affects files outside WEB-INF/ and META-INF/.</span>
+                <span class="checkbox-desc">Apply changes without full redeploy. Only affects files outside WEB-INF and META-INF.</span>
               </div>
             </label>
           </div>
-        {:else}
-          <div class="info-banner">
-            <Icon name="info" size={16} />
-            <span>WAR deploy copies the packaged file to webapps/. Use Redeploy for a full refresh on demand when sync is manual.</span>
-          </div>
         {/if}
       </div>
-    </div>
+    </AdvancedCollapse>
 
-    <!-- Section 3: Advanced (Accordion) -->
-    <AccordionSection 
-      title="Advanced Options" 
-      icon="settings"
-      expanded={expandedSection === 'advanced'}
-      onToggle={toggleAdvanced}
-    >
+    <AdvancedCollapse title="Advanced Options">
       <div class="section-grid">
         <div class="form-field">
           <label class="field-label" for="health-path">Health Check Path</label>
@@ -468,7 +440,8 @@
           <p class="field-help">File patterns to exclude from sync (e.g., "*.tmp", "build/**").</p>
         </div>
       </div>
-    </AccordionSection>
+    </AdvancedCollapse>
+    </div>
   </div>
 
   {#if submitError}
@@ -479,7 +452,7 @@
   {/if}
 
   <svelte:fragment slot="footer">
-    <button type="button" class="btn btn-secondary" onclick={handleCancel} disabled={submitState === 'submitting'}>
+    <button type="button" class="btn btn-secondary" onclick={handleBack} disabled={submitState === 'submitting'}>
       <Icon name="x" size={14} />
       <span>Cancel</span>
     </button>
@@ -491,339 +464,33 @@
     >
       {#if submitState === 'submitting'}
         <Icon name="loading" size={14} />
-        <span>{mode === 'create' ? 'Saving Deployment...' : 'Saving Changes...'}</span>
+        <span>Saving…</span>
       {:else}
         <Icon name="check" size={14} />
-        <span>{mode === 'create' ? 'Add Deployment' : 'Save Deployment'}</span>
+        <span>{mode === 'create' ? 'Add Deployment' : 'Save Changes'}</span>
       {/if}
     </button>
   </svelte:fragment>
 </FormPage>
+  </div>
+{:else}
+  <div class="empty-state">Server not found</div>
+{/if}
 
 <style>
-  .wizard-content {
+  @import './wizardFormShared.css';
+
+  .deployment-wizard-root {
     display: flex;
     flex-direction: column;
-    gap: var(--jsm-space-lg);
-  }
-
-  .meta-chip {
-    display: inline-flex;
-    align-items: center;
-    padding: var(--jsm-space-2xs) var(--jsm-space-sm);
-    border-radius: var(--jsm-radius-full, 999px);
-    background: color-mix(in srgb, var(--jsm-color-primary) 12%, var(--jsm-color-bg));
-    border: 1px solid color-mix(in srgb, var(--jsm-color-primary) 18%, var(--jsm-color-border));
-    color: var(--jsm-color-primary);
-    font-size: var(--jsm-font-size-xs);
-    font-weight: var(--jsm-font-weight-semibold);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
-
-  .meta-chip.subtle {
-    background: var(--jsm-color-bg-secondary);
-    border-color: var(--jsm-color-border-secondary);
-    color: var(--jsm-color-fg-secondary);
-  }
-
-  .section-grid {
-    display: flex;
-    flex-direction: column;
-    gap: var(--jsm-space-lg);
-  }
-
-  .segmented-control {
-    display: flex;
-    border: 1px solid var(--jsm-color-border-secondary);
-    border-radius: var(--jsm-radius-md);
-    overflow: hidden;
-  }
-
-  .segment {
     flex: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: var(--jsm-space-xs);
-    padding: var(--jsm-space-sm) var(--jsm-space-md);
-    background: var(--jsm-color-bg);
-    border: none;
-    border-right: 1px solid var(--jsm-color-border-secondary);
+    min-height: 0;
+    height: 100%;
+  }
+
+  .empty-state {
+    padding: var(--jsm-space-xl);
     color: var(--jsm-color-fg-secondary);
     font-family: var(--jsm-font-family);
-    font-size: var(--jsm-font-size-sm);
-    font-weight: var(--jsm-font-weight-medium);
-    cursor: pointer;
-    transition: all var(--jsm-transition-fast);
-  }
-
-  .segment:last-child {
-    border-right: none;
-  }
-
-  .segment:hover:not(.selected) {
-    background: var(--jsm-color-bg-hover);
-    color: var(--jsm-color-fg);
-  }
-
-  .segment.selected {
-    background: var(--jsm-color-primary);
-    color: var(--jsm-color-primary-fg);
-  }
-
-  .type-name {
-    font-size: var(--jsm-font-size-md);
-    font-weight: var(--jsm-font-weight-semibold);
-    color: var(--jsm-color-fg);
-  }
-
-  .type-desc {
-    font-size: var(--jsm-font-size-xs);
-    color: var(--jsm-color-fg-secondary);
-  }
-
-  .form-field {
-    display: flex;
-    flex-direction: column;
-    gap: var(--jsm-space-xs);
-  }
-
-  .field-label {
-    font-weight: var(--jsm-font-weight-semibold);
-    font-size: var(--jsm-font-size-md);
-    color: var(--jsm-color-fg);
-  }
-
-  .required {
-    color: var(--jsm-color-error);
-  }
-
-  .field-input {
-    width: 100%;
-    padding: var(--jsm-input-padding-y) var(--jsm-input-padding-x);
-    background: var(--jsm-input-bg);
-    color: var(--jsm-input-fg);
-    border: 1px solid var(--jsm-input-border);
-    border-radius: var(--jsm-input-radius);
-    font-family: var(--jsm-font-family);
-    font-size: var(--jsm-font-size-md);
-    outline: none;
-    transition: border-color var(--jsm-transition-normal), box-shadow var(--jsm-transition-normal);
-  }
-
-  .field-input:focus {
-    border-color: var(--jsm-color-border-focus);
-    box-shadow: var(--jsm-shadow-focus);
-  }
-
-  .field-input.error {
-    border-color: var(--jsm-color-error);
-  }
-
-  .field-help {
-    font-size: var(--jsm-font-size-xs);
-    color: var(--jsm-color-fg-secondary);
-    margin: 0;
-  }
-
-  .field-error {
-    font-size: var(--jsm-font-size-xs);
-    color: var(--jsm-color-error);
-    margin: 0;
-  }
-
-  .path-input-row {
-    display: flex;
-    gap: var(--jsm-space-sm);
-  }
-
-  .path-input-row .field-input {
-    flex: 1;
-  }
-
-  .radio-group {
-    display: flex;
-    flex-direction: column;
-    gap: var(--jsm-space-sm);
-  }
-
-  .radio-option {
-    display: flex;
-    align-items: flex-start;
-    gap: var(--jsm-space-md);
-    padding: var(--jsm-space-md);
-    border: 1px solid var(--jsm-color-border-secondary);
-    border-radius: var(--jsm-radius-md);
-    cursor: pointer;
-    transition: all var(--jsm-transition-normal);
-  }
-
-  .radio-option:hover {
-    background: var(--jsm-color-bg-hover);
-  }
-
-  .radio-option.selected {
-    border-color: var(--jsm-color-primary);
-    background: color-mix(in srgb, var(--jsm-color-primary) 5%, var(--jsm-color-bg));
-  }
-
-  .radio-option input[type="radio"] {
-    margin-top: 3px;
-    accent-color: var(--jsm-color-primary);
-  }
-
-  .radio-content {
-    display: flex;
-    flex-direction: column;
-    gap: var(--jsm-space-2xs);
-  }
-
-  .radio-label {
-    font-weight: var(--jsm-font-weight-medium);
-    color: var(--jsm-color-fg);
-  }
-
-  .radio-desc {
-    font-size: var(--jsm-font-size-xs);
-    color: var(--jsm-color-fg-secondary);
-  }
-
-  .checkbox-label {
-    display: flex;
-    align-items: flex-start;
-    gap: var(--jsm-space-md);
-    cursor: pointer;
-  }
-
-  .field-checkbox {
-    width: 18px;
-    height: 18px;
-    margin-top: 2px;
-    accent-color: var(--jsm-color-primary);
-  }
-
-  .checkbox-content {
-    display: flex;
-    flex-direction: column;
-    gap: var(--jsm-space-2xs);
-  }
-
-  .checkbox-label-text {
-    font-weight: var(--jsm-font-weight-medium);
-    color: var(--jsm-color-fg);
-  }
-
-  .checkbox-desc {
-    font-size: var(--jsm-font-size-xs);
-    color: var(--jsm-color-fg-secondary);
-  }
-
-  .info-banner {
-    display: flex;
-    align-items: center;
-    gap: var(--jsm-space-sm);
-    padding: var(--jsm-space-md);
-    background: color-mix(in srgb, var(--jsm-color-info) 10%, var(--jsm-color-bg));
-    border: 1px solid color-mix(in srgb, var(--jsm-color-info) 30%, var(--jsm-color-bg));
-    border-radius: var(--jsm-radius-md);
-    font-size: var(--jsm-font-size-sm);
-    color: var(--jsm-color-fg);
-  }
-
-  .tag-list {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--jsm-space-xs);
-    margin-bottom: var(--jsm-space-sm);
-  }
-
-  .tag {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--jsm-space-xs);
-    padding: var(--jsm-space-2xs) var(--jsm-space-sm);
-    background: var(--jsm-badge-bg);
-    color: var(--jsm-badge-fg);
-    border-radius: var(--jsm-badge-radius);
-    font-size: var(--jsm-font-size-xs);
-  }
-
-  .tag-remove {
-    background: none;
-    border: none;
-    color: inherit;
-    cursor: pointer;
-    padding: 0;
-    display: flex;
-    opacity: 0.7;
-  }
-
-  .tag-remove:hover {
-    opacity: 1;
-    color: var(--jsm-color-error);
-  }
-
-  .tag-empty {
-    font-size: var(--jsm-font-size-sm);
-    color: var(--jsm-color-fg-muted);
-    font-style: italic;
-  }
-
-  .tag-input-row {
-    display: flex;
-    gap: var(--jsm-space-sm);
-    align-items: center;
-  }
-
-  .feedback-banner {
-    display: flex;
-    align-items: center;
-    gap: var(--jsm-space-sm);
-    padding: var(--jsm-space-md) var(--jsm-space-xl);
-    border-top: 1px solid var(--jsm-color-border);
-    font-size: var(--jsm-font-size-sm);
-  }
-
-  .feedback-banner.error {
-    color: var(--jsm-color-error);
-    background: color-mix(in srgb, var(--jsm-color-error) 10%, var(--jsm-color-bg));
-    border: 1px solid color-mix(in srgb, var(--jsm-color-error) 20%, var(--jsm-color-border));
-    border-radius: var(--jsm-radius-md);
-  }
-
-  .btn-sm {
-    padding: var(--jsm-space-xs) var(--jsm-space-sm);
-    font-size: var(--jsm-font-size-sm);
-  }
-
-  .form-section {
-    display: flex;
-    flex-direction: column;
-    gap: var(--jsm-space-md);
-    padding: var(--jsm-space-lg);
-    border: 1px solid var(--jsm-color-border-secondary);
-    border-radius: var(--jsm-radius-lg);
-    background: var(--jsm-color-bg);
-  }
-
-  .section-title {
-    display: flex;
-    align-items: center;
-    gap: var(--jsm-space-sm);
-    font-size: var(--jsm-font-size-md);
-    font-weight: var(--jsm-font-weight-semibold);
-    color: var(--jsm-color-fg);
-    margin: 0;
-  }
-
-  @media (max-width: 900px) {
-    .intro-panel {
-      grid-template-columns: 1fr;
-    }
-
-    .type-cards {
-      flex-wrap: wrap;
-    }
   }
 </style>

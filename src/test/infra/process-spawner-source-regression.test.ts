@@ -1,5 +1,5 @@
 /**
- * INFRA-011: Regression guard — ProcessSpawner must use shell: false (CI also greps for shell:true in src/).
+ * INFRA-011: Regression guard — ProcessSpawner must use shell: false (CI also greps for shell + ":true" in src/).
  * Source-level check avoids non-configurable child_process.spawn in the test runtime.
  */
 import { describe, it, expect } from 'vitest';

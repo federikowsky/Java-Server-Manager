@@ -24,7 +24,7 @@ export const HOOK_EVENT_OPTIONS: { value: HookEvent; label: string }[] = getDefa
 
 export const HOOK_KIND_OPTIONS: { value: HookKind; label: string }[] = [
   { value: 'command', label: 'Command' },
-  { value: 'vscodeTask', label: 'VS Code Task' },
+  { value: 'vscodeTask', label: 'Task' },
 ];
 
 export {

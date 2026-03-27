@@ -17,7 +17,12 @@ import { PortScanner } from '@infra/ports';
 import { PidManager } from '@infra/pid';
 import { PluginRegistry } from '@plugins/registry/PluginRegistry';
 import { TomcatPlugin } from '@plugins/tomcat/TomcatPlugin';
-import { ConfigService, WorkspaceServiceRegistry, makeWorkspaceServerKey } from '@app/config';
+import {
+  ConfigService,
+  WorkspaceServiceRegistry,
+  makeWorkspaceServerKey,
+  type WorkspaceServiceEntry,
+} from '@app/config';
 import { ServerLifecycle } from '@app/server';
 import { ManagedInstancePathResolver, ServerProvisioningService, ServerDiscoveryService } from '@app/server';
 import { DeploymentService } from '@app/deployment';
@@ -42,6 +47,11 @@ const disposables: vscode.Disposable[] = [];
 
 function workspaceStorageId(workspaceFolderUri: string): string {
   return createHash('sha1').update(workspaceFolderUri).digest('hex').slice(0, 12);
+}
+
+function workspaceFolderUriString(folder: vscode.WorkspaceFolder): string {
+  const uri = folder.uri as { toString?: () => string; fsPath?: string };
+  return typeof uri?.toString === 'function' ? uri.toString() : uri?.fsPath ?? '';
 }
 
 // ── Activate ────────────────────────────────────────────────────────────────
@@ -204,43 +214,43 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
 
   const hookRunner = new HookRunner({ executor: hookExecutor, logger, trustGate });
 
-  const workspaceServiceRegistry = new WorkspaceServiceRegistry(
-    workspaceFolders.map(folder => {
-      const scopeUri = typeof (folder.uri as any)?.toString === 'function'
-        ? (folder.uri as any).toString()
-        : (folder.uri as any)?.fsPath ?? '';
-      const scope = {
-        uri: scopeUri,
-        name: folder.name,
-        fsPath: folder.uri.fsPath,
-      };
-      const configRepo = new ConfigRepo(folder.uri.fsPath, logger);
-      const configService = new ConfigService({
-        repo: configRepo,
-        validator,
-        bus: eventBus,
-        logger,
-        workspaceFolderUri: scope.uri,
-        trustGate,
-      });
-      const managedInstancePathResolver = new ManagedInstancePathResolver(
-        path.join(baseManagedStorageRoot, 'workspaces', workspaceStorageId(scope.uri), 'instances'),
-      );
-      const provisioningService = new ServerProvisioningService({
-        configService,
-        pluginRegistry,
-        pathResolver: managedInstancePathResolver,
-        logger,
-        trustGate,
-      });
+  function buildWorkspaceServiceEntry(folder: vscode.WorkspaceFolder): WorkspaceServiceEntry {
+    const scopeUri = workspaceFolderUriString(folder);
+    const scope = {
+      uri: scopeUri,
+      name: folder.name,
+      fsPath: folder.uri.fsPath,
+    };
+    const configRepo = new ConfigRepo(folder.uri.fsPath, logger);
+    const configService = new ConfigService({
+      repo: configRepo,
+      validator,
+      bus: eventBus,
+      logger,
+      workspaceFolderUri: scope.uri,
+      trustGate,
+    });
+    const managedInstancePathResolver = new ManagedInstancePathResolver(
+      path.join(baseManagedStorageRoot, 'workspaces', workspaceStorageId(scope.uri), 'instances'),
+    );
+    const provisioningService = new ServerProvisioningService({
+      configService,
+      pluginRegistry,
+      pathResolver: managedInstancePathResolver,
+      logger,
+      trustGate,
+    });
 
-      return {
-        scope,
-        configService,
-        provisioningService,
-        configFilePath: configRepo.filePath,
-      };
-    }),
+    return {
+      scope,
+      configService,
+      provisioningService,
+      configFilePath: configRepo.filePath,
+    };
+  }
+
+  const workspaceServiceRegistry = new WorkspaceServiceRegistry(
+    workspaceFolders.map(buildWorkspaceServiceEntry),
     logger,
   );
 
@@ -310,6 +320,41 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
     autoSyncService.rebindWatchers(serverKey, cfg);
   }
 
+  async function loadAndRegisterServersForWorkspace(
+    scopeUri: string,
+    scopeNameForLog: string,
+  ): Promise<Array<{ serverKey: ServerId; config: ReturnType<typeof workspaceServiceRegistry.getAllServers>[number]['config'] }>> {
+    const entry = workspaceServiceRegistry.getEntry(scopeUri);
+    if (!entry) {
+      return [];
+    }
+
+    const loadResult = await entry.configService.loadWorkspace();
+    if (!loadResult.ok) {
+      logger.error(`Failed to load workspace config for '${scopeNameForLog}'`, loadResult.error);
+      return [];
+    }
+
+    const out: Array<{ serverKey: ServerId; config: ReturnType<typeof workspaceServiceRegistry.getAllServers>[number]['config'] }> = [];
+    for (const config of loadResult.value) {
+      const serverKey = makeWorkspaceServerKey(scopeUri, config.id);
+      const queue = opQueueFactory(serverKey);
+      lifecycle.register(serverKey, config, queue);
+      out.push({ serverKey, config });
+    }
+    return out;
+  }
+
+  function teardownWorkspaceFolder(scopeUri: string): void {
+    const records = workspaceServiceRegistry.getServers(scopeUri);
+    for (const record of records) {
+      const { serverKey } = record;
+      lifecycle.unregister(serverKey);
+      logChannel.detach(serverKey);
+      autoSyncService.purgeServerWatchState(serverKey);
+    }
+  }
+
   const templateService = new TemplateService({
     globalStore,
     workspaceStore,
@@ -376,10 +421,12 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
     ...registerServerCommands({
       lifecycle,
       pluginRegistry,
+      logChannel,
       workspaceRegistry: workspaceServiceRegistry,
       discoveryService,
       treeProvider,
       schemaValidator: validator,
+      openDashboard: target => dashboardPanel.show(target),
     }),
     ...registerDeploymentCommands({
       workspaceRegistry: workspaceServiceRegistry,
@@ -454,8 +501,6 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
         channel.clear();
         logChannel.showLogs(serverId, name);
       } else if (state === 'running') {
-        const channel = logChannel.getChannel(serverId, name);
-        channel.clear();
         logChannel.showLogs(serverId, name);
         if (config) autoSyncService.rebindWatchers(serverId, config);
       } else if (state === 'stopped' || state === 'error') {
@@ -473,25 +518,35 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
     }),
   );
 
+  disposables.push(
+    vscode.workspace.onDidChangeWorkspaceFolders(async (e) => {
+      for (const folder of e.removed) {
+        const scopeUri = workspaceFolderUriString(folder);
+        teardownWorkspaceFolder(scopeUri);
+        workspaceServiceRegistry.removeEntry(scopeUri);
+      }
+      for (const folder of e.added) {
+        const entry = buildWorkspaceServiceEntry(folder);
+        workspaceServiceRegistry.registerEntry(entry);
+        const loaded = await loadAndRegisterServersForWorkspace(entry.scope.uri, entry.scope.name);
+        if (loaded.length > 0) {
+          lifecycle.reconcileRunningServers(loaded).catch((err: unknown) => {
+            logger.error('Reconciliation failed after workspace folder added', err);
+          });
+        }
+      }
+      if (e.removed.length > 0 || e.added.length > 0) {
+        treeProvider.forceRefresh();
+      }
+    }),
+  );
+
   // ── 9. Load workspace ────────────────────────────────────────────────
 
   const loadedServers: Array<{ serverKey: ServerId; config: ReturnType<typeof workspaceServiceRegistry.getAllServers>[number]['config'] }> = [];
   for (const scope of workspaceServiceRegistry.getWorkspaceScopes()) {
-    const entry = workspaceServiceRegistry.getEntry(scope.uri);
-    if (!entry) continue;
-
-    const loadResult = await entry.configService.loadWorkspace();
-    if (!loadResult.ok) {
-      logger.error(`Failed to load workspace config for '${scope.name}'`, loadResult.error);
-      continue;
-    }
-
-    for (const config of loadResult.value) {
-      const serverKey = makeWorkspaceServerKey(scope.uri, config.id);
-      const queue = opQueueFactory(serverKey);
-      lifecycle.register(serverKey, config, queue);
-      loadedServers.push({ serverKey, config });
-    }
+    const chunk = await loadAndRegisterServersForWorkspace(scope.uri, scope.name);
+    loadedServers.push(...chunk);
   }
 
   treeProvider.forceRefresh();

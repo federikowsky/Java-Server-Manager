@@ -36,7 +36,10 @@ const mockCreateOutputChannel = vi.fn(() => ({
   show: vi.fn(),
   dispose: vi.fn(),
 }));
-const mockCreateTreeView = vi.fn(() => ({ dispose: vi.fn() }));
+const mockCreateTreeView = vi.fn(() => ({
+  dispose: vi.fn(),
+  onDidChangeSelection: vi.fn(() => ({ dispose: vi.fn() })),
+}));
 const mockRegisterCommand = vi.fn((_id: string, _handler: unknown) => ({ dispose: vi.fn() }));
 const mockOnDidEndTaskProcess = vi.fn(() => ({ dispose: vi.fn() }));
 
@@ -67,6 +70,7 @@ vi.mock('vscode', () => ({
     get workspaceFolders() { return workspaceFolders; },
     openTextDocument: vi.fn(async () => ({})),
     isTrusted: true,
+    onDidChangeWorkspaceFolders: vi.fn(() => ({ dispose: vi.fn() })),
   },
   env: {
     clipboard: { writeText: vi.fn() },
@@ -481,7 +485,7 @@ describe('Extension Activation', () => {
     expect(mockTreeProviderRequestRefresh).toHaveBeenCalled();
   });
 
-  it('should clear and show log channel when a server transitions to running', async () => {
+  it('should clear and show log channel when a server transitions to starting', async () => {
     workspaceFolders = [{ uri: { fsPath: '/test/workspace' } }];
     setupWorkspaceScope();
     const server = { id: 'srv-1', name: 'Test', type: 'tomcat' };
@@ -489,20 +493,33 @@ describe('Extension Activation', () => {
     mockGetServerRecordByKey.mockReturnValue({ config: server });
 
     await activate(ctx);
-    // reset any previous spies
+    mockChannelInstance = null;
+    mockLogChannelInstance?.showLogs.mockClear();
+
+    eventHandlers.get('ServerStateChanged')?.({ serverId: 'srv-1', state: 'starting' });
+
+    expect(mockChannelInstance).not.toBeNull();
+    expect(mockChannelInstance?.clear).toHaveBeenCalled();
+    expect(mockLogChannelInstance?.showLogs).toHaveBeenCalledWith('srv-1', 'Test');
+  });
+
+  it('should show logs and rebind autosync on running without clearing the channel', async () => {
+    workspaceFolders = [{ uri: { fsPath: '/test/workspace' } }];
+    setupWorkspaceScope();
+    const server = { id: 'srv-1', name: 'Test', type: 'tomcat' };
+    mockGetServer.mockReturnValue(server);
+    mockGetServerRecordByKey.mockReturnValue({ config: server });
+
+    await activate(ctx);
     mockChannelInstance = null;
     mockLogChannelInstance?.showLogs.mockClear();
 
     eventHandlers.get('ServerStateChanged')?.({ serverId: 'srv-1', state: 'running' });
 
-    // channel should have been created and cleared
-    expect(mockChannelInstance).not.toBeNull();
-    expect(mockChannelInstance?.clear).toHaveBeenCalled();
-    // logs should be shown
     expect(mockLogChannelInstance?.showLogs).toHaveBeenCalledWith('srv-1', 'Test');
-    // autosync should be enabled for running server
     expect(mockAutoSyncSuspend).not.toHaveBeenCalled();
     expect(mockAutoSyncRebindWatchers).toHaveBeenCalledWith('srv-1', server);
+    // Production showLogs → getChannel → no channel.clear() on running (only on starting).
   });
 
   /* ── Negative Path: config load failure ──────────────────────────────── */

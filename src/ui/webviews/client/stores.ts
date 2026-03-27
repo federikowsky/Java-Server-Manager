@@ -5,6 +5,9 @@
 import { writable } from 'svelte/store';
 import type { DashboardNavigationTarget, FormSchema, SpaServerRecord, SpaSettings } from '../protocol';
 
+/** Mirrors `syncState` payload in protocol (host → webview). */
+export type SpaTemplateRow = { template: unknown; scope: 'global' | 'workspace' };
+
 /** The form schema sent by the host on init. */
 export const schema = writable<FormSchema | null>(null);
 
@@ -34,7 +37,6 @@ export const globalError = writable<string>('');
 
 // ── SPA Mode Stores ─────────────────────────────────────────────────────────
 
-export type EntityType = DashboardNavigationTarget['type'];
 export type ActiveEntity = DashboardNavigationTarget;
 
 export const activeEntity = writable<ActiveEntity>({ type: 'welcome' });
@@ -42,10 +44,10 @@ export const activeEntity = writable<ActiveEntity>({ type: 'welcome' });
 export const spaState = writable<{
   initialized: boolean;
   servers: SpaServerRecord[];
-  runtimeStates: Record<string, any>;
+  runtimeStates: Record<string, unknown>;
   deploymentStates: Record<string, Record<string, string>>; // serverKey -> deploymentId -> state
-  templates: Array<{ template: any; scope: 'global' | 'workspace' }>;
-  capabilities: Record<string, any>;
+  templates: SpaTemplateRow[];
+  capabilities: Record<string, unknown>;
   workspaceFolders: Array<{ uri: string; name: string }>;
   currentFormSchema?: import('../protocol').FormSchema;
   currentFormId?: string;
@@ -54,6 +56,12 @@ export const spaState = writable<{
   currentFormTargetScope?: 'global' | 'workspace';
   settings?: SpaSettings;
   hookTaskOptions?: Array<{ value: string; label: string }>;
+  /** Primary shell tab (tree = inventory; SPA = detail / templates / settings). */
+  globalTab: 'home' | 'templates' | 'settings';
+  /** When returning from Hooks Editor, reopen server tab (spec §29). */
+  serverDetailResumeTab?: 'overview' | 'config' | 'deployments';
+  /** From host syncState; false limits side-effecting actions (plan §7.2). */
+  workspaceTrusted: boolean;
 }>({
   initialized: false,
   servers: [],
@@ -63,7 +71,14 @@ export const spaState = writable<{
   capabilities: {},
   workspaceFolders: [],
   hookTaskOptions: [],
+  globalTab: 'home',
+  workspaceTrusted: true,
 });
+
+/**
+ * MRU server ids opened from tree/dashboard (in-memory only; plan §7.2 recently opened).
+ */
+export const homeRecentServerIds = writable<string[]>([]);
 
 /** Browse dialog result — updated when host sends 'browsed' message */
 export const browseResult = writable<{ field: string; path: string } | null>(null);
@@ -78,3 +93,33 @@ export const lastCommandResult = writable<{
   message?: string;
   data?: Record<string, unknown>;
 } | null>(null);
+
+/** Full-screen Hooks Editor: draft hooks + commit back to caller + restore navigation (spec §29). */
+export const hooksEditorSession = writable<{
+  draft: unknown[];
+  fieldName: string;
+  commit: (hooks: unknown[]) => void;
+  returnTarget: ActiveEntity;
+} | null>(null);
+
+/**
+ * Drop host-form mirror in spaState + related stores so the next editor session
+ * must re-request schema (host `currentFormId` and webview `isFormReady` stay aligned).
+ */
+export function clearSpaFormMirror(): void {
+  spaState.update(s => ({
+    ...s,
+    currentFormSchema: undefined,
+    currentFormId: undefined,
+    currentFormTargetId: undefined,
+    currentFormTargetWorkspaceFolderUri: undefined,
+    currentFormTargetScope: undefined,
+  }));
+  formId.set('');
+  schema.set(null);
+  mode.set('create');
+  fieldErrors.set({});
+  formData.set({});
+  browseResult.set(null);
+  submitting.set(false);
+}

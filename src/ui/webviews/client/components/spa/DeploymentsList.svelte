@@ -72,15 +72,13 @@
   function overflowItems(dep: DeploymentConfig): DsOverflowMenuItem[] {
     const deploying = isDeploying(dep.id);
     const items: DsOverflowMenuItem[] = [];
-    if (deploying) {
-      items.push({
-        id: 'redeploy',
-        label: 'Redeploy',
-        icon: 'refresh',
-        disabled: true,
-        onSelect: () => {},
-      });
-    }
+    items.push({
+      id: 'redeploy',
+      label: 'Redeploy',
+      icon: 'refresh',
+      disabled: deploying,
+      onSelect: () => handleAction('jsm.deployment.redeploy', dep),
+    });
     items.push(
       {
         id: 'reveal',

@@ -126,6 +126,14 @@
     });
   }
 
+  function handleDetectJavaHome() {
+    postToHost({
+      v: WEBVIEW_PROTOCOL_VERSION,
+      command: 'executeCommand',
+      id: 'jsm.java.detect',
+    });
+  }
+
   function handleReset() {
     defaultHttpPort = baseline.http;
     defaultDebugPort = baseline.debug;
@@ -183,6 +191,9 @@
             />
             <button type="button" class="btn btn-secondary" onclick={handleBrowseJava} aria-label="Browse default Java home">
               <Icon name="folder" size={14} />
+            </button>
+            <button type="button" class="btn btn-secondary" onclick={handleDetectJavaHome} title="Detect from $JAVA_HOME" aria-label="Detect JAVA_HOME from environment">
+              <Icon name="search" size={14} />
             </button>
           </div>
           <p class="field-help">Pre-filled JAVA_HOME for newly created servers</p>

@@ -135,7 +135,7 @@
     position: absolute;
     right: 0;
     top: calc(100% + 2px);
-    z-index: 40;
+    z-index: 1000;
     min-width: 11rem;
     padding: var(--jsm-space-2xs);
     display: flex;

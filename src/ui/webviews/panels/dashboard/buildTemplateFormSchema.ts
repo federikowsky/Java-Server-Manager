@@ -66,6 +66,13 @@ export function buildTemplateFormSchema(
             label: 'JAVA_HOME',
             type: 'path',
             helpText: 'Optional default JDK path for servers created from this template.',
+            actionButtons: [
+              {
+                id: 'autodiscover',
+                title: 'Detect Java Home',
+                icon: 'search',
+              },
+            ],
           },
           {
             name: 'host',

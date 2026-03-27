@@ -343,6 +343,9 @@ export class DashboardPanel implements vscode.Disposable {
         if (msg.actionId === 'autodiscover' && msg.field === 'runtime.homePath') {
           await this.handleAutodiscover();
         }
+        if (msg.actionId === 'autodiscover' && msg.field === 'javaHome') {
+          await this.handleJavaDetect();
+        }
         break;
 
       case 'deleteServer':

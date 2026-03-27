@@ -149,14 +149,14 @@
 
 <style>
   .hooks-inline-summary {
-    margin: 0 0 var(--jsm-space-sm);
+    margin: 0 0 var(--jsm-space-2xs);
     font-size: var(--jsm-font-size-sm);
     color: var(--jsm-color-fg-secondary);
   }
   .hooks-open-btn {
     display: inline-flex;
     align-items: center;
-    padding: var(--jsm-space-sm) var(--jsm-space-md);
+    padding: var(--jsm-space-xs) var(--jsm-space-sm);
     font-family: var(--jsm-font-family);
     font-size: var(--jsm-font-size-sm);
     font-weight: var(--jsm-font-weight-semibold);

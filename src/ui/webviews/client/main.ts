@@ -6,6 +6,7 @@
  */
 
 import './styles/design-tokens.css';
+import './styles/ds.css';
 import { mount } from 'svelte';
 import App from './App.svelte';
 

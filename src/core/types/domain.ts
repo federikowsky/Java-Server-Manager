@@ -106,7 +106,7 @@ export interface DeploymentConfig {
   sourcePath: string;
   /** Target name in webapps/ AND display name. */
   deployName: string;
-  /** Default: 'auto' for exploded, 'manual' for war. */
+  /** `manual` vs `auto` file-triggered sync (exploded tree or WAR file when server autosync is enabled). */
   syncMode: SyncMode;
   /** Enable hot-reload for exploded deployments. Default: false. */
   hotReload: boolean;

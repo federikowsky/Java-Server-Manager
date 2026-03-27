@@ -95,6 +95,19 @@ function mockHookRunner() {
   };
 }
 
+function mockDeployService() {
+  return {
+    fullRedeploy: vi.fn(async () => ok(undefined)),
+    undeploy: vi.fn(async () => ok(undefined)),
+    redeployAll: vi.fn(async () => {}),
+    deployUndeployed: vi.fn(async () => {}),
+    runHealthChecksForServer: vi.fn(async () => {}),
+    sync: vi.fn(async () => ok(undefined)),
+    getDeploymentState: vi.fn(() => 'undeployed' as const),
+    getDeploymentHealth: vi.fn(),
+  };
+}
+
 function makeHook(event: HookConfig['event']): HookConfig {
   return {
     id: `hook-${event}`,
@@ -135,6 +148,7 @@ describe('ServerLifecycle', () => {
       debugAttacher: debugAttacher as never,
       logger: mockLogger(),
       hookRunner: hookRunner as never,
+      deployService: mockDeployService() as never,
     });
   });
 
@@ -185,6 +199,7 @@ describe('ServerLifecycle', () => {
         debugAttacher: debugAttacher as never,
         logger,
         getOutputSink: () => ({ append, appendLine, clear }),
+        deployService: mockDeployService() as never,
       });
 
       lifecycle.register('srv-1', makeServer(), queue as never);
@@ -643,6 +658,7 @@ describe('ServerLifecycle', () => {
         debugAttacher: debugAttacher as never,
         logger: mockLogger(),
         trustGate: { isTrusted: () => false },
+        deployService: mockDeployService() as never,
       });
     });
 
@@ -680,6 +696,7 @@ describe('ServerLifecycle', () => {
         debugAttacher: debugAttacher as never,
         logger: mockLogger(),
         trustGate: { isTrusted: () => true },
+        deployService: mockDeployService() as never,
       });
       const queue = mockQueue();
       trustedLifecycle.register('srv-1', makeServer(), queue as never);

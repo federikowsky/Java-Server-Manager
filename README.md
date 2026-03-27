@@ -35,6 +35,10 @@ To launch the extension in development, open the workspace in VS Code and press 
 - [docs](./docs): canonical specifications and supporting project documents
 - [.github](./.github): shared Copilot customizations, agents, prompts, skills, and hooks
 
+## Configuration note
+
+JSM expects server and deployment changes through the extension UI or registered commands. Manually editing the workspace `jsm.servers.json` file is not a supported workflow for refreshing autosync watchers or lifecycle state.
+
 ## Key documents
 
 - [docs/documentation-map.md](./docs/documentation-map.md): canonical documentation map and source-of-truth rules

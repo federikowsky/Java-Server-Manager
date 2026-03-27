@@ -124,6 +124,7 @@ Core orchestration owns:
 
 - lifecycle operation ordering
 - deployment orchestration
+- a per-server operation queue that serializes lifecycle-related deployment work, tree-initiated deploy actions, and autosync-submitted sync batches
 - trust gating
 - stable domain contracts
 - event distribution
@@ -220,6 +221,8 @@ A discovered installation becomes a managed server only after explicit user acti
 
 Lifecycle operations are explicit user-initiated actions against managed servers. Operations are serialized per managed server to preserve deterministic state transitions and to prevent conflicting side effects.
 
+Serialization is implemented as a per-server operation queue in core orchestration. Cooperative cancellation for long-running queued work shown in progress UI is aligned with the same cancellation path as explicit cancel-operation commands for that server.
+
 Canonical lifecycle actions include:
 
 - start in run mode
@@ -252,6 +255,8 @@ Deployment orchestration decides when a deployment path may use a narrower strat
 ### 9.3 Autosync and Hot Reload
 
 Autosync is a deployment convenience for supported exploded deployments. It observes local file changes and turns eligible batches into deployment sync requests when the target server is in a suitable runtime state.
+
+Eligible batches are submitted as deployment sync operations on the same per-server operation queue used for other deployment and lifecycle work, so autosync does not run as an unordered parallel channel relative to user-initiated deploy actions. Failures that occur after enqueue, or enqueue rejection, feed autosync’s local failure tracking for storm protection and cooldown.
 
 Autosync and hot reload are conveniences, not separate configuration authorities. Their behavior remains subordinate to deployment definitions, runtime state, and plugin capabilities.
 

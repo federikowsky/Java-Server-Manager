@@ -4,14 +4,21 @@
   import { postToHost } from '../../bridge';
   import { WEBVIEW_PROTOCOL_VERSION } from '../../../protocol';
   import Icon from '../Icon.svelte';
+  import RootPageHeader from '../ds/RootPageHeader.svelte';
+  import SectionBlock from '../ds/SectionBlock.svelte';
+  import DetailRows from '../ds/DetailRows.svelte';
 
   let state = $state($spaState);
-  const unsubscribeSpaState = spaState.subscribe(s => { state = s; });
+  const unsubscribeSpaState = spaState.subscribe(s => {
+    state = s;
+  });
 
   let defaultHttpPort = $state(8080);
   let defaultDebugPort = $state(5005);
   let defaultJavaHome = $state('');
-  let showStatusInSidebar = $state(true);
+
+  /** Last values applied from host sync — reset restores these (spec §25.4). */
+  let baseline = $state({ http: 8080, debug: 5005, java: '' });
 
   let settingsFingerprint = $state('');
   let saving = $state(false);
@@ -63,14 +70,29 @@
     defaultHttpPort = state.settings.defaultHttpPort;
     defaultDebugPort = state.settings.defaultDebugPort;
     defaultJavaHome = state.settings.defaultJavaHome;
-    showStatusInSidebar = state.settings.showStatusInSidebar;
+    baseline = {
+      http: state.settings.defaultHttpPort,
+      debug: state.settings.defaultDebugPort,
+      java: state.settings.defaultJavaHome,
+    };
   });
+
+  let dirty = $derived(
+    defaultHttpPort !== baseline.http
+    || defaultDebugPort !== baseline.debug
+    || defaultJavaHome !== baseline.java,
+  );
+
+  let workspaceRows = $derived([
+    { label: 'Workspace folders', value: String(state.workspaceFolders.length) },
+    { label: 'Configured servers', value: String(state.servers.length) },
+    { label: 'Templates', value: String(state.templates.length) },
+  ]);
 
   function validatePort(port: number, label: string): string {
     if (!Number.isFinite(port) || port < 1 || port > 65535) {
       return `${label} must be between 1 and 65535.`;
     }
-
     return '';
   }
 
@@ -94,22 +116,48 @@
       command: 'executeCommand',
       id: 'jsm.settings.save',
       requestId: pendingRequestId,
-      args: [{
-        defaultHttpPort,
-        defaultDebugPort,
-        defaultJavaHome,
-        showStatusInSidebar,
-      }],
+      args: [
+        {
+          defaultHttpPort,
+          defaultDebugPort,
+          defaultJavaHome,
+        },
+      ],
+    });
+  }
+
+  function handleDetectJavaHome() {
+    postToHost({
+      v: WEBVIEW_PROTOCOL_VERSION,
+      command: 'executeCommand',
+      id: 'jsm.java.detect',
     });
   }
 
   function handleReset() {
-    defaultHttpPort = 8080;
-    defaultDebugPort = 5005;
-    defaultJavaHome = '';
-    showStatusInSidebar = true;
+    defaultHttpPort = baseline.http;
+    defaultDebugPort = baseline.debug;
+    defaultJavaHome = baseline.java;
     saveError = '';
     saveMessage = '';
+  }
+
+  function handleExportInventory() {
+    postToHost({
+      v: WEBVIEW_PROTOCOL_VERSION,
+      command: 'executeCommand',
+      id: 'jsm.server.export',
+      args: [],
+    });
+  }
+
+  function handleImportInventory() {
+    postToHost({
+      v: WEBVIEW_PROTOCOL_VERSION,
+      command: 'executeCommand',
+      id: 'jsm.server.import',
+      args: [],
+    });
   }
 
   function handleBrowseJava() {
@@ -123,49 +171,38 @@
 </script>
 
 <div class="settings-view">
-  <div class="header">
-    <div class="header-main">
-      <Icon name="settings" size={24} />
-      <div class="header-text">
-        <h1>Preferences</h1>
-        <p class="subtitle">Configure creation defaults and interface preferences</p>
-      </div>
-    </div>
-  </div>
+  <div class="settings-scroll jsm-page-padding jsm-stack-lg">
+    <RootPageHeader
+      title="Settings"
+      subtitle="Defaults, environment, inventory backup, and workspace context"
+    />
 
-  <div class="settings-content">
-    <!-- Defaults Section -->
-    <div class="settings-section">
-      <h3 class="section-title">
-        <Icon name="settings" size={16} />
-        <span>Defaults</span>
-      </h3>
-
-      <div class="setting-row">
-        <div class="setting-info">
-          <span class="setting-name">Default Java Home</span>
-          <span class="setting-desc">Pre-filled JAVA_HOME for newly created servers</span>
+    <SectionBlock title="Defaults">
+      <div class="stack-fields">
+        <div class="field-block">
+          <label class="field-label" for="set-java">Default Java Home</label>
+          <div class="path-row">
+            <input
+              id="set-java"
+              type="text"
+              class="field-input"
+              bind:value={defaultJavaHome}
+              placeholder="Use system default"
+            />
+            <button type="button" class="btn btn-secondary" onclick={handleBrowseJava} aria-label="Browse default Java home">
+              <Icon name="folder" size={14} />
+            </button>
+            <button type="button" class="btn btn-secondary" onclick={handleDetectJavaHome} title="Detect from $JAVA_HOME" aria-label="Detect JAVA_HOME from environment">
+              <Icon name="search" size={14} />
+            </button>
+          </div>
+          <p class="field-help">Pre-filled JAVA_HOME for newly created servers</p>
         </div>
-        <div class="setting-control path-row">
+
+        <div class="field-block">
+          <label class="field-label" for="set-http">Default HTTP Port</label>
           <input
-            type="text"
-            class="field-input"
-            bind:value={defaultJavaHome}
-            placeholder="Use system default"
-          />
-          <button type="button" class="btn btn-secondary" onclick={handleBrowseJava} aria-label="Browse default Java home">
-            <Icon name="folder" size={14} />
-          </button>
-        </div>
-      </div>
-
-      <div class="setting-row">
-        <div class="setting-info">
-          <span class="setting-name">Default HTTP Port</span>
-          <span class="setting-desc">Pre-filled HTTP port for newly created servers</span>
-        </div>
-        <div class="setting-control">
-          <input
+            id="set-http"
             type="number"
             class="field-input port-input"
             bind:value={defaultHttpPort}
@@ -173,15 +210,11 @@
             max="65535"
           />
         </div>
-      </div>
 
-      <div class="setting-row">
-        <div class="setting-info">
-          <span class="setting-name">Default Debug Port</span>
-          <span class="setting-desc">Pre-filled debug port for newly created servers</span>
-        </div>
-        <div class="setting-control">
+        <div class="field-block">
+          <label class="field-label" for="set-dbg">Default Debug Port</label>
           <input
+            id="set-dbg"
             type="number"
             class="field-input port-input"
             bind:value={defaultDebugPort}
@@ -190,52 +223,25 @@
           />
         </div>
       </div>
-    </div>
+    </SectionBlock>
 
-    <!-- UI Preferences Section -->
-    <div class="settings-section">
-      <h3 class="section-title">
-        <Icon name="layout" size={16} />
-        <span>Interface</span>
-      </h3>
-
-      <div class="setting-row">
-        <label class="checkbox-label">
-          <input type="checkbox" class="field-checkbox" bind:checked={showStatusInSidebar} />
-          <div class="setting-info">
-            <span class="setting-name">Show server status in sidebar</span>
-            <span class="setting-desc">Display colored status indicators next to server names</span>
-          </div>
-        </label>
+    <SectionBlock title="Inventory Backup">
+      <p class="section-lead">Export or import inventory as JSON</p>
+      <div class="btn-row">
+        <button type="button" class="btn btn-secondary" onclick={handleExportInventory}>
+          <Icon name="download" size={16} />
+          <span>Export Servers</span>
+        </button>
+        <button type="button" class="btn btn-secondary" onclick={handleImportInventory}>
+          <Icon name="upload" size={16} />
+          <span>Import Servers</span>
+        </button>
       </div>
-    </div>
+    </SectionBlock>
 
-    <!-- Workspace Info Section -->
-    <div class="settings-section">
-      <h3 class="section-title">
-        <Icon name="folder" size={16} />
-        <span>Workspace</span>
-      </h3>
-
-      <div class="workspace-info">
-        <div class="info-row">
-          <span class="info-label">Workspace Folders:</span>
-          <span class="info-value">{state.workspaceFolders.length}</span>
-        </div>
-        <div class="info-row">
-          <span class="info-label">Configured Servers:</span>
-          <span class="info-value">{state.servers.length}</span>
-        </div>
-        <div class="info-row">
-          <span class="info-label">Templates:</span>
-          <span class="info-value">{state.templates.length}</span>
-        </div>
-        <div class="info-row">
-          <span class="info-label">Plugin Types:</span>
-          <span class="info-value">{Object.keys(state.capabilities).join(', ') || 'None'}</span>
-        </div>
-      </div>
-    </div>
+    <SectionBlock title="Workspace">
+      <DetailRows rows={workspaceRows} />
+    </SectionBlock>
   </div>
 
   {#if saveError}
@@ -250,11 +256,10 @@
     </div>
   {/if}
 
-  <!-- Actions -->
-  <div class="settings-actions">
+  <div class="settings-actions" class:dirty>
     <button type="button" class="btn btn-secondary" onclick={handleReset}>
       <Icon name="refresh" size={14} />
-      <span>Reset to Defaults</span>
+      <span>Reset</span>
     </button>
     <button type="button" class="btn btn-primary" onclick={handleSave} disabled={saving}>
       {#if saving}
@@ -262,7 +267,7 @@
       {:else}
         <Icon name="check" size={14} />
       {/if}
-      <span>{saving ? 'Saving...' : 'Save Settings'}</span>
+      <span>{saving ? 'Saving…' : 'Save'}</span>
     </button>
   </div>
 </div>
@@ -272,127 +277,53 @@
     display: flex;
     flex-direction: column;
     height: 100%;
+    min-height: 0;
+    background: var(--jsm-surface-0);
   }
 
-  .header {
-    padding: var(--jsm-space-xl);
-    border-bottom: 1px solid var(--jsm-color-border);
-  }
-
-  .header-main {
-    display: flex;
-    align-items: center;
-    gap: var(--jsm-space-md);
-    color: var(--jsm-color-primary);
-  }
-
-  .header-text h1 {
-    margin: 0;
-    font-size: var(--jsm-font-size-2xl);
-    font-weight: var(--jsm-font-weight-medium);
-    color: var(--jsm-color-fg);
-  }
-
-  .subtitle {
-    margin: var(--jsm-space-2xs) 0 0;
-    font-size: var(--jsm-font-size-sm);
-    color: var(--jsm-color-fg-secondary);
-  }
-
-  .settings-content {
+  .settings-scroll {
     flex: 1;
+    min-height: 0;
     overflow-y: auto;
-    padding: var(--jsm-space-xl);
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .stack-fields {
     display: flex;
     flex-direction: column;
     gap: var(--jsm-space-lg);
   }
 
-  .settings-section {
-    border: 1px solid var(--jsm-color-border-secondary);
-    border-radius: var(--jsm-radius-lg);
-    padding: var(--jsm-space-lg);
-    background: var(--jsm-color-bg-secondary);
-  }
-
-  .section-title {
-    display: flex;
-    align-items: center;
-    gap: var(--jsm-space-sm);
-    margin: 0 0 var(--jsm-space-lg);
-    font-size: var(--jsm-font-size-lg);
-    font-weight: var(--jsm-font-weight-semibold);
-    color: var(--jsm-color-fg);
-    padding-bottom: var(--jsm-space-sm);
-    border-bottom: 1px solid var(--jsm-color-border-secondary);
-  }
-
-  .setting-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: var(--jsm-space-md) 0;
-    border-bottom: 1px solid var(--jsm-color-border-secondary);
-  }
-
-  .setting-row:last-child {
-    border-bottom: none;
-    padding-bottom: 0;
-  }
-
-  .setting-row:first-of-type {
-    padding-top: 0;
-  }
-
-  .setting-row.disabled {
-    opacity: 0.5;
-  }
-
-  .checkbox-label {
-    display: flex;
-    align-items: flex-start;
-    gap: var(--jsm-space-md);
-    cursor: pointer;
-    flex: 1;
-  }
-
-  .field-checkbox {
-    width: 16px;
-    height: 16px;
-    accent-color: var(--jsm-color-primary);
-    margin-top: 2px;
-    flex-shrink: 0;
-  }
-
-  .setting-info {
+  .field-block {
     display: flex;
     flex-direction: column;
-    gap: var(--jsm-space-2xs);
+    gap: var(--jsm-space-xs);
+    max-width: 100%;
   }
 
-  .setting-name {
+  .field-label {
+    font-size: var(--jsm-font-size-sm);
     font-weight: var(--jsm-font-weight-medium);
     color: var(--jsm-color-fg);
-    font-size: var(--jsm-font-size-md);
   }
 
-  .setting-desc {
+  .field-help {
+    margin: 0;
     font-size: var(--jsm-font-size-xs);
     color: var(--jsm-color-fg-secondary);
-  }
-
-  .setting-control {
-    flex-shrink: 0;
+    line-height: var(--jsm-line-height-relaxed);
   }
 
   .path-row {
     display: flex;
     gap: var(--jsm-space-sm);
-    width: 300px;
+    align-items: center;
   }
 
   .path-row .field-input {
     flex: 1;
+    min-width: 0;
   }
 
   .field-input {
@@ -404,7 +335,6 @@
     font-family: var(--jsm-font-family);
     font-size: var(--jsm-font-size-md);
     outline: none;
-    transition: border-color var(--jsm-transition-normal), box-shadow var(--jsm-transition-normal);
   }
 
   .field-input:focus {
@@ -412,37 +342,58 @@
     box-shadow: var(--jsm-shadow-focus);
   }
 
-  .field-input:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
   .port-input {
-    width: 100px;
-    text-align: center;
+    max-width: 8rem;
   }
 
-  .workspace-info {
+  .section-lead {
+    margin: 0 0 var(--jsm-space-md);
+    font-size: var(--jsm-font-size-sm);
+    color: var(--jsm-color-fg-secondary);
+    line-height: var(--jsm-line-height-relaxed);
+  }
+
+  .btn-row {
     display: flex;
-    flex-direction: column;
+    flex-wrap: wrap;
     gap: var(--jsm-space-sm);
   }
 
-  .info-row {
-    display: flex;
-    justify-content: space-between;
-    padding: var(--jsm-space-xs) 0;
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--jsm-space-sm);
+    padding: var(--jsm-space-sm) var(--jsm-space-md);
+    border-radius: var(--jsm-radius-sm);
+    font-family: var(--jsm-font-family);
+    font-size: var(--jsm-font-size-sm);
+    font-weight: var(--jsm-font-weight-semibold);
+    cursor: pointer;
+    border: 1px solid transparent;
   }
 
-  .info-label {
-    color: var(--jsm-color-fg-secondary);
-    font-size: var(--jsm-font-size-md);
+  .btn-secondary {
+    background: var(--jsm-color-secondary);
+    color: var(--jsm-color-secondary-fg);
+    border-color: var(--jsm-color-border-secondary);
   }
 
-  .info-value {
-    font-weight: var(--jsm-font-weight-medium);
-    color: var(--jsm-color-fg);
-    font-size: var(--jsm-font-size-md);
+  .btn-secondary:hover {
+    background: var(--jsm-color-secondary-hover);
+  }
+
+  .btn-primary {
+    background: var(--jsm-color-primary);
+    color: var(--jsm-color-primary-fg);
+  }
+
+  .btn-primary:hover:not(:disabled) {
+    background: var(--jsm-color-primary-hover);
+  }
+
+  .btn-primary:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
   }
 
   .feedback-banner {
@@ -450,18 +401,19 @@
     align-items: center;
     gap: var(--jsm-space-sm);
     padding: var(--jsm-space-md) var(--jsm-space-xl);
-    border-top: 1px solid var(--jsm-color-border);
+    border-top: 1px solid var(--jsm-color-border-secondary);
     font-size: var(--jsm-font-size-sm);
+    flex-shrink: 0;
   }
 
   .feedback-banner.error {
     color: var(--jsm-color-error);
-    background: color-mix(in srgb, var(--jsm-color-error) 10%, var(--jsm-color-bg));
+    background: color-mix(in srgb, var(--jsm-color-error) 10%, var(--jsm-surface-0));
   }
 
   .feedback-banner.success {
     color: var(--jsm-status-running);
-    background: color-mix(in srgb, var(--jsm-status-running) 10%, var(--jsm-color-bg));
+    background: color-mix(in srgb, var(--jsm-status-running) 10%, var(--jsm-surface-0));
   }
 
   .settings-actions {
@@ -469,7 +421,12 @@
     justify-content: flex-end;
     gap: var(--jsm-space-sm);
     padding: var(--jsm-space-lg) var(--jsm-space-xl);
-    border-top: 1px solid var(--jsm-color-border);
-    background: var(--jsm-color-bg-secondary);
+    border-top: 1px solid var(--jsm-color-border-secondary);
+    background: var(--jsm-surface-0);
+    flex-shrink: 0;
+  }
+
+  .settings-actions.dirty {
+    box-shadow: 0 -1px 0 color-mix(in srgb, var(--vscode-focusBorder) 35%, transparent);
   }
 </style>

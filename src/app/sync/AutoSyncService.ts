@@ -19,6 +19,7 @@ import {
   AUTOSYNC_MAX_BATCH_FILES,
   AUTOSYNC_MAX_BATCH_BYTES,
 } from '../../constants';
+import { resolveAutosyncWatchSpec, type WatchSpec } from './watchSpec';
 
 // ── File Watcher Adapter (injected) ────────────────────────────────────────
 
@@ -28,15 +29,13 @@ import {
  */
 export interface FileWatcherFactory {
   /**
-   * Watch a directory, calling `onChange` with individual file changes.
-   * Returns a disposable that stops watching.
+   * Watch files per {@link WatchSpec} (tree or single artifact).
    */
-  watch(
-    sourcePath: string,
-    ignoreGlobs: string[],
-    onChange: (change: FileChange) => void,
-  ): Disposable;
+  watch(spec: WatchSpec, onChange: (change: FileChange) => void): Disposable;
 }
+
+export type { WatchSpec } from './watchSpec';
+export { resolveAutosyncWatchSpec } from './watchSpec';
 
 // ── Failure Tracker ────────────────────────────────────────────────────────
 
@@ -94,7 +93,7 @@ export class AutoSyncService {
   // ── Enable / Disable ──────────────────────────────────────────────
 
   /**
-   * Enable autosync for exploded deployments with syncMode === 'auto'.
+   * Enable autosync for deployments with `syncMode === 'auto'` (exploded tree or WAR file).
    * Respects watcher global cap (§10.4).
    */
   enable(config: ServerConfig, serverId: ServerId = config.id): void {
@@ -105,9 +104,21 @@ export class AutoSyncService {
     }
 
     for (const dep of config.deployments) {
-      if (dep.type !== 'exploded' || dep.syncMode !== 'auto') continue;
-      this.startWatching(config, dep, serverId);
+      const spec = resolveAutosyncWatchSpec(config, dep);
+      if (!spec) continue;
+      this.startWatching(dep, serverId, spec);
     }
+  }
+
+  /**
+   * Drop all watchers for this server and recreate from `config`.
+   * Use after persisted config changes while the server is running so paths/syncMode stay aligned.
+   * Clears {@link suspended} first so file events are not ignored after a prior stop/error.
+   */
+  rebindWatchers(serverKey: ServerId, config: ServerConfig): void {
+    this.resume(serverKey);
+    this.disable(serverKey);
+    this.enable(config, serverKey);
   }
 
   /** Disable autosync for all deployments of a server. */
@@ -140,6 +151,15 @@ export class AutoSyncService {
   resume(serverId: ServerId): void {
     this.suspended.delete(serverId);
     this.logger.debug(`AutoSyncService: resumed '${serverId}'`);
+  }
+
+  /**
+   * Tear down watchers and clear suspend state when a server is removed from config.
+   * Prefer this over {@link suspend} alone so the suspended set does not retain stale keys.
+   */
+  purgeServerWatchState(serverId: ServerId): void {
+    this.disable(serverId);
+    this.suspended.delete(serverId);
   }
 
   /** Record a sync failure for cooldown tracking (§10.5). */
@@ -192,7 +212,7 @@ export class AutoSyncService {
     return `${serverId}::${deploymentId}`;
   }
 
-  private startWatching(config: ServerConfig, dep: DeploymentConfig, serverId: ServerId): void {
+  private startWatching(dep: DeploymentConfig, serverId: ServerId, spec: WatchSpec): void {
     const key = this.watchKey(serverId, dep.id);
 
     // Already watching
@@ -206,18 +226,14 @@ export class AutoSyncService {
       return;
     }
 
-    // Merge server-level and deployment-level ignore globs
-    const ignoreGlobs = [...config.autosync.ignoreGlobs, ...dep.ignoreGlobs];
-
-    const disposable = this.watcherFactory.watch(
-      dep.sourcePath,
-      ignoreGlobs,
-      (change: FileChange) => this.onFileChange(serverId, dep.id, change),
+    const watchPath = spec.kind === 'tree' ? spec.root : spec.path;
+    const disposable = this.watcherFactory.watch(spec, (change: FileChange) =>
+      this.onFileChange(serverId, dep.id, change),
     );
 
     this.watchers.set(key, disposable);
     this.watcherCount++;
-    this.logger.debug(`AutoSyncService: watching '${dep.sourcePath}' for ${key}`);
+    this.logger.debug(`AutoSyncService: watching '${watchPath}' (${spec.kind}) for ${key}`);
   }
 
   private onFileChange(serverId: ServerId, deploymentId: DeploymentId, change: FileChange): void {

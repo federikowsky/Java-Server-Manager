@@ -21,8 +21,7 @@ function normalizeDeploymentType(value: unknown): DeploymentType {
   return value === 'war' ? 'war' : 'exploded';
 }
 
-function normalizeSyncMode(value: unknown, type: DeploymentType): SyncMode {
-  if (type === 'war') return 'manual';
+function normalizeSyncMode(value: unknown, _type: DeploymentType): SyncMode {
   return value === 'manual' ? 'manual' : 'auto';
 }
 
@@ -99,7 +98,7 @@ export function deploymentDraftToConfig(
     type: draft.type,
     sourcePath: draft.sourcePath,
     deployName: draft.deployName,
-    syncMode: draft.type === 'war' ? 'manual' : draft.syncMode,
+    syncMode: draft.syncMode,
     hotReload: draft.type === 'exploded' && draft.hotReload,
     ignoreGlobs: [...draft.ignoreGlobs],
     hooks: normalizeHookList(draft.hooks, DEPLOYMENT_HOOK_EVENTS),

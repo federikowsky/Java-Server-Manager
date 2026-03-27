@@ -8,7 +8,7 @@ import type { Result } from '@core/result';
 import { JsmError } from '@core/errors/JsmError';
 import { ErrorCode } from '@core/errors/codes';
 import type { WorkspaceServiceRegistry } from '@app/config';
-import type { DeploymentService } from '@app/deployment/DeploymentService';
+import type { ServerLifecycle } from '@app/server/ServerLifecycle';
 import type { ServerTreeViewProvider } from '@ui/tree/ServerTreeViewProvider';
 import type { PluginRegistry } from '@plugins/registry/PluginRegistry';
 import type { LogSources } from '@plugins/interfaces/IServerPlugin';
@@ -19,7 +19,7 @@ import {
   isDeploymentNode,
   isServerNode,
   registerMany,
-  runWithOperationProgress,
+  runUntilQueueIdleWithProgressResult,
 } from './shared';
 
 // ── Dependency contract ─────────────────────────────────────────────────────
@@ -32,7 +32,7 @@ export interface DeploymentCommandsDeps {
     removeDeployment(serverId: string, deploymentId: string): Promise<Result<void, JsmError>>;
   };
   pluginRegistry: PluginRegistry;
-  deployService: DeploymentService;
+  lifecycle: ServerLifecycle;
   treeProvider: ServerTreeViewProvider;
 }
 
@@ -64,7 +64,7 @@ function nextSyncMode(current: SyncMode): SyncMode {
 export function registerDeploymentCommands(
   deps: DeploymentCommandsDeps,
 ): vscode.Disposable[] {
-  const { workspaceRegistry, configService, pluginRegistry, deployService, treeProvider } = deps;
+  const { workspaceRegistry, configService, pluginRegistry, lifecycle, treeProvider } = deps;
   const resolveServer = (workspaceFolderUri: string, serverId: string) => workspaceRegistry
     ? workspaceRegistry.getServer({ workspaceFolderUri, serverId })
     : configService?.getServer(serverId);
@@ -122,6 +122,7 @@ export function registerDeploymentCommands(
         type: 'deployment',
         serverId: arg.serverId,
         mode: 'create',
+        globalTab: 'home',
       });
       return undefined;
     }],
@@ -132,13 +133,19 @@ export function registerDeploymentCommands(
       const config = resolveServer(arg.workspaceFolderUri, arg.serverId);
       const dep = config?.deployments.find((d: DeploymentConfig) => d.id === arg.deploymentId);
       if (!config || !dep) return;
-      const result = await runWithOperationProgress({
-        title: `Redeploying ${dep.deployName}...`,
-        serverId: arg.serverKey,
-        kind: 'DeployFull',
-        targetDeploymentId: arg.deploymentId,
-      }, async ctx => deployService.fullRedeploy(ctx, config, dep));
-      if (!result.ok) { showErr(result.error); return; }
+      const enq = lifecycle.enqueueDeployFull(arg.serverKey, arg.deploymentId);
+      if (!enq.ok) {
+        showErr(enq.error);
+        return;
+      }
+      const done = await runUntilQueueIdleWithProgressResult(
+        { title: `Redeploying ${dep.deployName}...`, serverKey: arg.serverKey },
+        lifecycle,
+      );
+      if (!done.ok) {
+        showErr(done.error);
+        return;
+      }
       showSuccess(`Redeploy completed for "${dep.deployName}".`);
     }],
 
@@ -148,13 +155,19 @@ export function registerDeploymentCommands(
       const config = resolveServer(arg.workspaceFolderUri, arg.serverId);
       const dep = config?.deployments.find((d: DeploymentConfig) => d.id === arg.deploymentId);
       if (!config || !dep) return;
-      const result = await runWithOperationProgress({
-        title: `Undeploying ${dep.deployName}...`,
-        serverId: arg.serverKey,
-        kind: 'Undeploy',
-        targetDeploymentId: arg.deploymentId,
-      }, async ctx => deployService.undeploy(ctx, config, dep));
-      if (!result.ok) { showErr(result.error); return; }
+      const enq = lifecycle.enqueueUndeploy(arg.serverKey, arg.deploymentId);
+      if (!enq.ok) {
+        showErr(enq.error);
+        return;
+      }
+      const done = await runUntilQueueIdleWithProgressResult(
+        { title: `Undeploying ${dep.deployName}...`, serverKey: arg.serverKey },
+        lifecycle,
+      );
+      if (!done.ok) {
+        showErr(done.error);
+        return;
+      }
       showSuccess(`Undeployed "${dep.deployName}".`);
     }],
 
@@ -170,8 +183,6 @@ export function registerDeploymentCommands(
 
       const dep = server.deployments.find((d: DeploymentConfig) => d.id === arg.deploymentId);
       if (!dep) return;
-      if (dep.type !== 'exploded') return;
-
       const newMode = nextSyncMode(dep.syncMode);
       const updatedDep = { ...dep, syncMode: newMode };
       const updatedServer = {
@@ -252,6 +263,7 @@ export function registerDeploymentCommands(
         id: arg.deploymentId,
         serverId: arg.serverId,
         mode: 'edit',
+        globalTab: 'home',
       });
       return undefined;
     }],
@@ -284,6 +296,27 @@ export function registerDeploymentCommands(
       if (!result.ok) { showErr(result.error); return; }
       showSuccess(`Deployment "${dep.deployName}" removed.`);
       treeProvider.requestRefresh();
+    }],
+
+    // Reveal deployment source in OS explorer / VS Code explorer (spec §17.3 download/export slot).
+    ['jsm.deployment.revealSource', async (arg: unknown) => {
+      if (!isDeploymentNode(arg)) return;
+      const dep =
+        arg.deploymentConfig
+        ?? resolveDeployment(arg.workspaceFolderUri, arg.serverId, arg.deploymentId);
+      const raw = dep && typeof (dep as DeploymentConfig).sourcePath === 'string'
+        ? (dep as DeploymentConfig).sourcePath.trim()
+        : '';
+      if (!raw) {
+        void vscode.window.showWarningMessage('JSM: No source path to reveal.');
+        return;
+      }
+      const uri = vscode.Uri.file(raw);
+      try {
+        await vscode.commands.executeCommand('revealInExplorer', uri);
+      } catch (e) {
+        showErr(JsmError.fromUnknown(e, ErrorCode.InvalidConfig));
+      }
     }],
 
     // §8.2 — jsm.deployment.openLogs (deferred-v1.1)

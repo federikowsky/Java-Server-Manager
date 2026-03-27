@@ -56,11 +56,24 @@ export interface FieldError {
 }
 
 export interface DashboardNavigationTarget {
-  type: 'welcome' | 'server' | 'template' | 'new-server' | 'new-template' | 'settings' | 'deployment';
+  type:
+    | 'welcome'
+    | 'server'
+    | 'template'
+    | 'new-server'
+    | 'new-template'
+    | 'edit-template'
+    | 'templates-index'
+    | 'settings'
+    | 'deployment'
+    | 'hooks-editor';
   id?: string;
   serverId?: string;
   mode?: 'create' | 'edit';
   templateId?: string;
+  globalTab?: 'home' | 'templates' | 'settings';
+  /** Pre-select workspace in new-server wizard (toolbar Add Server / multi-root). */
+  workspaceFolderUri?: string;
 }
 
 export interface SpaSettings {
@@ -130,10 +143,12 @@ export type HostToWebview =
       capabilities: Record<string, unknown>;
       workspaceFolders: Array<{ uri: string; name: string }>;
       settings: SpaSettings;
+      workspaceTrusted: boolean;
     }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'serverStateChanged'; serverKey: string; state: unknown }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'deploymentStateChanged'; serverKey: string; deploymentId: string; state: string }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'configChanged' }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'workspaceFoldersResult'; folders: Array<{ uri: string; name: string }> }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'navigate'; target: DashboardNavigationTarget }
-  | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'commandResult'; requestId: string; ok: boolean; message?: string; data?: Record<string, unknown> };
+  | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'commandResult'; requestId: string; ok: boolean; message?: string; data?: Record<string, unknown> }
+  | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'submitFinished' };

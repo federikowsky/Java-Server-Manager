@@ -1,15 +1,20 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import { applyTemplateToServerDraft, createServerDraft } from '@core/authoring';
-  import type { PluginConfig } from '@core/types';
-  import { spaState, activeEntity, browseResult, lastCommandResult } from '../../../stores';
+  import type { HookConfig, PluginConfig, ServerType } from '@core/types';
+  import { capabilityUiSlice } from '../../../capabilityUi';
+  import { findServerTemplateById, hasServerTemplateId } from '../../../templateLookup';
+  import { get } from 'svelte/store';
+  import { spaState, activeEntity, browseResult, lastCommandResult, hooksEditorSession } from '../../../stores';
   import { postToHost } from '../../../bridge';
   import { WEBVIEW_PROTOCOL_VERSION } from '../../../../protocol';
   import Icon from '../../Icon.svelte';
-  import AccordionSection from './AccordionSection.svelte';
   import ValidatedInput from './ValidatedInput.svelte';
   import FormPage from '../FormPage.svelte';
-  import HookList from '../../HookList.svelte';
+  import ContextTag from '../../ds/ContextTag.svelte';
+  import SectionBlock from '../../ds/SectionBlock.svelte';
+  import AdvancedCollapse from '../../ds/AdvancedCollapse.svelte';
+  import ModeSelector from '../../ds/ModeSelector.svelte';
 
   const { templateId }: { templateId?: string } = $props();
 
@@ -20,16 +25,24 @@
     Object.keys(state.capabilities).length > 0
       ? Object.keys(state.capabilities).map(type => ({
         type,
-        displayName: state.capabilities[type]?.displayName || type,
+        displayName: capabilityUiSlice(state.capabilities, type).displayName || type,
       }))
-      : [{ type: 'tomcat', displayName: 'Tomcat' }]
+      : [{ type: 'tomcat' as ServerType, displayName: 'Tomcat' }]
   );
 
   let creationMode = $state<'scratch' | 'template'>('scratch');
   let selectedTemplateId = $state('');
   let availableTemplates = $derived(state.templates || []);
 
-  let selectedType = $state('tomcat');
+  $effect(() => {
+    if (creationMode === 'template' && availableTemplates.length === 0) {
+      creationMode = 'scratch';
+      selectedTemplateId = '';
+      resetToScratchDraft();
+    }
+  });
+
+  let selectedType = $state<ServerType>('tomcat');
   let serverName = $state('');
   let runtimeHome = $state('');
   let javaHome = $state('');
@@ -40,10 +53,10 @@
   let vmArgDraft = $state('');
   let debugBind = $state('127.0.0.1');
   let selectedWorkspace = $state('');
-  let hooks = $state<any[]>([]);
+  let hooks = $state<HookConfig[]>([]);
   let draftPluginConfig = $state<PluginConfig | undefined>(undefined);
 
-  let pluginMeta = $derived(state.capabilities[selectedType] || {});
+  let pluginMeta = $derived(capabilityUiSlice(state.capabilities, selectedType));
   let runtimeLabel = $derived(pluginMeta.runtimeHomeLabel || 'Server Home');
   let runtimeHelp = $derived(pluginMeta.runtimeHomeHelp || 'Absolute path to the server installation directory.');
   let defaultName = $derived(pluginMeta.defaultName || `My ${pluginMeta.displayName || 'Server'}`);
@@ -52,7 +65,6 @@
     state.workspaceFolders.find(folder => folder.uri === selectedWorkspace)?.name || 'No workspace selected'
   );
 
-  let expandedSection = $state<'advanced' | ''>('');
   let errors = $state<Record<string, string>>({});
   let touched = $state<Record<string, boolean>>({});
 
@@ -62,15 +74,18 @@
   let pendingRequestId = $state('');
   let defaultsHydrated = $state(false);
 
+  /** Plain deep clone for payloads (createServerDraft / postMessage). Svelte $state arrays are Proxies — structuredClone throws. */
   function cloneValue<T>(value: T): T {
     if (value === undefined) {
       return value;
     }
-
-    if (typeof structuredClone === 'function') {
-      return structuredClone(value);
+    try {
+      if (typeof structuredClone === 'function') {
+        return structuredClone(value);
+      }
+    } catch {
+      /* fall through */
     }
-
     return JSON.parse(JSON.stringify(value)) as T;
   }
 
@@ -111,7 +126,7 @@
   function resetToScratchDraft(): void {
     applyDraft(createServerDraft({
       defaults: creationDefaults(),
-      fallbackType: selectedType as any,
+      fallbackType: selectedType,
       overrides: {
         name: serverName.trim(),
       },
@@ -135,14 +150,14 @@
   }
 
   function applyTemplate(nextTemplateId: string): void {
-    const tpl = availableTemplates.find((template: any) => template.template?.id === nextTemplateId);
-    if (!tpl) {
+    const template = findServerTemplateById(availableTemplates, nextTemplateId);
+    if (!template) {
       resetToScratchDraft();
       return;
     }
 
     applyDraft(applyTemplateToServerDraft({
-      template: tpl.template,
+      template,
       defaults: creationDefaults(),
       overrides: {
         name: serverName.trim(),
@@ -165,7 +180,10 @@
   });
 
   const unsubscribeCommandResult = lastCommandResult.subscribe(result => {
-    if (!result || !pendingRequestId || result.requestId !== pendingRequestId) {
+    if (!result) {
+      return;
+    }
+    if (!pendingRequestId || result.requestId !== pendingRequestId) {
       return;
     }
 
@@ -182,6 +200,11 @@
     activeEntity.set(createdServerId ? { type: 'server', id: createdServerId } : { type: 'welcome' });
   });
 
+  onMount(() => {
+    submitState = 'idle';
+    pendingRequestId = '';
+  });
+
   onDestroy(() => {
     unsubscribeSpaState();
     unsubscribeBrowse();
@@ -190,7 +213,7 @@
 
   $effect(() => {
     if (!availableTypes.some(type => type.type === selectedType)) {
-      selectedType = availableTypes[0]?.type || 'tomcat';
+      selectedType = (availableTypes[0]?.type as ServerType) || 'tomcat';
     }
   });
 
@@ -208,14 +231,14 @@
     selectedWorkspace = state.workspaceFolders[0]?.uri || '';
     applyDraft(createServerDraft({
       defaults: creationDefaults(),
-      fallbackType: availableTypes[0]?.type || 'tomcat',
+      fallbackType: (availableTypes[0]?.type as ServerType) || 'tomcat',
       overrides: {
         name: serverName.trim(),
       },
     }));
 
     if (templateId) {
-      const hasTemplate = availableTemplates.some((template: any) => template.template?.id === templateId);
+      const hasTemplate = hasServerTemplateId(availableTemplates, templateId);
       if (!hasTemplate) {
         return;
       }
@@ -264,10 +287,6 @@
     touched = { ...touched, [field]: true };
   }
 
-  function toggleAdvanced() {
-    expandedSection = expandedSection === 'advanced' ? '' : 'advanced';
-  }
-
   function setCreationMode(mode: 'scratch' | 'template') {
     creationMode = mode;
     if (mode === 'scratch') {
@@ -277,7 +296,7 @@
       return;
     }
 
-    if (templateId && availableTemplates.some((template: any) => template.template?.id === templateId)) {
+    if (templateId && hasServerTemplateId(availableTemplates, templateId)) {
       selectedTemplateId = templateId;
       applyTemplate(templateId);
     }
@@ -332,7 +351,11 @@
   }
 
   function handleCancel() {
+    submitState = 'idle';
+    pendingRequestId = '';
+    submitError = '';
     if (templateId) {
+      spaState.update(s => ({ ...s, globalTab: 'templates' }));
       activeEntity.set({ type: 'template', id: templateId });
       return;
     }
@@ -340,7 +363,23 @@
     activeEntity.set({ type: 'welcome' });
   }
 
+  function openHooksEditor(): void {
+    hooksEditorSession.set({
+      draft: cloneValue(hooks),
+      fieldName: 'hooks',
+      commit: (next) => {
+        hooks = Array.isArray(next) ? cloneValue(next) : [];
+      },
+      returnTarget: get(activeEntity),
+    });
+    activeEntity.set({ type: 'hooks-editor' });
+  }
+
   async function handleSubmit() {
+    if (submitState === 'submitting') {
+      return;
+    }
+
     const allErrors: Record<string, string> = {};
     if (creationMode === 'template' && !selectedTemplateId) allErrors.selectedTemplateId = 'Choose a template';
     if (!serverName.trim()) allErrors.serverName = 'Server name is required';
@@ -370,125 +409,109 @@
       return;
     }
 
-    const draft = createServerDraft({
-      defaults: creationDefaults(),
-      fallbackType: selectedType as any,
-      overrides: buildDraftOverrides(),
-    });
+    try {
+      const draft = createServerDraft({
+        defaults: creationDefaults(),
+        fallbackType: selectedType,
+        overrides: buildDraftOverrides(),
+      });
 
-    submitState = 'submitting';
-    submitError = '';
-    pendingRequestId = crypto.randomUUID();
-    lastCommandResult.set(null);
+      submitState = 'submitting';
+      submitError = '';
+      pendingRequestId = crypto.randomUUID();
+      lastCommandResult.set(null);
 
-    postToHost({
-      v: WEBVIEW_PROTOCOL_VERSION,
-      command: 'executeCommand',
-      id: 'jsm.server.add',
-      requestId: pendingRequestId,
-      args: [{ draft, workspaceFolderUri: selectedWorkspace }],
-    });
+      postToHost({
+        v: WEBVIEW_PROTOCOL_VERSION,
+        command: 'executeCommand',
+        id: 'jsm.server.add',
+        requestId: pendingRequestId,
+        args: [{ draft, workspaceFolderUri: selectedWorkspace }],
+      });
+    } catch (e) {
+      submitState = 'idle';
+      pendingRequestId = '';
+      const msg = e instanceof Error ? e.message : String(e);
+      submitError = msg;
+    }
   }
 </script>
 
 <FormPage
-  icon="server"
-  eyebrow="New Server"
+  variant="editor"
+  backLabel="Home"
+  onBack={handleCancel}
   title="Add Server"
-  subtitle={`Provision a managed ${pluginDisplayName} instance with workspace-aware defaults, runtime paths, and deployment-ready ports.`}
+  subtitle="Provision a managed instance with workspace-aware defaults."
   alignStart={true}
 >
   <svelte:fragment slot="actions">
-    <span class="meta-chip">{creationMode === 'template' ? 'From Template' : 'From Scratch'}</span>
-    <span class="meta-chip subtle">{pluginDisplayName}</span>
+    <ContextTag text={creationMode === 'template' ? 'FROM TEMPLATE' : 'FROM SCRATCH'} />
+    <ContextTag text={String(pluginDisplayName).toUpperCase()} />
   </svelte:fragment>
 
   <div class="wizard-content">
-    <!-- Section 1: Type & Identity (Flat) -->
-    <div class="form-section">
-      <h3 class="section-title">
-        <Icon name="server" size={16} />
-        <span>Server Type & Identity</span>
-      </h3>
+    <div class="wizard-unified">
+    <SectionBlock title="Provisioning Mode">
       <div class="section-grid">
-        <!-- Creation Mode — Segmented Control -->
-        {#if availableTemplates.length > 0}
+        <div class="form-field">
+          <ModeSelector
+            ariaLabel="Provisioning mode"
+            value={creationMode}
+            onChange={(v) => setCreationMode(v as 'scratch' | 'template')}
+            disabledValues={availableTemplates.length === 0 ? ['template'] : []}
+            options={[
+              { value: 'scratch', label: 'From Scratch' },
+              { value: 'template', label: 'From Template' },
+            ]}
+          />
+          <p class="field-help">
+            {availableTemplates.length === 0
+              ? 'No templates in this workspace — create one from the Templates tab to enable From Template.'
+              : creationMode === 'scratch'
+                ? 'Configure manually or start from a saved template.'
+                : 'Apply saved defaults, then adjust any values below.'}
+          </p>
+        </div>
+
+        {#if creationMode === 'template' && availableTemplates.length > 0}
           <div class="form-field">
-            <label class="field-label">How do you want to create this server?</label>
-            <div class="segmented-control" role="radiogroup" aria-label="Creation mode">
-              <button
-                type="button"
-                class="segment"
-                class:selected={creationMode === 'scratch'}
-                role="radio"
-                aria-checked={creationMode === 'scratch'}
-                onclick={() => setCreationMode('scratch')}
-              >
-                <Icon name="server" size={14} />
-                <span>From Scratch</span>
-              </button>
-              <button
-                type="button"
-                class="segment"
-                class:selected={creationMode === 'template'}
-                role="radio"
-                aria-checked={creationMode === 'template'}
-                onclick={() => setCreationMode('template')}
-              >
-                <Icon name="file-code" size={14} />
-                <span>From Template</span>
-              </button>
-            </div>
-            <p class="field-help">
-              {creationMode === 'scratch' ? 'Configure all settings manually.' : 'Use an existing template as starting point.'}
-            </p>
+            <label class="field-label" for="template-select">Template <span class="required">*</span></label>
+            <select
+              id="template-select"
+              class="field-input"
+              class:error={errors.selectedTemplateId && touched.selectedTemplateId}
+              bind:value={selectedTemplateId}
+              onchange={() => {
+                handleFieldInput('selectedTemplateId', selectedTemplateId);
+                applyTemplate(selectedTemplateId);
+              }}
+              onblur={() => handleFieldBlur('selectedTemplateId')}
+            >
+              <option value="">Choose a template…</option>
+              {#each availableTemplates as tpl}
+                <option value={tpl.template?.id}>{tpl.template?.name} ({tpl.scope})</option>
+              {/each}
+            </select>
+            {#if errors.selectedTemplateId && touched.selectedTemplateId}
+              <p class="field-error">{errors.selectedTemplateId}</p>
+            {/if}
           </div>
-
-          {#if creationMode === 'template'}
-            <div class="form-field">
-              <label class="field-label" for="template-select">Select Template</label>
-              <select 
-                id="template-select" 
-                class="field-input"
-                class:error={errors.selectedTemplateId && touched.selectedTemplateId}
-                bind:value={selectedTemplateId}
-                onchange={() => {
-                  handleFieldInput('selectedTemplateId', selectedTemplateId);
-                  applyTemplate(selectedTemplateId);
-                }}
-                onblur={() => handleFieldBlur('selectedTemplateId')}
-              >
-                <option value="">Choose a template...</option>
-                {#each availableTemplates as tpl}
-                  <option value={tpl.template?.id}>{tpl.template?.name} ({tpl.scope})</option>
-                {/each}
-              </select>
-              {#if errors.selectedTemplateId && touched.selectedTemplateId}
-                <p class="field-error">{errors.selectedTemplateId}</p>
-              {/if}
-            </div>
-          {/if}
         {/if}
+      </div>
+    </SectionBlock>
 
-        <!-- Server Type — Segmented Control (only for scratch mode) -->
+    <SectionBlock title="Identity">
+      <div class="section-grid">
         {#if creationMode === 'scratch' && availableTypes.length > 1}
           <div class="form-field">
-            <label class="field-label">Server Type</label>
-            <div class="segmented-control" role="radiogroup" aria-label="Server type">
-              {#each availableTypes as t}
-                <button
-                  type="button"
-                  class="segment"
-                  class:selected={selectedType === t.type}
-                  role="radio"
-                  aria-checked={selectedType === t.type}
-                  onclick={() => selectedType = t.type}
-                >
-                  <Icon name="server" size={14} />
-                  <span>{t.displayName}</span>
-                </button>
-              {/each}
-            </div>
+            <label class="field-label">Server type</label>
+            <ModeSelector
+              ariaLabel="Server type"
+              value={selectedType}
+              onChange={(v) => (selectedType = v as ServerType)}
+              options={availableTypes.map(t => ({ value: t.type, label: t.displayName }))}
+            />
           </div>
         {/if}
 
@@ -514,15 +537,10 @@
           </div>
         {/if}
       </div>
-    </div>
+    </SectionBlock>
 
-    <!-- Section 2: Runtime & Java (Flat) -->
-    <div class="form-section">
-      <h3 class="section-title">
-        <Icon name="folder" size={16} />
-        <span>Runtime & Java</span>
-      </h3>
-      <div class="section-grid two-columns">
+    <SectionBlock title="Runtime & Java">
+      <div class="section-grid">
         <div class="form-field">
           <label class="field-label" for="runtime-home">
             {runtimeLabel} <span class="required">*</span>
@@ -581,15 +599,10 @@
           {/if}
         </div>
       </div>
-    </div>
+    </SectionBlock>
 
-    <!-- Section 3: Network & Ports (Flat) -->
-    <div class="form-section">
-      <h3 class="section-title">
-        <Icon name="globe" size={16} />
-        <span>Network & Ports</span>
-      </h3>
-      <div class="section-grid two-columns">
+    <SectionBlock title="Network & Ports">
+      <div class="section-grid">
         <div class="form-field">
           <label class="field-label" for="http-port">
             HTTP Port <span class="required">*</span>
@@ -609,9 +622,8 @@
             <p class="field-error">{errors.httpPort}</p>
           {/if}
         </div>
-
         <div class="form-field">
-          <label class="field-label" for="bind-address">Bind Address</label>
+          <label class="field-label" for="bind-address">Host</label>
           <input
             id="bind-address"
             type="text"
@@ -619,18 +631,12 @@
             bind:value={host}
             placeholder="127.0.0.1"
           />
-          <p class="field-help">IP address or hostname to bind to. Use 0.0.0.0 for all interfaces.</p>
+          <p class="field-help">Listen address. Use 0.0.0.0 for all interfaces.</p>
         </div>
       </div>
-    </div>
+    </SectionBlock>
 
-    <!-- Section 4: Advanced (Accordion) -->
-    <AccordionSection 
-      title="Advanced Options" 
-      icon="settings"
-      expanded={expandedSection === 'advanced'}
-      onToggle={toggleAdvanced}
-    >
+    <AdvancedCollapse title="Advanced Options">
       <div class="section-grid">
         <div class="section-grid two-columns">
           <div class="form-field">
@@ -705,16 +711,17 @@
 
         <div class="form-field">
           <label class="field-label">Hooks</label>
-          <HookList
-            def={{ name: 'hooks', label: 'Hooks', type: 'hooks', hookOptions: { taskOptions: state.hookTaskOptions || [] } }}
-            value={hooks}
-            onChange={(v) => hooks = v}
-            id="server-hooks"
-          />
-          <p class="field-help">Configure hooks as terminal commands or VS Code tasks for lifecycle events.</p>
+          <p class="hooks-summary">
+            {hooks.length === 0 ? 'No hooks configured yet' : `${hooks.length} hook(s) configured`}
+          </p>
+          <button type="button" class="btn btn-secondary btn-sm" onclick={openHooksEditor}>
+            Open Hooks Editor
+          </button>
+          <p class="field-help">Configure terminal commands or VS Code tasks for lifecycle events.</p>
         </div>
       </div>
-    </AccordionSection>
+    </AdvancedCollapse>
+    </div>
   </div>
 
   {#if submitError}
@@ -725,7 +732,7 @@
   {/if}
 
   <svelte:fragment slot="footer">
-    <button type="button" class="btn btn-secondary" onclick={handleCancel} disabled={submitState === 'submitting'}>
+    <button type="button" class="btn btn-secondary" onclick={handleCancel}>
       <Icon name="x" size={14} />
       <span>Cancel</span>
     </button>
@@ -737,277 +744,15 @@
     >
       {#if submitState === 'submitting'}
         <Icon name="loading" size={14} />
-        <span>Creating...</span>
+        <span>Saving…</span>
       {:else}
         <Icon name="check" size={14} />
-        <span>Create Server</span>
+        <span>Add Server</span>
       {/if}
     </button>
   </svelte:fragment>
 </FormPage>
 
 <style>
-  .wizard-content {
-    display: flex;
-    flex-direction: column;
-    gap: var(--jsm-space-lg);
-  }
-
-  .meta-chip {
-    display: inline-flex;
-    align-items: center;
-    padding: var(--jsm-space-2xs) var(--jsm-space-sm);
-    border-radius: var(--jsm-radius-full, 999px);
-    background: color-mix(in srgb, var(--jsm-color-primary) 12%, var(--jsm-color-bg));
-    border: 1px solid color-mix(in srgb, var(--jsm-color-primary) 18%, var(--jsm-color-border));
-    color: var(--jsm-color-primary);
-    font-size: var(--jsm-font-size-xs);
-    font-weight: var(--jsm-font-weight-semibold);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-  }
-
-  .meta-chip.subtle {
-    background: var(--jsm-color-bg-secondary);
-    border-color: var(--jsm-color-border-secondary);
-    color: var(--jsm-color-fg-secondary);
-  }
-
-  .section-grid {
-    display: flex;
-    flex-direction: column;
-    gap: var(--jsm-space-lg);
-  }
-
-  .section-grid.two-columns {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: var(--jsm-space-lg);
-  }
-
-  .segmented-control {
-    display: flex;
-    border: 1px solid var(--jsm-color-border-secondary);
-    border-radius: var(--jsm-radius-md);
-    overflow: hidden;
-  }
-
-  .segment {
-    flex: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: var(--jsm-space-xs);
-    padding: var(--jsm-space-sm) var(--jsm-space-md);
-    background: var(--jsm-color-bg);
-    border: none;
-    border-right: 1px solid var(--jsm-color-border-secondary);
-    color: var(--jsm-color-fg-secondary);
-    font-family: var(--jsm-font-family);
-    font-size: var(--jsm-font-size-sm);
-    font-weight: var(--jsm-font-weight-medium);
-    cursor: pointer;
-    transition: all var(--jsm-transition-fast);
-  }
-
-  .segment:last-child {
-    border-right: none;
-  }
-
-  .segment:hover:not(.selected) {
-    background: var(--jsm-color-bg-hover);
-    color: var(--jsm-color-fg);
-  }
-
-  .segment.selected {
-    background: var(--jsm-color-primary);
-    color: var(--jsm-color-primary-fg);
-  }
-
-  .type-name {
-    font-size: var(--jsm-font-size-sm);
-    font-weight: var(--jsm-font-weight-medium);
-    color: var(--jsm-color-fg);
-  }
-
-  .form-field {
-    display: flex;
-    flex-direction: column;
-    gap: var(--jsm-space-xs);
-  }
-
-  .field-label {
-    font-weight: var(--jsm-font-weight-semibold);
-    font-size: var(--jsm-font-size-md);
-    color: var(--jsm-color-fg);
-  }
-
-  .required {
-    color: var(--jsm-color-error);
-  }
-
-  .field-input {
-    width: 100%;
-    padding: var(--jsm-input-padding-y) var(--jsm-input-padding-x);
-    background: var(--jsm-input-bg);
-    color: var(--jsm-input-fg);
-    border: 1px solid var(--jsm-input-border);
-    border-radius: var(--jsm-input-radius);
-    font-family: var(--jsm-font-family);
-    font-size: var(--jsm-font-size-md);
-    outline: none;
-    transition: border-color var(--jsm-transition-normal), box-shadow var(--jsm-transition-normal);
-  }
-
-  .field-input:focus {
-    border-color: var(--jsm-color-border-focus);
-    box-shadow: var(--jsm-shadow-focus);
-  }
-
-  .field-input.error {
-    border-color: var(--jsm-color-error);
-  }
-
-  .port-input {
-    max-width: 140px;
-  }
-
-  .field-help {
-    font-size: var(--jsm-font-size-xs);
-    color: var(--jsm-color-fg-secondary);
-    margin: 0;
-  }
-
-  .field-error {
-    font-size: var(--jsm-font-size-xs);
-    color: var(--jsm-color-error);
-    margin: 0;
-  }
-
-  .path-input-row {
-    display: flex;
-    gap: var(--jsm-space-sm);
-  }
-
-  .path-input-row .field-input {
-    flex: 1;
-  }
-
-  .tag-list {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--jsm-space-xs);
-    margin-bottom: var(--jsm-space-sm);
-  }
-
-  .tag {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--jsm-space-xs);
-    padding: var(--jsm-space-2xs) var(--jsm-space-sm);
-    background: var(--jsm-badge-bg);
-    color: var(--jsm-badge-fg);
-    border-radius: var(--jsm-badge-radius);
-    font-size: var(--jsm-font-size-xs);
-    font-family: var(--vscode-editor-font-family);
-  }
-
-  .tag-remove {
-    background: none;
-    border: none;
-    color: inherit;
-    cursor: pointer;
-    padding: 0;
-    display: flex;
-    opacity: 0.7;
-  }
-
-  .tag-remove:hover {
-    opacity: 1;
-    color: var(--jsm-color-error);
-  }
-
-  .tag-empty {
-    font-size: var(--jsm-font-size-sm);
-    color: var(--jsm-color-fg-muted);
-    font-style: italic;
-  }
-
-  .tag-input-row {
-    display: flex;
-    gap: var(--jsm-space-sm);
-    align-items: center;
-  }
-
-  .feedback-banner {
-    display: flex;
-    align-items: center;
-    gap: var(--jsm-space-sm);
-    padding: var(--jsm-space-md) var(--jsm-space-xl);
-    border-top: 1px solid var(--jsm-color-border);
-    font-size: var(--jsm-font-size-sm);
-  }
-
-  .feedback-banner.error {
-    color: var(--jsm-color-error);
-    background: color-mix(in srgb, var(--jsm-color-error) 10%, var(--jsm-color-bg));
-    border: 1px solid color-mix(in srgb, var(--jsm-color-error) 20%, var(--jsm-color-border));
-    border-radius: var(--jsm-radius-md);
-  }
-
-  .btn-sm {
-    padding: var(--jsm-space-xs) var(--jsm-space-sm);
-    font-size: var(--jsm-font-size-sm);
-  }
-
-  .btn-xs {
-    padding: var(--jsm-space-2xs) var(--jsm-space-xs);
-    font-size: var(--jsm-font-size-xs);
-  }
-
-  .form-section {
-    display: flex;
-    flex-direction: column;
-    gap: var(--jsm-space-md);
-    padding: var(--jsm-space-lg);
-    border: 1px solid var(--jsm-color-border-secondary);
-    border-radius: var(--jsm-radius-lg);
-    background: var(--jsm-color-bg);
-  }
-
-  .section-title {
-    display: flex;
-    align-items: center;
-    gap: var(--jsm-space-sm);
-    font-size: var(--jsm-font-size-md);
-    font-weight: var(--jsm-font-weight-semibold);
-    color: var(--jsm-color-fg);
-    margin: 0;
-  }
-
-  .vm-presets {
-    display: flex;
-    align-items: center;
-    gap: var(--jsm-space-xs);
-    flex-wrap: wrap;
-  }
-
-  .presets-label {
-    font-size: var(--jsm-font-size-xs);
-    color: var(--jsm-color-fg-secondary);
-  }
-
-  @media (max-width: 900px) {
-    .intro-panel {
-      grid-template-columns: 1fr;
-    }
-
-    .section-grid.two-columns {
-      grid-template-columns: 1fr;
-    }
-
-    .type-cards {
-      flex-wrap: wrap;
-    }
-  }
+  @import './wizardFormShared.css';
 </style>

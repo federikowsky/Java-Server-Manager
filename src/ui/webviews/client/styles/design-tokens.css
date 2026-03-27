@@ -58,6 +58,11 @@
   --jsm-color-bg: var(--vscode-editor-background);
   --jsm-color-bg-secondary: var(--vscode-sideBar-background, var(--vscode-editor-background));
   --jsm-color-bg-tertiary: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+
+  /* Surface model (spec §10) — canvas / section / inset */
+  --jsm-surface-0: var(--vscode-editor-background);
+  --jsm-surface-1: var(--vscode-editorWidget-background, var(--vscode-sideBar-background));
+  --jsm-surface-2: color-mix(in srgb, var(--vscode-input-background) 92%, var(--vscode-editor-background));
   --jsm-color-bg-hover: var(--vscode-list-hoverBackground);
   --jsm-color-bg-active: var(--vscode-list-activeSelectionBackground);
 
@@ -88,6 +93,12 @@
   --jsm-status-stopping: var(--vscode-testing-iconQueued);
   --jsm-status-error: var(--vscode-testing-iconFailed);
   --jsm-status-stopped: var(--vscode-testing-iconUnset);
+
+  /* ── Shell (top bar + context headers) ─────────────────────────────────── */
+  --jsm-topbar-bg: var(--vscode-sideBar-background);
+  --jsm-topbar-border: var(--vscode-panel-border);
+  --jsm-context-header-bg: color-mix(in srgb, var(--vscode-sideBar-background) 88%, var(--vscode-editor-background));
+  --jsm-context-header-border: var(--vscode-panel-border);
 
   /* ── Component: Sidebar ────────────────────────────────────────────────── */
   --jsm-sidebar-width: 260px;

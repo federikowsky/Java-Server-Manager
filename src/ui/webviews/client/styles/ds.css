@@ -1,0 +1,67 @@
+/**
+ * Shared layout primitives — frozen redesign surface & rhythm (spec §10–§13).
+ */
+
+.jsm-surface-page {
+  background: var(--jsm-surface-0);
+  color: var(--jsm-color-fg);
+}
+
+.jsm-surface-section {
+  background: var(--jsm-surface-1);
+  border: 1px solid var(--jsm-color-border-secondary);
+  border-radius: var(--jsm-radius-sm);
+}
+
+.jsm-surface-inset {
+  background: var(--jsm-surface-2);
+  border: 1px solid var(--jsm-color-border-secondary);
+  border-radius: var(--jsm-radius-xs);
+}
+
+.jsm-type-page-title {
+  font-size: var(--jsm-font-size-xl);
+  font-weight: var(--jsm-font-weight-semibold);
+  line-height: var(--jsm-line-height-tight);
+  margin: 0;
+  color: var(--jsm-color-fg);
+}
+
+.jsm-type-entity-title {
+  font-size: var(--jsm-font-size-lg);
+  font-weight: var(--jsm-font-weight-semibold);
+  line-height: var(--jsm-line-height-tight);
+  margin: 0;
+  color: var(--jsm-color-fg);
+}
+
+.jsm-type-meta {
+  font-size: var(--jsm-font-size-sm);
+  color: var(--jsm-color-fg-secondary);
+  margin: 0;
+  line-height: var(--jsm-line-height-normal);
+}
+
+.jsm-type-section-title {
+  font-size: var(--jsm-font-size-md);
+  font-weight: var(--jsm-font-weight-semibold);
+  margin: 0;
+  color: var(--jsm-color-fg);
+}
+
+.jsm-page-padding {
+  padding: var(--jsm-space-lg) var(--jsm-space-xl);
+  box-sizing: border-box;
+}
+
+.jsm-stack-md {
+  display: flex;
+  flex-direction: column;
+  gap: var(--jsm-space-md);
+}
+
+.jsm-stack-lg {
+  display: flex;
+  flex-direction: column;
+  gap: var(--jsm-space-lg);
+}

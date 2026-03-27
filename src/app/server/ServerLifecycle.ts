@@ -1,6 +1,7 @@
 import type {
   ServerConfig,
   ServerId,
+  DeploymentId,
   ServerState,
   StartMode,
   OperationContext,
@@ -11,6 +12,7 @@ import type {
   OutputSink,
   HookEvent,
 } from '@core/types';
+import type { FileChangeBatch } from '@core/types/events';
 import type { Result } from '@core/result';
 import { ok, err } from '@core/result';
 import { JsmError } from '@core/errors/JsmError';
@@ -23,6 +25,7 @@ import {
   throwIfCancelled,
 } from '@core/ops';
 import type { OperationQueue, QueueEntry } from '@core/ops/OperationQueue';
+import { QUEUE_META_FILE_CHANGE_BATCH } from '@core/ops/OperationQueue';
 import type { CancellationTokenSource } from '@core/ops';
 import type { IServerPlugin } from '@plugins/interfaces/IServerPlugin';
 import type { PluginRegistry } from '@plugins/registry/PluginRegistry';
@@ -49,7 +52,9 @@ export interface ServerLifecycleDeps {
   trustGate?: TrustGate;
   hookRunner?: Pick<HookRunner, 'runHooks'>;
   getOutputSink?: (serverKey: ServerId, serverName: string) => OutputSink;
-  deployService?: DeploymentService;
+  deployService: DeploymentService;
+  resolveServerConfig?: (serverKey: ServerId) => ServerConfig | undefined;
+  onDeploySyncFailure?: (serverKey: ServerId, deploymentId: DeploymentId) => void;
 }
 
 interface ServerEntry {
@@ -127,9 +132,10 @@ function makeCtx(
   timeoutMs: number,
   cancel: OperationContext['cancel'],
   outputSink?: OutputSink,
+  operationId?: OperationContext['operationId'],
 ): OperationContext {
   return {
-    operationId: `op-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` as OperationContext['operationId'],
+    operationId: operationId ?? (`op-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` as OperationContext['operationId']),
     serverId,
     kind,
     startedAt: Date.now(),
@@ -260,6 +266,92 @@ export class ServerLifecycle {
     return ok(undefined);
   }
 
+  /**
+   * Enqueue filesystem-triggered deploy sync (autosync).
+   * Executes `DeploymentService.sync` on the queue with fresh config when `resolveServerConfig` is set.
+   */
+  enqueueDeploySync(
+    serverId: ServerId,
+    deploymentId: DeploymentId,
+    batch: FileChangeBatch,
+  ): Result<void, JsmError> {
+    if (!this.checkTrust()) return this.untrustedErr();
+
+    const entry = this.servers.get(serverId);
+    if (!entry) return this.notFound(serverId);
+
+    entry.queue.enqueue({
+      kind: 'DeploySync',
+      targetDeploymentId: deploymentId,
+      meta: { [QUEUE_META_FILE_CHANGE_BATCH]: batch },
+    });
+    return ok(undefined);
+  }
+
+  /** Enqueue first-time deploy for all currently undeployed applications (pre-start). */
+  enqueueDeployUndeployed(serverId: ServerId): Result<void, JsmError> {
+    if (!this.checkTrust()) return this.untrustedErr();
+    const entry = this.servers.get(serverId);
+    if (!entry) return this.notFound(serverId);
+    entry.queue.enqueue({ kind: 'DeployUndeployed' });
+    return ok(undefined);
+  }
+
+  /** Enqueue full redeploy for one deployment. */
+  enqueueDeployFull(serverId: ServerId, deploymentId: DeploymentId): Result<void, JsmError> {
+    if (!this.checkTrust()) return this.untrustedErr();
+    const entry = this.servers.get(serverId);
+    if (!entry) return this.notFound(serverId);
+    entry.queue.enqueue({ kind: 'DeployFull', targetDeploymentId: deploymentId });
+    return ok(undefined);
+  }
+
+  /** Enqueue undeploy for one deployment. */
+  enqueueUndeploy(serverId: ServerId, deploymentId: DeploymentId): Result<void, JsmError> {
+    if (!this.checkTrust()) return this.untrustedErr();
+    const entry = this.servers.get(serverId);
+    if (!entry) return this.notFound(serverId);
+    entry.queue.enqueue({ kind: 'Undeploy', targetDeploymentId: deploymentId });
+    return ok(undefined);
+  }
+
+  /** Enqueue full redeploy for every deployment on the server. */
+  enqueueRedeployAll(serverId: ServerId): Result<void, JsmError> {
+    if (!this.checkTrust()) return this.untrustedErr();
+    const entry = this.servers.get(serverId);
+    if (!entry) return this.notFound(serverId);
+    entry.queue.enqueue({ kind: 'RedeployAll' });
+    return ok(undefined);
+  }
+
+  /** Enqueue HTTP health checks for deployments with `healthCheckPath` (tooltip cache). */
+  enqueueRunDeploymentHealthChecks(serverId: ServerId): Result<void, JsmError> {
+    if (!this.checkTrust()) return this.untrustedErr();
+    const entry = this.servers.get(serverId);
+    if (!entry) return this.notFound(serverId);
+    entry.queue.enqueue({ kind: 'RunDeploymentHealthChecks' });
+    return ok(undefined);
+  }
+
+  /** True if the server queue is executing or has pending entries. */
+  isQueueBusy(serverId: ServerId): boolean {
+    const entry = this.servers.get(serverId);
+    if (!entry) return false;
+    return entry.queue.isRunning || entry.queue.size > 0;
+  }
+
+  /** Resolves when the server queue is idle (no running op, no pending). */
+  waitUntilQueueIdle(serverId: ServerId): Promise<void> {
+    const entry = this.servers.get(serverId);
+    if (!entry) return Promise.resolve();
+    return entry.queue.waitUntilIdle();
+  }
+
+  /** First executor error from the last drain pass for this server (then cleared). See `OperationQueue.getAndClearDrainFailure`. */
+  getAndClearQueueDrainFailure(serverId: ServerId): unknown | undefined {
+    return this.servers.get(serverId)?.queue.getAndClearDrainFailure();
+  }
+
   /** Attach debugger to an already-running server. */
   async attachDebug(serverId: ServerId): Promise<Result<void, JsmError>> {
     if (!this.checkTrust()) return this.untrustedErr();
@@ -379,8 +471,31 @@ export class ServerLifecycle {
         case 'StatusRefresh':
           await this.doStatusRefresh(server, cancellation.token);
           break;
-        default:
-          this.deps.logger.warn(`ServerLifecycle: unhandled operation kind '${kind}'`);
+        case 'DeploySync':
+          await this.doDeploySync(server, entry, operationId, cancellation.token);
+          break;
+        case 'DeployFull':
+          await this.doDeployFull(server, entry, operationId, cancellation.token);
+          break;
+        case 'Undeploy':
+          await this.doUndeploy(server, entry, operationId, cancellation.token);
+          break;
+        case 'RedeployAll':
+          await this.doRedeployAll(server, operationId, cancellation.token);
+          break;
+        case 'DeployUndeployed':
+          await this.doDeployUndeployed(server, operationId, cancellation.token);
+          break;
+        case 'RunDeploymentHealthChecks':
+          await this.doRunDeploymentHealthChecks(server, operationId, cancellation.token);
+          break;
+        case 'DeployIncremental':
+        case 'DeployHotReload':
+        case 'SyncAll':
+          throw new JsmError({
+            code: ErrorCode.Unsupported,
+            message: `Operation '${kind}' must be enqueued only via a supported composite path`,
+          });
       }
 
       this.deps.bus.emit('OperationCompleted', {
@@ -513,10 +628,8 @@ export class ServerLifecycle {
         }
       }
 
-      if (this.deps.deployService) {
-        throwIfCancelled(ctx.cancel, `Start operation for '${config.name}' was cancelled before deployment health checks.`);
-        await this.deps.deployService.runHealthChecksForServer(server.serverKey, config);
-      }
+      throwIfCancelled(ctx.cancel, `Start operation for '${config.name}' was cancelled before deployment health checks.`);
+      await this.deps.deployService.runHealthChecksForServer(server.serverKey, config);
 
       if (mode === 'debug' && config.debug.enabled) {
         await Promise.race([
@@ -655,6 +768,173 @@ export class ServerLifecycle {
         await this.runServerOnErrorHooks(server, ctx, hookEvent, error);
       }
       throw error;
+    }
+  }
+
+  private resolveRunningConfig(server: ServerEntry): ServerConfig {
+    return this.deps.resolveServerConfig?.(server.serverKey) ?? server.config;
+  }
+
+  private async doDeployFull(
+    server: ServerEntry,
+    entry: QueueEntry,
+    busOperationId: OperationContext['operationId'],
+    cancel: OperationContext['cancel'],
+  ): Promise<void> {
+    const deploymentId = entry.targetDeploymentId;
+    if (!deploymentId) {
+      throw new JsmError({
+        code: ErrorCode.InvalidConfig,
+        message: 'DeployFull requires targetDeploymentId',
+      });
+    }
+    const config = this.resolveRunningConfig(server);
+    const dep = config.deployments.find(d => d.id === deploymentId);
+    if (!dep) {
+      throw new JsmError({
+        code: ErrorCode.InvalidConfig,
+        message: `Deployment '${deploymentId}' not found`,
+      });
+    }
+    const ctx = makeCtx(
+      server.serverKey,
+      'DeployFull',
+      600_000,
+      cancel,
+      this.deps.getOutputSink?.(server.serverKey, config.name),
+      busOperationId,
+    );
+    ctx.targetDeploymentId = deploymentId;
+    const result = await this.deps.deployService.fullRedeploy(ctx, config, dep);
+    if (!result.ok) throw result.error;
+  }
+
+  private async doUndeploy(
+    server: ServerEntry,
+    entry: QueueEntry,
+    busOperationId: OperationContext['operationId'],
+    cancel: OperationContext['cancel'],
+  ): Promise<void> {
+    const deploymentId = entry.targetDeploymentId;
+    if (!deploymentId) {
+      throw new JsmError({
+        code: ErrorCode.InvalidConfig,
+        message: 'Undeploy requires targetDeploymentId',
+      });
+    }
+    const config = this.resolveRunningConfig(server);
+    const dep = config.deployments.find(d => d.id === deploymentId);
+    if (!dep) {
+      throw new JsmError({
+        code: ErrorCode.InvalidConfig,
+        message: `Deployment '${deploymentId}' not found`,
+      });
+    }
+    const ctx = makeCtx(
+      server.serverKey,
+      'Undeploy',
+      600_000,
+      cancel,
+      this.deps.getOutputSink?.(server.serverKey, config.name),
+      busOperationId,
+    );
+    ctx.targetDeploymentId = deploymentId;
+    const result = await this.deps.deployService.undeploy(ctx, config, dep);
+    if (!result.ok) throw result.error;
+  }
+
+  private async doRedeployAll(
+    server: ServerEntry,
+    busOperationId: OperationContext['operationId'],
+    cancel: OperationContext['cancel'],
+  ): Promise<void> {
+    const config = this.resolveRunningConfig(server);
+    const ctx = makeCtx(
+      server.serverKey,
+      'RedeployAll',
+      600_000,
+      cancel,
+      this.deps.getOutputSink?.(server.serverKey, config.name),
+      busOperationId,
+    );
+    await this.deps.deployService.redeployAll(ctx, config);
+  }
+
+  private async doDeployUndeployed(
+    server: ServerEntry,
+    busOperationId: OperationContext['operationId'],
+    cancel: OperationContext['cancel'],
+  ): Promise<void> {
+    const config = this.resolveRunningConfig(server);
+    const ctx = makeCtx(
+      server.serverKey,
+      'DeployUndeployed',
+      600_000,
+      cancel,
+      this.deps.getOutputSink?.(server.serverKey, config.name),
+      busOperationId,
+    );
+    await this.deps.deployService.deployUndeployed(ctx, config);
+  }
+
+  private async doRunDeploymentHealthChecks(
+    server: ServerEntry,
+    _busOperationId: OperationContext['operationId'],
+    cancel: OperationContext['cancel'],
+  ): Promise<void> {
+    throwIfCancelled(cancel, 'Deployment health checks cancelled.');
+    const config = this.resolveRunningConfig(server);
+    await this.deps.deployService.runHealthChecksForServer(server.serverKey, config);
+  }
+
+  // ── Deploy sync (autosync) ──────────────────────────────────────
+
+  private async doDeploySync(
+    server: ServerEntry,
+    entry: QueueEntry,
+    busOperationId: OperationContext['operationId'],
+    cancel: OperationContext['cancel'],
+  ): Promise<void> {
+    const deployService = this.deps.deployService;
+
+    const deploymentId = entry.targetDeploymentId;
+    if (!deploymentId) {
+      this.deps.logger.warn('ServerLifecycle: DeploySync missing targetDeploymentId');
+      return;
+    }
+
+    const batch = entry.meta?.[QUEUE_META_FILE_CHANGE_BATCH] as FileChangeBatch | undefined;
+    if (!batch || !Array.isArray(batch.changes)) {
+      this.deps.logger.warn('ServerLifecycle: DeploySync missing fileChangeBatch meta');
+      return;
+    }
+
+    const serverKey = server.serverKey;
+    const config = this.deps.resolveServerConfig?.(serverKey) ?? server.config;
+    const dep = config.deployments.find(d => d.id === deploymentId);
+    if (!dep) {
+      this.deps.logger.warn(`ServerLifecycle: DeploySync deployment '${deploymentId}' not found`);
+      return;
+    }
+
+    const ctx = makeCtx(
+      serverKey,
+      'DeploySync',
+      30_000,
+      cancel,
+      this.deps.getOutputSink?.(serverKey, config.name),
+      busOperationId,
+    );
+    ctx.targetDeploymentId = deploymentId;
+
+    try {
+      const result = await deployService.sync(ctx, config, dep, batch);
+      if (!result.ok) {
+        this.deps.onDeploySyncFailure?.(serverKey, deploymentId);
+      }
+    } catch (cause) {
+      this.deps.onDeploySyncFailure?.(serverKey, deploymentId);
+      throw cause;
     }
   }
 

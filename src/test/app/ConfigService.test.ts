@@ -287,6 +287,29 @@ describe('ConfigService', () => {
       expect(result.ok).toBe(false);
       expect(repo.save).not.toHaveBeenCalled();
     });
+
+    it('emits DeploymentUpdated when an existing deployment row changes', async () => {
+      const dep = makeDeployment();
+      repo._seed({ ...makeServer(), deployments: [dep] });
+      const updatedServer = { ...makeServer(), deployments: [{ ...dep, deployName: 'renamed' }] };
+      const result = await service.updateServer(updatedServer);
+
+      expect(result.ok).toBe(true);
+      expect(bus.emit).toHaveBeenCalledWith('DeploymentUpdated', {
+        serverId: 'srv-1',
+        deploymentId: 'dep-1',
+        workspaceFolderUri: 'file:///ws',
+      });
+    });
+
+    it('does not emit DeploymentUpdated when only top-level server fields change', async () => {
+      repo._seed(makeServer());
+      const updated = makeServer('srv-1', 'Renamed');
+      await service.updateServer(updated);
+
+      const deploymentUpdatedCalls = vi.mocked(bus.emit).mock.calls.filter(c => c[0] === 'DeploymentUpdated');
+      expect(deploymentUpdatedCalls).toHaveLength(0);
+    });
   });
 
   /* ── removeServer ────────────────────────────────────────────────────── */

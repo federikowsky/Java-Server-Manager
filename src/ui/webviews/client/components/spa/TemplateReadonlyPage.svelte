@@ -16,7 +16,12 @@
 
   onDestroy(() => unsub());
 
-  let tpl = $derived(state.templates.find(t => t.template.id === templateId));
+  let tpl = $derived(
+    state.templates.find(entry => {
+      const doc = entry.template as { id?: string } | undefined;
+      return typeof doc?.id === 'string' && doc.id === templateId;
+    }),
+  );
   let t = $derived(tpl?.template as Record<string, unknown> | undefined);
   let defaults = $derived((t?.serverDefaults ?? {}) as Record<string, unknown>);
   let runtime = $derived((defaults.runtime ?? {}) as Record<string, unknown>);
@@ -64,24 +69,19 @@
     return raw as HookConfig[];
   });
 
-  function hookDetailRows(h: HookConfig): { label: string; value: string }[] {
-    const typeLabel = h.kind === 'vscodeTask' ? 'VS Code task' : 'Shell command';
-    const rows: { label: string; value: string }[] = [
-      { label: 'Event', value: String(h.event ?? '—') },
-      { label: 'Phase', value: String(h.phase ?? '—') },
-      { label: 'Type', value: typeLabel },
-      { label: 'Enabled', value: h.enabled !== false ? 'Yes' : 'No' },
-    ];
+  function hookKindLabel(h: HookConfig): string {
+    return h.kind === 'vscodeTask' ? 'VS Code task' : 'Shell command';
+  }
+
+  function hookActionLabel(h: HookConfig): string {
     if (h.kind === 'vscodeTask') {
-      rows.push({ label: 'Task', value: (h.vscodeTask?.taskName ?? '').trim() || '—' });
-    } else {
-      rows.push({ label: 'Command', value: (h.command?.line ?? '').trim() || '—' });
+      return (h.vscodeTask?.taskName ?? '').trim() || '—';
     }
-    rows.push({ label: 'Timeout', value: `${Number.isFinite(h.timeoutMs) ? h.timeoutMs : 60_000} ms` });
-    if (h.continueOnError === true) {
-      rows.push({ label: 'On error', value: 'Continue' });
-    }
-    return rows;
+    return (h.command?.line ?? '').trim() || '—';
+  }
+
+  function hookTimeoutLabel(h: HookConfig): string {
+    return `${Number.isFinite(h.timeoutMs) ? h.timeoutMs : 60_000} ms`;
   }
 </script>
 
@@ -117,14 +117,23 @@
         <p class="hooks-lead jsm-type-meta">
           {templateHooks.length} hook{templateHooks.length === 1 ? '' : 's'} in provisioning defaults
         </p>
-        <div class="tpl-hooks-list">
+        <ul class="tpl-hooks-list" role="list">
           {#each templateHooks as hook, idx (hook.id ? `${hook.id}-${idx}` : `hook-${idx}`)}
-            <div class="tpl-hook-entry">
-              <p class="tpl-hook-title">{String(hook.id || `Hook ${idx + 1}`)}</p>
-              <DetailRows rows={hookDetailRows(hook)} />
-            </div>
+            <li class="tpl-hook-entry">
+              <div class="tpl-hook-row">
+                <span class="tpl-hook-name">{String(hook.id || `Hook ${idx + 1}`)}</span>
+                <span class="tpl-hook-inline" aria-label="Hook details">
+                  <span class="tpl-hook-chip">{String(hook.event ?? '—')} · {String(hook.phase ?? '—')}</span>
+                  <span class="tpl-hook-chip">{hookKindLabel(hook)} · {hookActionLabel(hook)}</span>
+                  <span class="tpl-hook-chip tpl-hook-chip--muted">{hookTimeoutLabel(hook)}</span>
+                  {#if hook.continueOnError === true}
+                    <span class="tpl-hook-chip tpl-hook-chip--muted">on error: continue</span>
+                  {/if}
+                </span>
+              </div>
+            </li>
           {/each}
-        </div>
+        </ul>
       </SectionBlock>
     {/if}
   </div>
@@ -157,17 +166,20 @@
   }
 
   .hooks-lead {
-    margin: 0 0 var(--jsm-space-md);
+    margin: 0 0 var(--jsm-space-sm);
   }
 
   .tpl-hooks-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
     display: flex;
     flex-direction: column;
-    gap: var(--jsm-space-lg);
+    gap: var(--jsm-space-sm);
   }
 
   .tpl-hook-entry {
-    padding-top: var(--jsm-space-md);
+    padding-top: var(--jsm-space-sm);
     border-top: 1px solid var(--jsm-color-border-secondary);
   }
 
@@ -176,10 +188,40 @@
     border-top: none;
   }
 
-  .tpl-hook-title {
-    margin: 0 0 var(--jsm-space-sm);
+  .tpl-hook-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--jsm-space-xs) var(--jsm-space-sm);
+  }
+
+  .tpl-hook-name {
     font-size: var(--jsm-font-size-sm);
     font-weight: var(--jsm-font-weight-semibold);
     color: var(--jsm-color-fg);
+    flex: 0 0 auto;
+  }
+
+  .tpl-hook-inline {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--jsm-space-2xs) var(--jsm-space-sm);
+    min-width: 0;
+    flex: 1 1 12rem;
+  }
+
+  .tpl-hook-chip {
+    font-size: var(--jsm-font-size-xs);
+    line-height: var(--jsm-line-height-tight, 1.35);
+    color: var(--jsm-color-fg-secondary);
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .tpl-hook-chip--muted {
+    opacity: 0.92;
   }
 </style>

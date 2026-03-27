@@ -1,8 +1,6 @@
 <script lang="ts">
-  import { get } from 'svelte/store';
   import { formData, submitting as submittingStore } from '../stores';
-  import { sendSubmit, sendCancel, postToHost } from '../bridge';
-  import { WEBVIEW_PROTOCOL_VERSION } from '../../protocol';
+  import { sendSubmit, sendCancel } from '../bridge';
 
   const {
     mode,
@@ -33,32 +31,10 @@
   }
 
   function handleSubmit(): void {
-    let payload: Record<string, unknown>;
-    try {
-      const raw = get(formData);
-      payload = JSON.parse(JSON.stringify(raw)) as Record<string, unknown>;
-    } catch (e) {
-      postToHost({
-        v: WEBVIEW_PROTOCOL_VERSION,
-        command: 'traceLog',
-        message: '[FormActions] submit: could not serialize form data',
-        data: { error: String(e) },
-      });
-      return;
-    }
-
     submittingStore.set(true);
-    try {
-      sendSubmit(payload);
-    } catch (e) {
-      submittingStore.set(false);
-      postToHost({
-        v: WEBVIEW_PROTOCOL_VERSION,
-        command: 'traceLog',
-        message: '[FormActions] submit: postMessage failed',
-        data: { error: String(e) },
-      });
-    }
+    let data: Record<string, unknown> = {};
+    formData.subscribe(d => { data = { ...d }; })();
+    sendSubmit(data);
   }
 
   function handleCancel(): void {

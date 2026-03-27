@@ -23,15 +23,12 @@ import { applyHookTaskOptions, collectSchemaDefaults } from './formSchemaUtils';
 export function handleHostToWebviewMessage(msg: HostToWebview): void {
   switch (msg.command) {
     case 'validationErrors': {
-      try {
-        const errs: Record<string, string> = {};
-        for (const e of msg.errors) {
-          errs[e.field] = e.suggestedFix ? `${e.message} ${e.suggestedFix}` : e.message;
-        }
-        fieldErrors.set(errs);
-      } finally {
-        submitting.set(false);
+      const errs: Record<string, string> = {};
+      for (const e of msg.errors) {
+        errs[e.field] = e.suggestedFix ? `${e.message} ${e.suggestedFix}` : e.message;
       }
+      fieldErrors.set(errs);
+      submitting.set(false);
       break;
     }
     case 'fieldValidationResult':
@@ -52,25 +49,21 @@ export function handleHostToWebviewMessage(msg: HostToWebview): void {
     case 'fieldActionResult':
       formData.update(d => ({ ...d, [msg.field]: msg.value }));
       break;
-    case 'syncState': {
-      try {
-        spaState.update(state => ({
-          ...state,
-          initialized: true,
-          servers: msg.servers,
-          runtimeStates: msg.runtimeStates,
-          deploymentStates: msg.deploymentStates,
-          templates: msg.templates,
-          capabilities: msg.capabilities,
-          workspaceFolders: msg.workspaceFolders,
-          settings: msg.settings,
-          workspaceTrusted: msg.workspaceTrusted,
-        }));
-      } finally {
-        submitting.set(false);
-      }
+    case 'syncState':
+      spaState.update(state => ({
+        ...state,
+        initialized: true,
+        servers: msg.servers,
+        runtimeStates: msg.runtimeStates,
+        deploymentStates: msg.deploymentStates,
+        templates: msg.templates,
+        capabilities: msg.capabilities,
+        workspaceFolders: msg.workspaceFolders,
+        settings: msg.settings,
+        workspaceTrusted: msg.workspaceTrusted,
+      }));
+      submitting.set(false);
       break;
-    }
     case 'serverStateChanged':
       spaState.update(state => ({
         ...state,
@@ -89,31 +82,27 @@ export function handleHostToWebviewMessage(msg: HostToWebview): void {
         },
       }));
       break;
-    case 'init': {
-      try {
-        spaState.update(s => ({
-          ...s,
-          currentFormSchema: msg.schema,
-          currentFormId: msg.formId,
-          currentFormTargetId: msg.targetId,
-          currentFormTargetWorkspaceFolderUri: msg.targetWorkspaceFolderUri,
-          currentFormTargetScope: msg.targetScope,
-        }));
-        formId.set(msg.formId);
-        schema.set(msg.schema);
-        mode.set(msg.mode);
-        fieldErrors.set({});
-        globalError.set('');
-        hostError.set('');
-        formData.set({
-          ...collectSchemaDefaults(msg.schema),
-          ...(msg.data ?? {}),
-        });
-      } finally {
-        submitting.set(false);
-      }
+    case 'init':
+      spaState.update(s => ({
+        ...s,
+        currentFormSchema: msg.schema,
+        currentFormId: msg.formId,
+        currentFormTargetId: msg.targetId,
+        currentFormTargetWorkspaceFolderUri: msg.targetWorkspaceFolderUri,
+        currentFormTargetScope: msg.targetScope,
+      }));
+      formId.set(msg.formId);
+      schema.set(msg.schema);
+      mode.set(msg.mode);
+      fieldErrors.set({});
+      globalError.set('');
+      hostError.set('');
+      submitting.set(false);
+      formData.set({
+        ...collectSchemaDefaults(msg.schema),
+        ...(msg.data ?? {}),
+      });
       break;
-    }
     case 'hookOptions': {
       schema.update(current => (current ? applyHookTaskOptions(current, msg.fields, msg.taskOptions) : current));
       spaState.update(state => {
@@ -136,8 +125,6 @@ export function handleHostToWebviewMessage(msg: HostToWebview): void {
         ...s,
         globalTab: msg.target.globalTab ?? s.globalTab,
       }));
-      // Any host-driven navigation invalidates in-flight submit UI (avoids stuck Saving…).
-      submitting.set(false);
       const t = msg.target;
       const recentId =
         t.type === 'server' && t.id

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from 'svelte';
   import Icon from '../Icon.svelte';
   import type { IconName } from '../Icon.svelte';
 
@@ -21,10 +22,23 @@
 
   let open = $state(false);
   let rootEl = $state<HTMLDivElement | undefined>(undefined);
+  let triggerEl = $state<HTMLButtonElement | undefined>(undefined);
+  let panelTop = $state(0);
+  let panelRight = $state(0);
   const triggerId = `jsm-overflow-${Math.random().toString(36).slice(2, 9)}`;
 
   function close(): void {
     open = false;
+  }
+
+  async function positionPanel(): Promise<void> {
+    await tick();
+    if (!triggerEl) {
+      return;
+    }
+    const rect = triggerEl.getBoundingClientRect();
+    panelTop = rect.bottom + 2;
+    panelRight = Math.max(0, window.innerWidth - rect.right);
   }
 
   function toggle(e: MouseEvent): void {
@@ -54,6 +68,26 @@
     document.addEventListener('pointerdown', onDocPointerDown, true);
     return () => document.removeEventListener('pointerdown', onDocPointerDown, true);
   });
+
+  /** Fixed positioning escapes overflow:auto ancestors (e.g. table scrollport). */
+  $effect(() => {
+    if (!open) {
+      return;
+    }
+    void positionPanel();
+    const onScrollCapture = () => {
+      close();
+    };
+    const onResize = () => {
+      void positionPanel();
+    };
+    window.addEventListener('scroll', onScrollCapture, true);
+    window.addEventListener('resize', onResize);
+    return () => {
+      window.removeEventListener('scroll', onScrollCapture, true);
+      window.removeEventListener('resize', onResize);
+    };
+  });
 </script>
 
 <svelte:window onkeydown={onWindowKeydown} />
@@ -62,6 +96,7 @@
   <button
     type="button"
     class="ds-overflow-trigger"
+    bind:this={triggerEl}
     aria-label={ariaLabel}
     aria-expanded={open}
     aria-haspopup="menu"
@@ -71,7 +106,12 @@
     <Icon name="more" size={16} />
   </button>
   {#if open}
-    <div class="ds-overflow-panel jsm-surface-section" role="menu" aria-labelledby={triggerId}>
+    <div
+      class="ds-overflow-panel jsm-surface-section"
+      style="top: {panelTop}px; right: {panelRight}px;"
+      role="menu"
+      aria-labelledby={triggerId}
+    >
       {#each items as item (item.id)}
         <button
           type="button"
@@ -132,10 +172,8 @@
   }
 
   .ds-overflow-panel {
-    position: absolute;
-    right: 0;
-    top: calc(100% + 2px);
-    z-index: 1000;
+    position: fixed;
+    z-index: 10000;
     min-width: 11rem;
     padding: var(--jsm-space-2xs);
     display: flex;

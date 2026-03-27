@@ -71,15 +71,7 @@
 
   function overflowItems(dep: DeploymentConfig): DsOverflowMenuItem[] {
     const deploying = isDeploying(dep.id);
-    const items: DsOverflowMenuItem[] = [];
-    items.push({
-      id: 'redeploy',
-      label: 'Redeploy',
-      icon: 'refresh',
-      disabled: deploying,
-      onSelect: () => handleAction('jsm.deployment.redeploy', dep),
-    });
-    items.push(
+    return [
       {
         id: 'reveal',
         label: 'Reveal source',
@@ -101,8 +93,7 @@
         disabled: deploying,
         onSelect: () => handleAction('jsm.deployment.remove', dep),
       },
-    );
-    return items;
+    ];
   }
 </script>
 
@@ -159,16 +150,6 @@
                 <button type="button" class="act-text" onclick={() => handleEditDeployment(dep.id)}>
                   Edit
                 </button>
-                {#if !isDeploying(dep.id)}
-                  <button
-                    type="button"
-                    class="act-text"
-                    title="Redeploy / sync artifact"
-                    onclick={() => handleAction('jsm.deployment.redeploy', dep)}
-                  >
-                    Redeploy
-                  </button>
-                {/if}
                 <DsOverflowMenu
                   ariaLabel="More deployment actions"
                   items={overflowItems(dep)}
@@ -279,7 +260,7 @@
   .col-actions {
     width: 1%;
     white-space: nowrap;
-    min-width: 7.5rem;
+    min-width: 5.5rem;
   }
 
   .cell-name {

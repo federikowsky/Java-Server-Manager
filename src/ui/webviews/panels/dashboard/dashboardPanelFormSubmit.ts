@@ -77,6 +77,8 @@ export async function submitServerConfigForm(params: {
   syncState();
 }
 
+export type TemplateSubmitOutcome = { ok: true; templateId: string } | { ok: false };
+
 export async function submitTemplateConfigForm(params: {
   deps: DashboardPanelDeps;
   lastSubmittedData: Record<string, unknown> | undefined;
@@ -87,7 +89,7 @@ export async function submitTemplateConfigForm(params: {
   postMessage: (msg: HostToWebview) => void;
   syncState: () => void;
   onClearLastSubmitted: () => void;
-}): Promise<void> {
+}): Promise<TemplateSubmitOutcome> {
   const {
     deps,
     lastSubmittedData,
@@ -102,7 +104,7 @@ export async function submitTemplateConfigForm(params: {
 
   if (!lastSubmittedData) {
     postError('No form data received.');
-    return;
+    return { ok: false };
   }
 
   const templateId = currentFormMode === 'edit' ? currentFormTargetId : undefined;
@@ -124,7 +126,7 @@ export async function submitTemplateConfigForm(params: {
       command: 'validationErrors',
       errors: validationErrors,
     });
-    return;
+    return { ok: false };
   }
 
   const templateDraft = formDataToTemplateDraft(lastSubmittedData, {
@@ -142,7 +144,7 @@ export async function submitTemplateConfigForm(params: {
     toSave = JSON.parse(JSON.stringify(template)) as ServerTemplate;
   } catch (e) {
     postError(`Template data could not be serialized: ${String(e)}`);
-    return;
+    return { ok: false };
   }
 
   const result = await deps.templateService.save(toSave, templateDraft.scope);
@@ -150,8 +152,9 @@ export async function submitTemplateConfigForm(params: {
 
   if (!result.ok) {
     postError(result.error.message);
-    return;
+    return { ok: false };
   }
 
   syncState();
+  return { ok: true, templateId: toSave.id };
 }

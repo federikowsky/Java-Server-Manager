@@ -593,7 +593,7 @@ export class DashboardPanel implements vscode.Disposable {
       return;
     }
 
-    await submitTemplateConfigForm({
+    const outcome = await submitTemplateConfigForm({
       deps: this.deps,
       lastSubmittedData: this.lastSubmittedFormData,
       currentFormMode: this.currentFormMode,
@@ -606,6 +606,15 @@ export class DashboardPanel implements vscode.Disposable {
         this.lastSubmittedFormData = undefined;
       },
     });
+
+    if (outcome.ok) {
+      this.currentFormId = undefined;
+      this.currentFormMode = undefined;
+      this.currentFormTargetId = undefined;
+      this.currentFormTargetWorkspaceFolderUri = undefined;
+      this.currentFormTargetScope = undefined;
+      this.navigate({ type: 'template', id: outcome.templateId, globalTab: 'templates' });
+    }
   }
   private async handleBrowse(
     field: string,

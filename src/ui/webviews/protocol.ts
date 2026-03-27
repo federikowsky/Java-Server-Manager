@@ -72,6 +72,8 @@ export interface DashboardNavigationTarget {
   mode?: 'create' | 'edit';
   templateId?: string;
   globalTab?: 'home' | 'templates' | 'settings';
+  /** Pre-select workspace in new-server wizard (toolbar Add Server / multi-root). */
+  workspaceFolderUri?: string;
 }
 
 export interface SpaSettings {

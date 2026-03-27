@@ -129,14 +129,15 @@ export class DashboardPanel implements vscode.Disposable {
       this.panel.reveal(vscode.ViewColumn.One);
       this.flushPendingNavigation();
     } else {
-      this.createPanel();
+      const panel = this.createPanel();
+      panel.reveal(vscode.ViewColumn.One);
     }
   }
 
-  private createPanel(): void {
+  private createPanel(): vscode.WebviewPanel {
     const distWebview = vscode.Uri.joinPath(this.deps.extensionUri, 'dist', 'webview');
 
-    this.panel = vscode.window.createWebviewPanel(
+    const panel = vscode.window.createWebviewPanel(
       DashboardPanel.viewType,
       'Java Server Manager',
       vscode.ViewColumn.One,
@@ -146,10 +147,11 @@ export class DashboardPanel implements vscode.Disposable {
         retainContextWhenHidden: true, // Keep SPA state when switching tabs
       }
     );
+    this.panel = panel;
 
-    this.panel.webview.html = buildDashboardPanelHtml(this.panel.webview, distWebview);
+    panel.webview.html = buildDashboardPanelHtml(panel.webview, distWebview);
 
-    this.panel.webview.onDidReceiveMessage(
+    panel.webview.onDidReceiveMessage(
       async (raw: unknown) => {
         if (!this.isValidProtocolMessage(raw)) return;
         await this.handleMessage(raw);
@@ -158,7 +160,7 @@ export class DashboardPanel implements vscode.Disposable {
       this.disposables
     );
 
-    this.panel.onDidDispose(
+    panel.onDidDispose(
       () => {
         this.panel = undefined;
         this.isWebviewReady = false;
@@ -168,6 +170,7 @@ export class DashboardPanel implements vscode.Disposable {
     );
 
     void this.refreshHookTaskOptions();
+    return panel;
   }
 
   private async refreshHookTaskOptions(): Promise<void> {

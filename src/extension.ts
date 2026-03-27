@@ -381,6 +381,7 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
       discoveryService,
       treeProvider,
       schemaValidator: validator,
+      openDashboard: target => dashboardPanel.show(target),
     }),
     ...registerDeploymentCommands({
       workspaceRegistry: workspaceServiceRegistry,

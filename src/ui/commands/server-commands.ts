@@ -26,6 +26,7 @@ import {
 } from './shared';
 import * as fs from 'fs/promises';
 import type { ServerLogChannel } from '@ui/channels/ServerLogChannel';
+import type { DashboardNavigationTarget } from '@ui/webviews/protocol';
 
 type ServerCommandArg = {
   serverId: string;
@@ -49,6 +50,7 @@ export interface ServerCommandsDeps {
   discoveryService?: ServerDiscoveryService;
   treeProvider: ServerTreeViewProvider;
   schemaValidator?: SchemaValidator;
+  openDashboard?: (target?: DashboardNavigationTarget) => void;
 }
 
 async function pickWorkspaceScope(scopes: WorkspaceScope[]): Promise<WorkspaceScope | undefined> {
@@ -108,6 +110,7 @@ export function registerServerCommands(
     provisioningService,
     treeProvider,
     schemaValidator,
+    openDashboard,
   } = deps;
 
   const resolveServer = (workspaceFolderUri: string, serverId: string) => workspaceRegistry
@@ -162,8 +165,13 @@ export function registerServerCommands(
           },
         };
       }
-      
-      void vscode.commands.executeCommand('jsm.dashboard.open', { type: 'new-server', globalTab: 'home' });
+
+      const nav: DashboardNavigationTarget = { type: 'new-server', globalTab: 'home' };
+      if (openDashboard) {
+        openDashboard(nav);
+      } else {
+        void vscode.commands.executeCommand('jsm.dashboard.open', nav);
+      }
       return undefined;
     }],
 

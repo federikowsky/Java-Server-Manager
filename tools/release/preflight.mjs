@@ -143,9 +143,7 @@ async function main() {
   for (const requiredPath of [
     'README.md',
     'CHANGELOG.md',
-    'docs/release-process.md',
     'docs/documentation-map.md',
-    'docs/release-decision-log.md',
   ]) {
     assertFileExists(path.join(process.cwd(), requiredPath));
   }

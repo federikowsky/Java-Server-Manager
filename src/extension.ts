@@ -56,7 +56,11 @@ function workspaceFolderUriString(folder: vscode.WorkspaceFolder): string {
 
 // ── Activate ────────────────────────────────────────────────────────────────
 
-export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
+export type JsmExtensionE2EApi = {
+  __e2eGetDeploySyncStartedCount: () => number;
+};
+
+export async function activate(ctx: vscode.ExtensionContext): Promise<JsmExtensionE2EApi | void> {
   const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
   if (workspaceFolders.length === 0) {
     // No workspace — nothing to manage
@@ -86,6 +90,19 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
 
   const eventBus = new EventBus(logger);
   disposables.push(eventBus);
+
+  /** When set, automated extension tests (JSM_E2E=1) can observe autosync → DeploySync without a real Tomcat. */
+  const e2eEnabled = process.env.JSM_E2E === '1';
+  const e2eDeploySyncStarted = { count: 0 };
+  if (e2eEnabled) {
+    disposables.push(
+      eventBus.on('OperationStarted', (e: { kind: string }) => {
+        if (e.kind === 'DeploySync') {
+          e2eDeploySyncStarted.count += 1;
+        }
+      }),
+    );
+  }
 
   const opQueueFactory = (serverId: ServerId): OperationQueue =>
     new OperationQueue(serverId, logger);
@@ -552,15 +569,33 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<void> {
   treeProvider.forceRefresh();
 
   if (loadedServers.length > 0) {
-    lifecycle.reconcileRunningServers(loadedServers).catch((e) => {
-      logger.error('Reconciliation failed', e);
-    });
+    const reconcilePromise = lifecycle.reconcileRunningServers(loadedServers);
+    if (e2eEnabled) {
+      try {
+        await reconcilePromise;
+      } catch (e) {
+        logger.error('Reconciliation failed', e);
+      }
+      for (const s of loadedServers) {
+        lifecycle.getRuntime(s.serverKey)?.forceState('running', { pid: process.pid });
+      }
+    } else {
+      reconcilePromise.catch((e) => {
+        logger.error('Reconciliation failed', e);
+      });
+    }
   }
 
   // Push all to context subscriptions for cleanup
   ctx.subscriptions.push(...disposables);
 
   logger.info('Java Server Manager activated');
+
+  if (e2eEnabled) {
+    return {
+      __e2eGetDeploySyncStartedCount: () => e2eDeploySyncStarted.count,
+    };
+  }
 }
 
 // ── Deactivate ──────────────────────────────────────────────────────────────

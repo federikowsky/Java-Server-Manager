@@ -2,43 +2,22 @@
 
 ## Purpose
 
-This file defines the canonical documentation set for Java Server Manager as of March 18, 2026.
+This file defines the canonical documentation set for Java Server Manager.
 
-## Canonical Documents
+## Canonical documents
 
-- [README.md](../README.md)
-  - public overview, current status, supported scope, and developer entry points
-- [docs/specs.md](./specs.md)
-  - canonical product and domain specification
-  - note: it is still a candidate implementation target and may describe work not yet shipped
-- [docs/release-process.md](./release-process.md)
-  - canonical release governance, release gates, approval model, and CI/CD contract
-- [docs/release-decision-log.md](./release-decision-log.md)
-  - frozen release-policy decisions and incident follow-ups
-- [CHANGELOG.md](../CHANGELOG.md)
-  - authoritative release history
+- [README.md](../README.md) — public overview, requirements, development entry points, and repository layout
+- [docs/specs.md](./specs.md) — product and domain specification (may describe intent not yet implemented)
+- [docs/documentation-map.md](./documentation-map.md) — this index and source-of-truth rules
+- [CHANGELOG.md](../CHANGELOG.md) — authoritative version history for published releases
 
-## Supporting Documents
+## Repository rules
 
-- [docs/vscode-marketplace-release-foundation.plan.md](./vscode-marketplace-release-foundation.plan.md)
-  - approved planning baseline
-  - superseded as an operational source of truth by `docs/release-process.md`
-- [docs/configuration-rationalization-analysis-plan.md](./configuration-rationalization-analysis-plan.md)
-  - supporting implementation analysis
-- [docs/spa_webview_architecture_analysis.md](./spa_webview_architecture_analysis.md)
-  - supporting UI architecture analysis
-- [docs/codex-gpt54-release-orchestrator.prompt.md](./codex-gpt54-release-orchestrator.prompt.md)
-  - execution prompt, not repository policy
+- **README** and **package.json** should describe the **implemented** product surface (commands, settings, Tomcat-first scope).
+- The **implemented server surface is Tomcat-only**. Plugin-ready structure is real; other server types are not shipped.
+- **CI** validates the codebase; publication and maintainer-only release policy live in team process and automation (e.g. GitHub Actions), not necessarily in `docs/`.
+- **Release notes** for a version should appear in **CHANGELOG.md**; GitHub release bodies follow whatever checklist your workflow uses.
 
-## Repository Reality Rules
+## Non-canonical material
 
-- README and `package.json` must describe the implemented product surface only.
-- The implemented server surface is Tomcat-only. Plugin-ready architecture is real; additional server types are not.
-- CI exists today and remains separate from release publication.
-- Release claims are not valid unless they are backed by `CHANGELOG.md`, `docs/release-process.md`, and the release workflow.
-
-## Reconciliation Decisions
-
-- Missing legacy references to `docs/specs.md`, `docs/specs-extended.md`, `PROJECT_TECHNICAL_AUDIT.md`, and `PROJECT_DOSSIER.md` are removed from canonical docs.
-- Release governance is materialized in dedicated release docs instead of living only in planning notes.
-- Supporting analysis documents may contain future-looking material; they do not override README, changelog, or release policy.
+Planning notes, release decision logs, and internal runbooks may exist outside this repository. They do not override README, CHANGELOG, or `docs/specs.md` for public readers.

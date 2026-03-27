@@ -1,65 +1,69 @@
 # Java Server Manager
 
-Java Server Manager is a VS Code extension for managing local Java application servers. The implemented surface is Tomcat-only today, with a plugin-oriented architecture for future expansion.
+**Java Server Manager** is a [VS Code](https://code.visualstudio.com/) extension for managing **local Tomcat** instances from the editor: lifecycle (run/debug/stop), deployments, templates, and a dashboard webview. The codebase is structured for additional server plugins later; only Tomcat is implemented today.
 
-## Status
 
-The repository is an advanced MVP. It is not production-ready and has not yet completed its first official Marketplace release cycle.
+## Features
 
-- Implemented: Tomcat server CRUD, run/debug lifecycle, deployment management, template management, tree view, and webview forms.
-- Partial: autosync, logging UX, deployment orchestration, manifest/spec alignment.
-- Release posture: CI exists and runs lint, type checks, tests, production build, and repository audits; Marketplace publication is now governed separately.
-- Missing for production readiness: stronger runtime hardening, full spec-to-code reconciliation, broader release validation confidence, and first monitored release execution.
+- Add and configure Tomcat servers (workspace-scoped configuration)
+- Start/stop/restart with run or debug
+- Manage deployments (including autosync-oriented workflows where supported)
+- Template-based server provisioning and template editing
+- Tree view and **Server Dashboard** (Svelte webview)
 
 ## Requirements
 
-- VS Code 1.100.0 or newer
-- Node.js 18+
-- A local Java JDK
-- A local Tomcat installation for runtime testing
+- **VS Code** 1.100.0 or newer (see `engines.vscode` in `package.json`)
+- **Node.js** 18+ (for building and developing the extension)
+- **JDK** and a **local Tomcat** installation for runtime testing
+
+## Install (users)
+
+Install the extension from the VS Code Marketplace when available, or from a `.vsix` built from this repository (see Development).
 
 ## Development
 
+Clone the repository, install dependencies, then type-check, lint, test, and build:
+
 ```bash
 npm install
-npm run check-types
-npm run lint
-npm run build
-```
-
-To launch the extension in development, open the workspace in VS Code and press `F5`.
-
-## Repository layout
-
-- [src](./src): extension source code
-- [docs](./docs): canonical specifications and supporting project documents
-- [.github](./.github): shared Copilot customizations, agents, prompts, skills, and hooks
-
-## Configuration note
-
-JSM expects server and deployment changes through the extension UI or registered commands. Manually editing the workspace `jsm.servers.json` file is not a supported workflow for refreshing autosync watchers or lifecycle state.
-
-## Key documents
-
-- [docs/documentation-map.md](./docs/documentation-map.md): canonical documentation map and source-of-truth rules
-- [docs/release-process.md](./docs/release-process.md): Beta and Stable release policy plus CI/CD contract
-- [docs/release-decision-log.md](./docs/release-decision-log.md): frozen release decisions
-- [docs/specs.md](./docs/specs.md): canonical product and domain specification
-
-## Current focus areas
-
-- close the remaining spec-to-code gap
-- harden Tomcat runtime and deployment behavior
-- complete the first monitored Beta release cycle
-- graduate the release flow to Stable readiness
-
-## Verification commands
-
-```bash
 npm run check-types
 npm run lint
 npm test
 npm run build
 ```
 
-`npm test` remains the main Stable-quality gate, while `npm run test:smoke` is the lighter Beta gate.
+Open the folder in VS Code and press **F5** to launch the **Extension Development Host** with this extension loaded.
+
+### Verification gates
+
+- **`npm test`** — main automated test gate before merging substantive changes
+- **`npm run test:smoke`** — lighter smoke suite when appropriate
+
+## Repository layout
+
+| Path | Purpose |
+|------|---------|
+| [`src/`](./src) | Extension source (TypeScript), UI adapters, webview client (Svelte) |
+| [`docs/`](./docs) | Product spec, documentation index, and other tracked technical docs |
+| [`.github/`](./.github) | CI workflows, Copilot instructions, agents, prompts, hooks |
+| [`assets/`](./assets) | Bundled assets (e.g. Tomcat listener JAR) |
+| [`tools/`](./tools) | Scripts (build, release helpers, etc.) |
+
+## Configuration note
+
+Prefer the extension UI and registered commands for server and deployment changes. Manually editing workspace `jsm.servers.json` is not a supported way to keep lifecycle, watchers, and UI state consistent.
+
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [docs/documentation-map.md](./docs/documentation-map.md) | What counts as canonical vs supporting documentation |
+| [docs/specs.md](./docs/specs.md) | Product and domain specification (intent vs shipped code may differ) |
+| [CHANGELOG.md](./CHANGELOG.md) | Version history for releases |
+
+Internal release policy, approval steps, and decision logs are kept **outside** this public tree if needed for maintainers.
+
+## Status
+
+The project is an **advanced MVP**: useful for real local Tomcat workflows, but not positioned as fully production-hardened. CI runs lint, type checks, tests, and production builds. Focus areas include runtime hardening, spec/code alignment, logging UX, and release confidence.

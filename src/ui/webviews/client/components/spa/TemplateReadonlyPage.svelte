@@ -2,6 +2,7 @@
   import { onDestroy } from 'svelte';
   import type { HookConfig } from '@core/types';
   import { activeEntity, spaState } from '../../stores';
+  import { sendDeleteTemplate } from '../../bridge';
   import BackControl from '../ds/BackControl.svelte';
   import SectionBlock from '../ds/SectionBlock.svelte';
   import DetailRows from '../ds/DetailRows.svelte';
@@ -33,6 +34,13 @@
 
   function goEdit(): void {
     activeEntity.set({ type: 'edit-template', id: templateId });
+  }
+
+  function deleteTemplate(): void {
+    if (!tpl) return;
+    const scope = tpl.scope;
+    if (scope !== 'global' && scope !== 'workspace') return;
+    sendDeleteTemplate(templateId, scope);
   }
 
   let scopeDisplay = $derived(
@@ -90,6 +98,10 @@
     <div class="tpl-top">
       <BackControl label="Templates" onBack={goTemplatesIndex} />
       <div class="tpl-actions">
+        <button type="button" class="btn btn-secondary tpl-btn-delete" onclick={deleteTemplate}>
+          <Icon name="trash" size={14} />
+          <span>Delete</span>
+        </button>
         <button type="button" class="btn btn-primary" onclick={goEdit}>
           <Icon name="edit" size={14} />
           <span>Edit</span>
@@ -158,8 +170,19 @@
   }
   .tpl-actions {
     display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
     gap: var(--jsm-space-sm);
     padding-top: var(--jsm-space-xs);
+  }
+
+  .tpl-btn-delete {
+    color: var(--jsm-color-error, var(--vscode-errorForeground, #f14c4c));
+    border-color: color-mix(in srgb, var(--jsm-color-error, #f14c4c) 45%, var(--jsm-color-border-secondary));
+  }
+
+  .tpl-btn-delete:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--jsm-color-error, #f14c4c) 12%, transparent);
   }
   .tpl-head {
     margin-bottom: var(--jsm-space-sm);

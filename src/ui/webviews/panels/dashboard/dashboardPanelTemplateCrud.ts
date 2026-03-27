@@ -61,8 +61,12 @@ export async function deleteTemplateWithConfirm(
   scope: 'global' | 'workspace',
 ): Promise<CommandExecutionResult> {
   try {
+    const entry = deps.templateService.listScoped().find(
+      item => item.template.id === templateId && item.scope === scope,
+    );
+    const nameHint = entry?.template.name?.trim() ? `"${entry.template.name.trim()}"` : 'this template';
     const confirmation = await vscode.window.showWarningMessage(
-      'Are you sure you want to delete this template?',
+      `Delete template ${nameHint} from ${scope}?`,
       { modal: true },
       'Delete',
     );

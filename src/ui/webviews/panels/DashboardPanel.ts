@@ -367,15 +367,19 @@ export class DashboardPanel implements vscode.Disposable {
         );
         break;
 
-      case 'deleteTemplate':
-        await deleteTemplateWithConfirm(
+      case 'deleteTemplate': {
+        const result = await deleteTemplateWithConfirm(
           this.deps,
           m => this.postError(m),
           () => this.syncState(),
           msg.templateId,
           msg.scope,
         );
+        if (result.ok) {
+          this.navigate({ type: 'templates-index', globalTab: 'templates' });
+        }
         break;
+      }
 
       default:
         this.deps.logger.warn(`[DashboardPanel] Unhandled message type: ${(msg as any).command}`);
@@ -563,7 +567,7 @@ export class DashboardPanel implements vscode.Disposable {
     }
 
     this.syncState();
-    this.navigate({ type: 'welcome' });
+    this.navigate({ type: 'templates-index', globalTab: 'templates' });
     return { ok: true };
   }
 

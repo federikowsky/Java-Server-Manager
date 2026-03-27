@@ -42,8 +42,16 @@
   }
 
   function handleAction(cmd: string, deployment: DeploymentConfig) {
-    const workspaceFolderUri = serverRecord?.workspaceFolderUri;
+    let workspaceFolderUri = serverRecord?.workspaceFolderUri;
     const serverKey = serverRecord?.serverKey ?? (workspaceFolderUri ? `${workspaceFolderUri}::${serverId}` : serverId);
+    if (
+      (workspaceFolderUri === undefined || workspaceFolderUri === '')
+      && typeof serverKey === 'string'
+      && serverKey.includes('::')
+    ) {
+      const i = serverKey.lastIndexOf('::');
+      workspaceFolderUri = serverKey.slice(0, i);
+    }
     postToHost({
       v: WEBVIEW_PROTOCOL_VERSION,
       command: 'executeCommand',
@@ -53,7 +61,6 @@
           serverId,
           serverKey,
           deploymentId: deployment.id,
-          deploymentConfig: deployment,
           workspaceFolderUri,
           workspaceFolderName: serverRecord?.workspaceFolderName,
         },
@@ -73,17 +80,18 @@
     const deploying = isDeploying(dep.id);
     return [
       {
+        id: 'redeploy',
+        label: 'Redeploy',
+        icon: 'refresh',
+        disabled: deploying,
+        onSelect: () => handleAction('jsm.deployment.redeploy', dep),
+      },
+      {
         id: 'reveal',
         label: 'Reveal source',
         icon: 'download',
         disabled: deploying,
         onSelect: () => handleAction('jsm.deployment.revealSource', dep),
-      },
-      {
-        id: 'logs',
-        label: 'Open logs',
-        icon: 'terminal',
-        onSelect: () => handleAction('jsm.deployment.openLogs', dep),
       },
       {
         id: 'remove',

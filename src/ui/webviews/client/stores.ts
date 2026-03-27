@@ -101,3 +101,25 @@ export const hooksEditorSession = writable<{
   commit: (hooks: unknown[]) => void;
   returnTarget: ActiveEntity;
 } | null>(null);
+
+/**
+ * Drop host-form mirror in spaState + related stores so the next editor session
+ * must re-request schema (host `currentFormId` and webview `isFormReady` stay aligned).
+ */
+export function clearSpaFormMirror(): void {
+  spaState.update(s => ({
+    ...s,
+    currentFormSchema: undefined,
+    currentFormId: undefined,
+    currentFormTargetId: undefined,
+    currentFormTargetWorkspaceFolderUri: undefined,
+    currentFormTargetScope: undefined,
+  }));
+  formId.set('');
+  schema.set(null);
+  mode.set('create');
+  fieldErrors.set({});
+  formData.set({});
+  browseResult.set(null);
+  submitting.set(false);
+}

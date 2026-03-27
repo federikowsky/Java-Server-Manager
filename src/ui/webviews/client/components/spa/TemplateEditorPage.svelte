@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import { get } from 'svelte/store';
-  import { activeEntity, formData, formId, spaState, submitting } from '../../stores';
+  import { activeEntity, clearSpaFormMirror, formData, formId, spaState, submitting } from '../../stores';
   import { postToHost } from '../../bridge';
   import { WEBVIEW_PROTOCOL_VERSION } from '../../../protocol';
   import FormBody from '../FormBody.svelte';
@@ -108,6 +108,7 @@
   });
 
   function goBack(): void {
+    clearSpaFormMirror();
     activeEntity.set({ type: 'templates-index' });
   }
 

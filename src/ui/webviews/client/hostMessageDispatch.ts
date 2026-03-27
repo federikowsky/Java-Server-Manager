@@ -6,6 +6,7 @@ import type { HostToWebview } from '../protocol';
 import {
   activeEntity,
   browseResult,
+  clearSpaFormMirror,
   fieldErrors,
   formData,
   formId,
@@ -120,6 +121,7 @@ export function handleHostToWebviewMessage(msg: HostToWebview): void {
       spaState.update(state => ({ ...state, workspaceFolders: msg.folders }));
       break;
     case 'navigate': {
+      clearSpaFormMirror();
       activeEntity.set(msg.target);
       spaState.update(s => ({
         ...s,

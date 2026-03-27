@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import type { HookConfig } from '@core/types';
-  import { activeEntity, spaState } from '../../stores';
+  import { activeEntity, clearSpaFormMirror, spaState } from '../../stores';
   import { sendDeleteTemplate } from '../../bridge';
   import BackControl from '../ds/BackControl.svelte';
   import SectionBlock from '../ds/SectionBlock.svelte';
@@ -29,10 +29,12 @@
   let ports = $derived((defaults.ports ?? {}) as Record<string, unknown>);
 
   function goTemplatesIndex(): void {
+    clearSpaFormMirror();
     activeEntity.set({ type: 'templates-index' });
   }
 
   function goEdit(): void {
+    clearSpaFormMirror();
     activeEntity.set({ type: 'edit-template', id: templateId });
   }
 

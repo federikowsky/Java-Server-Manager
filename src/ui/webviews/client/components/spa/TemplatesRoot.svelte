@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import { activeEntity, spaState } from '../../stores';
+  import { activeEntity, clearSpaFormMirror, spaState } from '../../stores';
   import type { ActiveEntity } from '../../stores';
   import RootPageHeader from '../ds/RootPageHeader.svelte';
   import PageState from '../ds/PageState.svelte';
@@ -51,10 +51,12 @@
   );
 
   function goNewTemplate(): void {
+    clearSpaFormMirror();
     activeEntity.set({ type: 'new-template' });
   }
 
   function openRow(id: string): void {
+    clearSpaFormMirror();
     activeEntity.set({ type: 'template', id });
   }
 
@@ -63,23 +65,6 @@
       e.preventDefault();
       openRow(id);
     }
-  }
-
-  function formatUpdated(template: unknown): string {
-    if (!template || typeof template !== 'object') return '—';
-    const row = template as { updatedAt?: string; modifiedAt?: string; lastModified?: string };
-    const raw = row.updatedAt ?? row.modifiedAt ?? row.lastModified;
-    if (!raw || typeof raw !== 'string') return '—';
-    const t = Date.parse(raw);
-    if (Number.isNaN(t)) return '—';
-    const diff = Date.now() - t;
-    const days = Math.floor(diff / 86_400_000);
-    if (days < 0) return '—';
-    if (days === 0) return 'Today';
-    if (days === 1) return '1d ago';
-    if (days < 14) return `${days}d ago`;
-    const weeks = Math.floor(days / 7);
-    return `${weeks}w ago`;
   }
 </script>
 
@@ -132,7 +117,6 @@
               <th>Scope</th>
               <th>Server Type</th>
               <th>Description</th>
-              <th>Updated</th>
             </tr>
           </thead>
           <tbody>
@@ -149,7 +133,6 @@
                 <td>{row.scope}</td>
                 <td>{row.template.pluginType}</td>
                 <td class="cell-muted cell-desc" title={descCell.title}>{descCell.text}</td>
-                <td class="cell-muted">{formatUpdated(row.template)}</td>
               </tr>
             {/each}
           </tbody>

@@ -71,7 +71,6 @@ export interface DashboardNavigationTarget {
   serverId?: string;
   mode?: 'create' | 'edit';
   templateId?: string;
-  /** Top-level shell tab; default inferred from `type` when omitted. */
   globalTab?: 'home' | 'templates' | 'settings';
 }
 
@@ -109,9 +108,7 @@ export type WebviewToHost =
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'deleteServer'; serverId: string; workspaceFolderUri: string }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'saveTemplate'; template: unknown; scope: 'global' | 'workspace' }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'deleteTemplate'; templateId: string; scope: 'global' | 'workspace' }
-  | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'requestWorkspaceFolders' }
-  /** Forward webview diagnostics to host logger (Output: JSM). */
-  | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'traceLog'; message: string; data?: unknown };
+  | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'requestWorkspaceFolders' };
 
 // ── Messages: Host → Webview ────────────────────────────────────────────────
 
@@ -144,7 +141,6 @@ export type HostToWebview =
       capabilities: Record<string, unknown>;
       workspaceFolders: Array<{ uri: string; name: string }>;
       settings: SpaSettings;
-      /** Workspace trust; plan §2 principle 6 / §7.2 environment hints. */
       workspaceTrusted: boolean;
     }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'serverStateChanged'; serverKey: string; state: unknown }
@@ -153,5 +149,4 @@ export type HostToWebview =
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'workspaceFoldersResult'; folders: Array<{ uri: string; name: string }> }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'navigate'; target: DashboardNavigationTarget }
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'commandResult'; requestId: string; ok: boolean; message?: string; data?: Record<string, unknown> }
-  /** Host ack after form submit handler completes; clears webview `submitting` even if syncState fails to post. */
   | { v: typeof WEBVIEW_PROTOCOL_VERSION; command: 'submitFinished' };

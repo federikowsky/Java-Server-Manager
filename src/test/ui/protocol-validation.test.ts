@@ -51,10 +51,6 @@ describe('Protocol Message Validation', () => {
       expect(isValidProtocolMessage({ v: 1, command: 'cancel' })).toBe(true);
     });
 
-    it('should accept traceLog', () => {
-      expect(isValidProtocolMessage({ v: 1, command: 'traceLog', message: 'x' })).toBe(true);
-    });
-
   });
 
   /* ── Version Mismatch ────────────────────────────────────────────────── */

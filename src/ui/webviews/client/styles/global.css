@@ -516,6 +516,31 @@ html:has(body.spa-mode) {
   transform: scale(0.97);
 }
 
+.path-picker-row .action-button {
+  padding: 7px 12px;
+  font-size: var(--vscode-font-size);
+  font-weight: 500;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background-color: var(--vscode-button-secondaryBackground, var(--vscode-button-background));
+  color: var(--vscode-button-secondaryForeground, var(--vscode-button-foreground));
+  border: 1px solid var(--vscode-button-secondaryBackground, transparent);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 0.15s ease, transform 0.1s ease;
+}
+
+.path-picker-row .action-button:hover {
+  background-color: var(--vscode-button-secondaryHoverBackground, var(--vscode-button-hoverBackground));
+}
+
+.path-picker-row .action-button:active {
+  transform: scale(0.97);
+}
+
 /* ── Port Input ────────────────────────────────────────────────────────────── */
 
 .port-input {

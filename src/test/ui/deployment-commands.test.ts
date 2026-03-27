@@ -116,6 +116,12 @@ function createDeploymentNode(
 function mockDeps() {
   const getLogSources = vi.fn(async () => ok<{ primary?: { id: string; title: string; kind: 'file'; path: string }; others: unknown[] }>({ others: [] }));
   return {
+    logger: {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    },
     configService: {
       getServer: vi.fn((_id: string) => makeServer(_id)),
       removeDeployment: vi.fn(async () => ok(undefined)),

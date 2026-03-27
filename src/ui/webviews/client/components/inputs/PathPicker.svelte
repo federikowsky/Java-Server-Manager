@@ -48,23 +48,3 @@
     {/each}
   {/if}
 </div>
-
-<style>
-  .action-button {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0 8px;
-    background: var(--vscode-button-secondaryBackground);
-    color: var(--vscode-button-secondaryForeground);
-    border: 1px solid var(--vscode-button-border, transparent);
-    border-radius: 2px;
-    cursor: pointer;
-    font-size: 13px;
-    height: 26px;
-    margin-left: 4px;
-  }
-  .action-button:hover {
-    background: var(--vscode-button-secondaryHoverBackground);
-  }
-</style>

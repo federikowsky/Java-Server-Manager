@@ -195,10 +195,6 @@ export class DashboardPanel implements vscode.Disposable {
 
   private async handleMessage(msg: WebviewToHost): Promise<void> {
     switch (msg.command) {
-      case 'traceLog':
-        this.panelLog.debug('client.trace', { message: msg.message, data: msg.data });
-        break;
-
       case 'ready':
         this.isWebviewReady = true;
         this.currentFormId = undefined;

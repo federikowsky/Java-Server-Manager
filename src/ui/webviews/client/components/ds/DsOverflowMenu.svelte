@@ -43,14 +43,17 @@
 
   function toggle(e: MouseEvent): void {
     e.stopPropagation();
-    open = !open;
+    const next = !open;
+    open = next;
   }
 
   function onDocPointerDown(e: PointerEvent): void {
+    const t = e.target;
+    const inRoot = !!(rootEl && t instanceof Node && rootEl.contains(t));
     if (!open || !rootEl) {
       return;
     }
-    if (!rootEl.contains(e.target as Node)) {
+    if (!inRoot) {
       close();
     }
   }

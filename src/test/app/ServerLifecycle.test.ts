@@ -130,6 +130,7 @@ describe('ServerLifecycle', () => {
   let portScanner: ReturnType<typeof mockPortScanner>;
   let debugAttacher: ReturnType<typeof mockDebugAttacher>;
   let hookRunner: ReturnType<typeof mockHookRunner>;
+  let deployService: ReturnType<typeof mockDeployService>;
   let lifecycle: ServerLifecycle;
 
   beforeEach(() => {
@@ -139,6 +140,7 @@ describe('ServerLifecycle', () => {
     portScanner = mockPortScanner();
     debugAttacher = mockDebugAttacher();
     hookRunner = mockHookRunner();
+    deployService = mockDeployService();
 
     lifecycle = new ServerLifecycle({
       pluginRegistry: pluginRegistry as never,
@@ -148,7 +150,7 @@ describe('ServerLifecycle', () => {
       debugAttacher: debugAttacher as never,
       logger: mockLogger(),
       hookRunner: hookRunner as never,
-      deployService: mockDeployService() as never,
+      deployService: deployService as never,
     });
   });
 
@@ -580,6 +582,293 @@ describe('ServerLifecycle', () => {
     });
   });
 
+  describe('deploy queue execution', () => {
+    function makeDeploymentConfig(depId = 'dep-1') {
+      return {
+        id: depId,
+        type: 'exploded' as const,
+        sourcePath: '/src/app',
+        deployName: 'myapp',
+        syncMode: 'auto' as const,
+        ignoreGlobs: [],
+        hooks: [],
+      };
+    }
+
+    function registerWithDeployment(depId = 'dep-1') {
+      const queue = mockQueue();
+      const config = {
+        ...makeServer(),
+        deployments: [makeDeploymentConfig(depId)],
+      };
+      lifecycle.register('srv-1', config, queue as never);
+      const executor = queue.setExecutor.mock.calls[0][0] as (entry: {
+        kind: string;
+        targetDeploymentId?: string;
+        meta?: Record<string, unknown>;
+      }) => Promise<void>;
+      return { config, executor };
+    }
+
+    it('dispatches DeployFull with resolved deployment context', async () => {
+      const { config, executor } = registerWithDeployment();
+
+      await executor({ kind: 'DeployFull', targetDeploymentId: 'dep-1' });
+
+      expect(deployService.fullRedeploy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          serverId: 'srv-1',
+          kind: 'DeployFull',
+          targetDeploymentId: 'dep-1',
+        }),
+        config,
+        config.deployments[0],
+      );
+      expect(bus.emit).toHaveBeenCalledWith('OperationCompleted', expect.objectContaining({
+        serverId: 'srv-1',
+        kind: 'DeployFull',
+      }));
+    });
+
+    it('fails DeployFull when targetDeploymentId is missing', async () => {
+      const { executor } = registerWithDeployment();
+
+      await executor({ kind: 'DeployFull' });
+
+      expect(bus.emit).toHaveBeenCalledWith('OperationFailed', expect.objectContaining({
+        serverId: 'srv-1',
+        kind: 'DeployFull',
+        error: expect.objectContaining({
+          code: ErrorCode.InvalidConfig,
+          message: 'DeployFull requires targetDeploymentId',
+        }),
+      }));
+      expect(deployService.fullRedeploy).not.toHaveBeenCalled();
+    });
+
+    it('dispatches Undeploy with resolved deployment context', async () => {
+      const { config, executor } = registerWithDeployment();
+
+      await executor({ kind: 'Undeploy', targetDeploymentId: 'dep-1' });
+
+      expect(deployService.undeploy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          serverId: 'srv-1',
+          kind: 'Undeploy',
+          targetDeploymentId: 'dep-1',
+        }),
+        config,
+        config.deployments[0],
+      );
+    });
+
+    it('dispatches RedeployAll through DeploymentService', async () => {
+      const { config, executor } = registerWithDeployment();
+
+      await executor({ kind: 'RedeployAll' });
+
+      expect(deployService.redeployAll).toHaveBeenCalledWith(
+        expect.objectContaining({
+          serverId: 'srv-1',
+          kind: 'RedeployAll',
+        }),
+        config,
+      );
+    });
+
+    it('dispatches DeployUndeployed through DeploymentService', async () => {
+      const { config, executor } = registerWithDeployment();
+
+      await executor({ kind: 'DeployUndeployed' });
+
+      expect(deployService.deployUndeployed).toHaveBeenCalledWith(
+        expect.objectContaining({
+          serverId: 'srv-1',
+          kind: 'DeployUndeployed',
+        }),
+        config,
+      );
+    });
+
+    it('uses resolveServerConfig for DeploySync', async () => {
+      const queue = mockQueue();
+      const registeredConfig = {
+        ...makeServer(),
+        deployments: [makeDeploymentConfig()],
+      };
+      const refreshedConfig = {
+        ...registeredConfig,
+        deployments: [{
+          ...registeredConfig.deployments[0],
+          deployName: 'fresh-name',
+          sourcePath: '/src/fresh',
+        }],
+      };
+
+      lifecycle = new ServerLifecycle({
+        pluginRegistry: pluginRegistry as never,
+        bus: bus as never,
+        pidManager: pidManager as never,
+        portScanner: portScanner as never,
+        debugAttacher: debugAttacher as never,
+        logger: mockLogger(),
+        hookRunner: hookRunner as never,
+        deployService: deployService as never,
+        resolveServerConfig: vi.fn(() => refreshedConfig),
+      });
+
+      lifecycle.register('srv-1', registeredConfig, queue as never);
+      const executor = queue.setExecutor.mock.calls[0][0] as (entry: {
+        kind: string;
+        targetDeploymentId?: string;
+        meta?: Record<string, unknown>;
+      }) => Promise<void>;
+
+      await executor({
+        kind: 'DeploySync',
+        targetDeploymentId: 'dep-1',
+        meta: {
+          fileChangeBatch: {
+            changes: [{ path: 'index.jsp', type: 'changed' }],
+            totalBytes: 12,
+          },
+        },
+      });
+
+      expect(deployService.sync).toHaveBeenCalledWith(
+        expect.objectContaining({
+          serverId: 'srv-1',
+          kind: 'DeploySync',
+          targetDeploymentId: 'dep-1',
+        }),
+        refreshedConfig,
+        refreshedConfig.deployments[0],
+        expect.objectContaining({
+          changes: [{ path: 'index.jsp', type: 'changed' }],
+          totalBytes: 12,
+        }),
+      );
+    });
+
+    it('records DeploySync failure when sync returns an error result', async () => {
+      const onDeploySyncFailure = vi.fn();
+      const queue = mockQueue();
+      const config = {
+        ...makeServer(),
+        deployments: [makeDeploymentConfig()],
+      };
+
+      deployService.sync.mockResolvedValue(
+        err(new JsmError({ code: ErrorCode.DeployFailed, message: 'sync failed' })),
+      );
+
+      lifecycle = new ServerLifecycle({
+        pluginRegistry: pluginRegistry as never,
+        bus: bus as never,
+        pidManager: pidManager as never,
+        portScanner: portScanner as never,
+        debugAttacher: debugAttacher as never,
+        logger: mockLogger(),
+        hookRunner: hookRunner as never,
+        deployService: deployService as never,
+        onDeploySyncFailure,
+      });
+
+      lifecycle.register('srv-1', config, queue as never);
+      const executor = queue.setExecutor.mock.calls[0][0] as (entry: {
+        kind: string;
+        targetDeploymentId?: string;
+        meta?: Record<string, unknown>;
+      }) => Promise<void>;
+
+      await executor({
+        kind: 'DeploySync',
+        targetDeploymentId: 'dep-1',
+        meta: {
+          fileChangeBatch: {
+            changes: [{ path: 'index.jsp', type: 'changed' }],
+            totalBytes: 12,
+          },
+        },
+      });
+
+      expect(onDeploySyncFailure).toHaveBeenCalledWith('srv-1', 'dep-1');
+      expect(bus.emit).toHaveBeenCalledWith('OperationCompleted', expect.objectContaining({
+        serverId: 'srv-1',
+        kind: 'DeploySync',
+      }));
+      expect(bus.emit).not.toHaveBeenCalledWith('OperationFailed', expect.objectContaining({
+        serverId: 'srv-1',
+        kind: 'DeploySync',
+      }));
+    });
+
+    it('records DeploySync failure and emits OperationFailed when sync throws', async () => {
+      const onDeploySyncFailure = vi.fn();
+      const queue = mockQueue();
+      const config = {
+        ...makeServer(),
+        deployments: [makeDeploymentConfig()],
+      };
+
+      deployService.sync.mockRejectedValue(new Error('sync crash'));
+
+      lifecycle = new ServerLifecycle({
+        pluginRegistry: pluginRegistry as never,
+        bus: bus as never,
+        pidManager: pidManager as never,
+        portScanner: portScanner as never,
+        debugAttacher: debugAttacher as never,
+        logger: mockLogger(),
+        hookRunner: hookRunner as never,
+        deployService: deployService as never,
+        onDeploySyncFailure,
+      });
+
+      lifecycle.register('srv-1', config, queue as never);
+      const executor = queue.setExecutor.mock.calls[0][0] as (entry: {
+        kind: string;
+        targetDeploymentId?: string;
+        meta?: Record<string, unknown>;
+      }) => Promise<void>;
+
+      await executor({
+        kind: 'DeploySync',
+        targetDeploymentId: 'dep-1',
+        meta: {
+          fileChangeBatch: {
+            changes: [{ path: 'index.jsp', type: 'changed' }],
+            totalBytes: 12,
+          },
+        },
+      });
+
+      expect(onDeploySyncFailure).toHaveBeenCalledWith('srv-1', 'dep-1');
+      expect(bus.emit).toHaveBeenCalledWith('OperationFailed', expect.objectContaining({
+        serverId: 'srv-1',
+        kind: 'DeploySync',
+        error: expect.objectContaining({
+          message: 'sync crash',
+        }),
+      }));
+    });
+
+    it('treats missing DeploySync batch metadata as a completed no-op', async () => {
+      const { executor } = registerWithDeployment();
+
+      await executor({
+        kind: 'DeploySync',
+        targetDeploymentId: 'dep-1',
+      });
+
+      expect(deployService.sync).not.toHaveBeenCalled();
+      expect(bus.emit).toHaveBeenCalledWith('OperationCompleted', expect.objectContaining({
+        serverId: 'srv-1',
+        kind: 'DeploySync',
+      }));
+    });
+  });
+
   /* ── reconcileRunningServers ─────────────────────────────────────── */
 
   describe('reconcileRunningServers', () => {
@@ -623,6 +912,18 @@ describe('ServerLifecycle', () => {
     it('emits WorkspaceLoaded', async () => {
       await lifecycle.reconcileRunningServers([]);
       expect(bus.emit).toHaveBeenCalledWith('WorkspaceLoaded', { serverCount: 0 });
+    });
+
+    it('forces stopped state when reconciliation throws', async () => {
+      const queue = mockQueue();
+      const runtime = lifecycle.register('srv-1', makeServer(), queue as never);
+
+      pidManager.readPid.mockRejectedValue(new Error('read failed'));
+
+      await lifecycle.reconcileRunningServers([{ serverKey: 'srv-1', config: makeServer() }]);
+
+      expect(runtime.state).toBe('stopped');
+      expect(bus.emit).toHaveBeenCalledWith('WorkspaceLoaded', { serverCount: 1 });
     });
   });
 

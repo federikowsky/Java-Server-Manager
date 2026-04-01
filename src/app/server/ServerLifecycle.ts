@@ -5,7 +5,6 @@ import type {
   ServerState,
   StartMode,
   OperationContext,
-  OperationKind,
   Logger,
   DebugAttacher,
   TrustGate,
@@ -18,7 +17,7 @@ import { ok, err } from '@core/result';
 import { JsmError } from '@core/errors/JsmError';
 import { ErrorCode } from '@core/errors/codes';
 import type { EventBus } from '@core/events/EventBus';
-import { decideReadiness, decideStopEscalation, canStart, canStop } from '@core/policy/DecisionEngine';
+import { decideStopEscalation, canStart, canStop } from '@core/policy/DecisionEngine';
 import {
   createCancellationTokenSource,
   cancellationPromise,
@@ -34,11 +33,17 @@ import { PortScanner } from '@infra/ports';
 import type { HookRunner } from '@app/hooks';
 import type { DeploymentService } from '@app/deployment/DeploymentService';
 import { ServerRuntime } from './ServerRuntime';
+import { STARTUP_CALLBACK_DEBOUNCE_MS } from '../../constants';
+import { makeCtx, probeAfterStartupEvent, sleep, waitForHttpReadiness } from './serverLifecycleHelpers';
 import {
-  READINESS_PROBE_INTERVAL_MS,
-  RECONCILIATION_BUDGET_MS,
-  STARTUP_CALLBACK_DEBOUNCE_MS,
-} from '../../constants';
+  runDeploymentHealthChecksOperation,
+  runDeployFullOperation,
+  runDeploySyncOperation,
+  runDeployUndeployedOperation,
+  runRedeployAllOperation,
+  runUndeployOperation,
+} from './serverLifecycleDeployOps';
+import { reconcileRunningServers as runReconcileRunningServers } from './serverLifecycleReconcile';
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -63,93 +68,6 @@ interface ServerEntry {
   runtime: ServerRuntime;
   queue: OperationQueue;
   activeCancellation?: CancellationTokenSource;
-}
-
-// ── Helpers ─────────────────────────────────────────────────────────────────
-
-function sleep(ms: number): Promise<void> {
-  return new Promise(r => setTimeout(r, ms));
-}
-
-/**
- * When startup monitor reported 'started' (AFTER_START_EVENT), do one port probe after a short
- * debounce instead of polling. No loop.
- */
-async function probeAfterStartupEvent(
-  portScanner: PortScanner,
-  config: ServerConfig,
-  debounceMs: number,
-  ctx: OperationContext,
-): Promise<boolean> {
-  await Promise.race([
-    sleep(debounceMs),
-    cancellationPromise(ctx.cancel, `Start operation for '${config.name}' was cancelled.`),
-  ]);
-  throwIfCancelled(ctx.cancel, `Start operation for '${config.name}' was cancelled.`);
-  const portOpen = await portScanner.probe(config.ports.http, config.host);
-  return portOpen;
-}
-
-async function waitForHttpReadiness(
-  portScanner: PortScanner,
-  config: ServerConfig,
-  timeoutMs: number,
-  startedAt: number,
-  ctx: OperationContext,
-): Promise<boolean> {
-  let ready = false;
-
-  while (!ready && (Date.now() - startedAt) < timeoutMs) {
-    throwIfCancelled(ctx.cancel, `Start operation for '${config.name}' was cancelled.`);
-    const portOpen = await portScanner.probe(config.ports.http, config.host);
-    const decision = decideReadiness({
-      portOpen,
-      elapsed: Date.now() - startedAt,
-      timeoutMs,
-    });
-
-    if (decision === 'ready') {
-      ready = true;
-      break;
-    }
-
-    if (decision === 'timeout') {
-      break;
-    }
-
-    await Promise.race([
-      sleep(READINESS_PROBE_INTERVAL_MS),
-      cancellationPromise(ctx.cancel, `Start operation for '${config.name}' was cancelled.`),
-    ]);
-  }
-
-  return ready;
-}
-
-function makeCtx(
-  serverId: ServerId,
-  kind: OperationKind,
-  timeoutMs: number,
-  cancel: OperationContext['cancel'],
-  outputSink?: OutputSink,
-  operationId?: OperationContext['operationId'],
-): OperationContext {
-  return {
-    operationId: operationId ?? (`op-${Date.now()}-${Math.random().toString(36).slice(2, 8)}` as OperationContext['operationId']),
-    serverId,
-    kind,
-    startedAt: Date.now(),
-    timeoutMs,
-    cancel,
-    progress: {
-      report: (msg: string) => outputSink?.appendLine(msg),
-    },
-    output: {
-      append: (text: string) => outputSink?.append(text),
-      appendLine: (text: string) => outputSink?.appendLine(text),
-      clear: () => outputSink?.clear(),
-    },
-  };
 }
 
 /**
@@ -424,18 +342,11 @@ export class ServerLifecycle {
   async reconcileRunningServers(
     configs: Array<{ serverKey: ServerId; config: ServerConfig }>,
   ): Promise<void> {
-    this.deps.logger.info(`ServerLifecycle: reconciling ${configs.length} servers`);
-
-    const tasks = configs.map(({ serverKey, config }) => this.reconcileOne(serverKey, config));
-
-    await Promise.race([
-      Promise.all(tasks),
-      sleep(RECONCILIATION_BUDGET_MS).then(() => {
-        this.deps.logger.warn('ServerLifecycle: reconciliation budget exceeded');
-      }),
-    ]);
-
-    this.deps.bus.emit('WorkspaceLoaded', { serverCount: configs.length });
+    await runReconcileRunningServers(this.servers, {
+      bus: this.deps.bus,
+      pidManager: this.deps.pidManager,
+      logger: this.deps.logger,
+    }, configs);
   }
 
   // ── Internal Operation Dispatch ───────────────────────────────────
@@ -771,42 +682,13 @@ export class ServerLifecycle {
     }
   }
 
-  private resolveRunningConfig(server: ServerEntry): ServerConfig {
-    return this.deps.resolveServerConfig?.(server.serverKey) ?? server.config;
-  }
-
   private async doDeployFull(
     server: ServerEntry,
     entry: QueueEntry,
     busOperationId: OperationContext['operationId'],
     cancel: OperationContext['cancel'],
   ): Promise<void> {
-    const deploymentId = entry.targetDeploymentId;
-    if (!deploymentId) {
-      throw new JsmError({
-        code: ErrorCode.InvalidConfig,
-        message: 'DeployFull requires targetDeploymentId',
-      });
-    }
-    const config = this.resolveRunningConfig(server);
-    const dep = config.deployments.find(d => d.id === deploymentId);
-    if (!dep) {
-      throw new JsmError({
-        code: ErrorCode.InvalidConfig,
-        message: `Deployment '${deploymentId}' not found`,
-      });
-    }
-    const ctx = makeCtx(
-      server.serverKey,
-      'DeployFull',
-      600_000,
-      cancel,
-      this.deps.getOutputSink?.(server.serverKey, config.name),
-      busOperationId,
-    );
-    ctx.targetDeploymentId = deploymentId;
-    const result = await this.deps.deployService.fullRedeploy(ctx, config, dep);
-    if (!result.ok) throw result.error;
+    await runDeployFullOperation(this.deps, server, entry, busOperationId, cancel);
   }
 
   private async doUndeploy(
@@ -815,32 +697,7 @@ export class ServerLifecycle {
     busOperationId: OperationContext['operationId'],
     cancel: OperationContext['cancel'],
   ): Promise<void> {
-    const deploymentId = entry.targetDeploymentId;
-    if (!deploymentId) {
-      throw new JsmError({
-        code: ErrorCode.InvalidConfig,
-        message: 'Undeploy requires targetDeploymentId',
-      });
-    }
-    const config = this.resolveRunningConfig(server);
-    const dep = config.deployments.find(d => d.id === deploymentId);
-    if (!dep) {
-      throw new JsmError({
-        code: ErrorCode.InvalidConfig,
-        message: `Deployment '${deploymentId}' not found`,
-      });
-    }
-    const ctx = makeCtx(
-      server.serverKey,
-      'Undeploy',
-      600_000,
-      cancel,
-      this.deps.getOutputSink?.(server.serverKey, config.name),
-      busOperationId,
-    );
-    ctx.targetDeploymentId = deploymentId;
-    const result = await this.deps.deployService.undeploy(ctx, config, dep);
-    if (!result.ok) throw result.error;
+    await runUndeployOperation(this.deps, server, entry, busOperationId, cancel);
   }
 
   private async doRedeployAll(
@@ -848,16 +705,7 @@ export class ServerLifecycle {
     busOperationId: OperationContext['operationId'],
     cancel: OperationContext['cancel'],
   ): Promise<void> {
-    const config = this.resolveRunningConfig(server);
-    const ctx = makeCtx(
-      server.serverKey,
-      'RedeployAll',
-      600_000,
-      cancel,
-      this.deps.getOutputSink?.(server.serverKey, config.name),
-      busOperationId,
-    );
-    await this.deps.deployService.redeployAll(ctx, config);
+    await runRedeployAllOperation(this.deps, server, busOperationId, cancel);
   }
 
   private async doDeployUndeployed(
@@ -865,16 +713,7 @@ export class ServerLifecycle {
     busOperationId: OperationContext['operationId'],
     cancel: OperationContext['cancel'],
   ): Promise<void> {
-    const config = this.resolveRunningConfig(server);
-    const ctx = makeCtx(
-      server.serverKey,
-      'DeployUndeployed',
-      600_000,
-      cancel,
-      this.deps.getOutputSink?.(server.serverKey, config.name),
-      busOperationId,
-    );
-    await this.deps.deployService.deployUndeployed(ctx, config);
+    await runDeployUndeployedOperation(this.deps, server, busOperationId, cancel);
   }
 
   private async doRunDeploymentHealthChecks(
@@ -882,9 +721,7 @@ export class ServerLifecycle {
     _busOperationId: OperationContext['operationId'],
     cancel: OperationContext['cancel'],
   ): Promise<void> {
-    throwIfCancelled(cancel, 'Deployment health checks cancelled.');
-    const config = this.resolveRunningConfig(server);
-    await this.deps.deployService.runHealthChecksForServer(server.serverKey, config);
+    await runDeploymentHealthChecksOperation(this.deps, server, cancel);
   }
 
   // ── Deploy sync (autosync) ──────────────────────────────────────
@@ -895,47 +732,7 @@ export class ServerLifecycle {
     busOperationId: OperationContext['operationId'],
     cancel: OperationContext['cancel'],
   ): Promise<void> {
-    const deployService = this.deps.deployService;
-
-    const deploymentId = entry.targetDeploymentId;
-    if (!deploymentId) {
-      this.deps.logger.warn('ServerLifecycle: DeploySync missing targetDeploymentId');
-      return;
-    }
-
-    const batch = entry.meta?.[QUEUE_META_FILE_CHANGE_BATCH] as FileChangeBatch | undefined;
-    if (!batch || !Array.isArray(batch.changes)) {
-      this.deps.logger.warn('ServerLifecycle: DeploySync missing fileChangeBatch meta');
-      return;
-    }
-
-    const serverKey = server.serverKey;
-    const config = this.deps.resolveServerConfig?.(serverKey) ?? server.config;
-    const dep = config.deployments.find(d => d.id === deploymentId);
-    if (!dep) {
-      this.deps.logger.warn(`ServerLifecycle: DeploySync deployment '${deploymentId}' not found`);
-      return;
-    }
-
-    const ctx = makeCtx(
-      serverKey,
-      'DeploySync',
-      30_000,
-      cancel,
-      this.deps.getOutputSink?.(serverKey, config.name),
-      busOperationId,
-    );
-    ctx.targetDeploymentId = deploymentId;
-
-    try {
-      const result = await deployService.sync(ctx, config, dep, batch);
-      if (!result.ok) {
-        this.deps.onDeploySyncFailure?.(serverKey, deploymentId);
-      }
-    } catch (cause) {
-      this.deps.onDeploySyncFailure?.(serverKey, deploymentId);
-      throw cause;
-    }
+    await runDeploySyncOperation(this.deps, server, entry, busOperationId, cancel);
   }
 
   // ── Status Refresh ────────────────────────────────────────────────
@@ -977,41 +774,6 @@ export class ServerLifecycle {
           }),
         });
       }
-    }
-  }
-
-  // ── Reconcile One Server (§9.9) ───────────────────────────────────
-
-  private async reconcileOne(serverKey: ServerId, config: ServerConfig): Promise<void> {
-    const entry = this.servers.get(serverKey);
-    if (!entry) return;
-
-    const { runtime } = entry;
-
-    try {
-      const pid = await this.deps.pidManager.readPid(serverKey);
-
-      if (!pid) {
-        // No PID file → stopped
-        if (runtime.state !== 'stopped') {
-          runtime.forceState('stopped');
-        }
-        return;
-      }
-
-      const alive = this.deps.pidManager.isProcessAlive(pid);
-
-      if (alive) {
-        runtime.forceState('running', { pid, startMode: runtime.lastStartMode });
-      } else {
-        // Stale PID
-        await this.deps.pidManager.clearPid(serverKey);
-        runtime.forceState('stopped');
-        this.deps.logger.warn(`ServerLifecycle: stale PID file removed for '${config.name}'`);
-      }
-    } catch (e) {
-      this.deps.logger.error(`ServerLifecycle: reconciliation error for '${config.name}'`, e);
-      runtime.forceState('stopped');
     }
   }
 

@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { createHash } from 'crypto';
 import workspaceSchemaDocument from './schema/jsm.servers.schema.json';
-import type { ServerId, DeploymentId, FileChangeBatch, Logger as ILogger } from '@core/types';
+import type { ServerId, DeploymentId, FileChangeBatch, Logger as ILogger, ServerConfig } from '@core/types';
 import type { Result } from '@core/result';
 import { ok, err } from '@core/result';
 import { JsmError } from '@core/errors/JsmError';
@@ -52,6 +52,267 @@ function workspaceStorageId(workspaceFolderUri: string): string {
 function workspaceFolderUriString(folder: vscode.WorkspaceFolder): string {
   const uri = folder.uri as { toString?: () => string; fsPath?: string };
   return typeof uri?.toString === 'function' ? uri.toString() : uri?.fsPath ?? '';
+}
+
+type LoadedServerRegistration = {
+  serverKey: ServerId;
+  config: ServerConfig;
+};
+
+type WorkspaceEntryFactoryParams = {
+  folder: vscode.WorkspaceFolder;
+  baseManagedStorageRoot: string;
+  validator: SchemaValidator;
+  eventBus: EventBus;
+  logger: ILogger;
+  trustGate: { isTrusted: () => boolean };
+  pluginRegistry: PluginRegistry;
+};
+
+type LoadWorkspaceServersParams = {
+  scopeUri: string;
+  scopeNameForLog: string;
+  workspaceServiceRegistry: WorkspaceServiceRegistry;
+  lifecycle: ServerLifecycle;
+  opQueueFactory: (serverId: ServerId) => OperationQueue;
+  logger: ILogger;
+};
+
+type TeardownWorkspaceFolderParams = {
+  scopeUri: string;
+  workspaceServiceRegistry: WorkspaceServiceRegistry;
+  lifecycle: ServerLifecycle;
+  logChannel: ServerLogChannel;
+  autoSyncService: AutoSyncService;
+};
+
+type ReconcileLoadedServersParams = {
+  loadedServers: LoadedServerRegistration[];
+  lifecycle: ServerLifecycle;
+  logger: ILogger;
+  e2eEnabled: boolean;
+};
+
+async function resolveHookTask(taskName: string): Promise<Result<vscode.Task, JsmError>> {
+  const normalizedTaskName = taskName.trim();
+  if (normalizedTaskName.length === 0) {
+    return err(new JsmError({
+      code: ErrorCode.InvalidConfig,
+      message: 'VS Code hook task name is required',
+    }));
+  }
+
+  const tasks = await vscode.tasks.fetchTasks();
+  const matches = tasks.filter(candidate => candidate.name.trim() === normalizedTaskName);
+
+  if (matches.length === 0) {
+    return err(new JsmError({
+      code: ErrorCode.InvalidConfig,
+      message: `VS Code task '${normalizedTaskName}' not found`,
+    }));
+  }
+
+  if (matches.length > 1) {
+    return err(new JsmError({
+      code: ErrorCode.InvalidConfig,
+      message: `VS Code task '${normalizedTaskName}' is ambiguous; use a unique task name`,
+    }));
+  }
+
+  return ok(matches[0]);
+}
+
+function createHookExecutor(params: {
+  processSpawner: ProcessSpawner;
+  primaryWorkspaceFolder: string;
+}): HookExecutor {
+  const { processSpawner, primaryWorkspaceFolder } = params;
+
+  return {
+    async runCommand(request): Promise<Result<void, JsmError>> {
+      try {
+        const cmd = request.hook.command;
+        if (!cmd) {
+          return err(new JsmError({ code: ErrorCode.HookFailed, message: 'Hook has no command config' }));
+        }
+        const child = processSpawner.spawnShell({
+          line: cmd.line,
+          cwd: cmd.cwd ?? primaryWorkspaceFolder,
+          env: cmd.env,
+          onData: (chunk) => request.parent.output.append(chunk),
+        });
+        await new Promise<void>((resolve, reject) => {
+          child.on('close', (code) => {
+            if (code === 0) resolve();
+            else reject(new Error(`Hook exited with code ${code}`));
+          });
+          child.on('error', reject);
+        });
+        return ok(undefined);
+      } catch (e) {
+        return err(
+          new JsmError({ code: ErrorCode.HookFailed, message: `Hook command failed: ${String(e)}` }),
+        );
+      }
+    },
+    async runVscodeTask(request): Promise<Result<void, JsmError>> {
+      try {
+        const taskName = request.hook.vscodeTask?.taskName ?? 'JSM Hook';
+        const taskResult = await resolveHookTask(taskName);
+        if (!taskResult.ok) {
+          return taskResult;
+        }
+
+        request.parent.output.appendLine(`Starting VS Code task hook '${taskName}'`);
+        const taskExecution = await vscode.tasks.executeTask(taskResult.value);
+        const exitCode = await new Promise<number | undefined>((resolve) => {
+          const d = vscode.tasks.onDidEndTaskProcess((ev) => {
+            if (ev.execution === taskExecution) {
+              d.dispose();
+              resolve(ev.exitCode);
+            }
+          });
+        });
+
+        if (exitCode !== undefined && exitCode !== 0) {
+          return err(new JsmError({
+            code: ErrorCode.HookFailed,
+            message: `VS Code task '${taskName}' failed with exit code ${exitCode}`,
+          }));
+        }
+
+        request.parent.output.appendLine(`VS Code task hook '${taskName}' completed`);
+        return ok(undefined);
+      } catch (e) {
+        return err(
+          new JsmError({ code: ErrorCode.HookFailed, message: `VS Code task hook failed: ${String(e)}` }),
+        );
+      }
+    },
+  };
+}
+
+function buildWorkspaceServiceEntry(params: WorkspaceEntryFactoryParams): WorkspaceServiceEntry {
+  const {
+    folder,
+    baseManagedStorageRoot,
+    validator,
+    eventBus,
+    logger,
+    trustGate,
+    pluginRegistry,
+  } = params;
+  const scopeUri = workspaceFolderUriString(folder);
+  const scope = {
+    uri: scopeUri,
+    name: folder.name,
+    fsPath: folder.uri.fsPath,
+  };
+  const configRepo = new ConfigRepo(folder.uri.fsPath, logger);
+  const configService = new ConfigService({
+    repo: configRepo,
+    validator,
+    bus: eventBus,
+    logger,
+    workspaceFolderUri: scope.uri,
+    trustGate,
+  });
+  const managedInstancePathResolver = new ManagedInstancePathResolver(
+    path.join(baseManagedStorageRoot, 'workspaces', workspaceStorageId(scope.uri), 'instances'),
+  );
+  const provisioningService = new ServerProvisioningService({
+    configService,
+    pluginRegistry,
+    pathResolver: managedInstancePathResolver,
+    logger,
+    trustGate,
+  });
+
+  return {
+    scope,
+    configService,
+    provisioningService,
+    configFilePath: configRepo.filePath,
+  };
+}
+
+async function loadAndRegisterServersForWorkspace(
+  params: LoadWorkspaceServersParams,
+): Promise<LoadedServerRegistration[]> {
+  const {
+    scopeUri,
+    scopeNameForLog,
+    workspaceServiceRegistry,
+    lifecycle,
+    opQueueFactory,
+    logger,
+  } = params;
+  const entry = workspaceServiceRegistry.getEntry(scopeUri);
+  if (!entry) {
+    return [];
+  }
+
+  const loadResult = await entry.configService.loadWorkspace();
+  if (!loadResult.ok) {
+    logger.error(`Failed to load workspace config for '${scopeNameForLog}'`, loadResult.error);
+    return [];
+  }
+
+  const loaded: LoadedServerRegistration[] = [];
+  for (const config of loadResult.value) {
+    const serverKey = makeWorkspaceServerKey(scopeUri, config.id);
+    const queue = opQueueFactory(serverKey);
+    lifecycle.register(serverKey, config, queue);
+    loaded.push({ serverKey, config });
+  }
+
+  return loaded;
+}
+
+function teardownWorkspaceFolder(params: TeardownWorkspaceFolderParams): void {
+  const {
+    scopeUri,
+    workspaceServiceRegistry,
+    lifecycle,
+    logChannel,
+    autoSyncService,
+  } = params;
+  const records = workspaceServiceRegistry.getServers(scopeUri);
+  for (const record of records) {
+    const { serverKey } = record;
+    lifecycle.unregister(serverKey);
+    logChannel.detach(serverKey);
+    autoSyncService.purgeServerWatchState(serverKey);
+  }
+}
+
+async function reconcileLoadedServers(params: ReconcileLoadedServersParams): Promise<void> {
+  const {
+    loadedServers,
+    lifecycle,
+    logger,
+    e2eEnabled,
+  } = params;
+  if (loadedServers.length === 0) {
+    return;
+  }
+
+  const reconcilePromise = lifecycle.reconcileRunningServers(loadedServers);
+  if (e2eEnabled) {
+    try {
+      await reconcilePromise;
+    } catch (e) {
+      logger.error('Reconciliation failed', e);
+    }
+    for (const server of loadedServers) {
+      lifecycle.getRuntime(server.serverKey)?.forceState('running', { pid: process.pid });
+    }
+    return;
+  }
+
+  reconcilePromise.catch((e) => {
+    logger.error('Reconciliation failed', e);
+  });
 }
 
 // ── Activate ────────────────────────────────────────────────────────────────
@@ -134,140 +395,26 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<JsmExtensi
 
   // ── 5. App layer ──────────────────────────────────────────────────────
 
-  async function resolveHookTask(taskName: string): Promise<Result<vscode.Task, JsmError>> {
-    const normalizedTaskName = taskName.trim();
-    if (normalizedTaskName.length === 0) {
-      return err(new JsmError({
-        code: ErrorCode.InvalidConfig,
-        message: 'VS Code hook task name is required',
-      }));
-    }
-
-    const tasks = await vscode.tasks.fetchTasks();
-    const matches = tasks.filter(candidate => candidate.name.trim() === normalizedTaskName);
-
-    if (matches.length === 0) {
-      return err(new JsmError({
-        code: ErrorCode.InvalidConfig,
-        message: `VS Code task '${normalizedTaskName}' not found`,
-      }));
-    }
-
-    if (matches.length > 1) {
-      return err(new JsmError({
-        code: ErrorCode.InvalidConfig,
-        message: `VS Code task '${normalizedTaskName}' is ambiguous; use a unique task name`,
-      }));
-    }
-
-    return ok(matches[0]);
-  }
-
-  const hookExecutor: HookExecutor = {
-    async runCommand(request): Promise<Result<void, JsmError>> {
-      try {
-        const cmd = request.hook.command;
-        if (!cmd) {
-          return err(new JsmError({ code: ErrorCode.HookFailed, message: 'Hook has no command config' }));
-        }
-        const child = processSpawner.spawnShell({
-          line: cmd.line,
-          cwd: cmd.cwd ?? primaryWorkspaceFolder,
-          env: cmd.env,
-          onData: (chunk) => request.parent.output.append(chunk),
-        });
-        await new Promise<void>((resolve, reject) => {
-          child.on('close', (code) => {
-            if (code === 0) resolve();
-            else reject(new Error(`Hook exited with code ${code}`));
-          });
-          child.on('error', reject);
-        });
-        return ok(undefined);
-      } catch (e) {
-        return err(
-          new JsmError({ code: ErrorCode.HookFailed, message: `Hook command failed: ${String(e)}` }),
-        );
-      }
-    },
-    async runVscodeTask(request): Promise<Result<void, JsmError>> {
-      try {
-        const taskName = request.hook.vscodeTask?.taskName ?? 'JSM Hook';
-        const taskResult = await resolveHookTask(taskName);
-        if (!taskResult.ok) {
-          return taskResult;
-        }
-
-        request.parent.output.appendLine(`Starting VS Code task hook '${taskName}'`);
-        const taskExecution = await vscode.tasks.executeTask(taskResult.value);
-        const exitCode = await new Promise<number | undefined>((resolve) => {
-          const d = vscode.tasks.onDidEndTaskProcess((ev) => {
-            if (ev.execution === taskExecution) {
-              d.dispose();
-              resolve(ev.exitCode);
-            }
-          });
-        });
-
-        if (exitCode !== undefined && exitCode !== 0) {
-          return err(new JsmError({
-            code: ErrorCode.HookFailed,
-            message: `VS Code task '${taskName}' failed with exit code ${exitCode}`,
-          }));
-        }
-
-        request.parent.output.appendLine(`VS Code task hook '${taskName}' completed`);
-        return ok(undefined);
-      } catch (e) {
-        return err(
-          new JsmError({ code: ErrorCode.HookFailed, message: `VS Code task hook failed: ${String(e)}` }),
-        );
-      }
-    },
-  };
+  const hookExecutor: HookExecutor = createHookExecutor({
+    processSpawner,
+    primaryWorkspaceFolder,
+  });
 
   // TrustGate (§12.8): injected into services that perform side-effecting operations
   const trustGate = { isTrusted: () => vscode.workspace.isTrusted };
 
   const hookRunner = new HookRunner({ executor: hookExecutor, logger, trustGate });
 
-  function buildWorkspaceServiceEntry(folder: vscode.WorkspaceFolder): WorkspaceServiceEntry {
-    const scopeUri = workspaceFolderUriString(folder);
-    const scope = {
-      uri: scopeUri,
-      name: folder.name,
-      fsPath: folder.uri.fsPath,
-    };
-    const configRepo = new ConfigRepo(folder.uri.fsPath, logger);
-    const configService = new ConfigService({
-      repo: configRepo,
-      validator,
-      bus: eventBus,
-      logger,
-      workspaceFolderUri: scope.uri,
-      trustGate,
-    });
-    const managedInstancePathResolver = new ManagedInstancePathResolver(
-      path.join(baseManagedStorageRoot, 'workspaces', workspaceStorageId(scope.uri), 'instances'),
-    );
-    const provisioningService = new ServerProvisioningService({
-      configService,
-      pluginRegistry,
-      pathResolver: managedInstancePathResolver,
-      logger,
-      trustGate,
-    });
-
-    return {
-      scope,
-      configService,
-      provisioningService,
-      configFilePath: configRepo.filePath,
-    };
-  }
-
   const workspaceServiceRegistry = new WorkspaceServiceRegistry(
-    workspaceFolders.map(buildWorkspaceServiceEntry),
+    workspaceFolders.map(folder => buildWorkspaceServiceEntry({
+      folder,
+      baseManagedStorageRoot,
+      validator,
+      eventBus,
+      logger,
+      trustGate,
+      pluginRegistry,
+    })),
     logger,
   );
 
@@ -335,41 +482,6 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<JsmExtensi
     const cfg = workspaceServiceRegistry.getServerRecordByKey(serverKey)?.config;
     if (!cfg) return;
     autoSyncService.rebindWatchers(serverKey, cfg);
-  }
-
-  async function loadAndRegisterServersForWorkspace(
-    scopeUri: string,
-    scopeNameForLog: string,
-  ): Promise<Array<{ serverKey: ServerId; config: ReturnType<typeof workspaceServiceRegistry.getAllServers>[number]['config'] }>> {
-    const entry = workspaceServiceRegistry.getEntry(scopeUri);
-    if (!entry) {
-      return [];
-    }
-
-    const loadResult = await entry.configService.loadWorkspace();
-    if (!loadResult.ok) {
-      logger.error(`Failed to load workspace config for '${scopeNameForLog}'`, loadResult.error);
-      return [];
-    }
-
-    const out: Array<{ serverKey: ServerId; config: ReturnType<typeof workspaceServiceRegistry.getAllServers>[number]['config'] }> = [];
-    for (const config of loadResult.value) {
-      const serverKey = makeWorkspaceServerKey(scopeUri, config.id);
-      const queue = opQueueFactory(serverKey);
-      lifecycle.register(serverKey, config, queue);
-      out.push({ serverKey, config });
-    }
-    return out;
-  }
-
-  function teardownWorkspaceFolder(scopeUri: string): void {
-    const records = workspaceServiceRegistry.getServers(scopeUri);
-    for (const record of records) {
-      const { serverKey } = record;
-      lifecycle.unregister(serverKey);
-      logChannel.detach(serverKey);
-      autoSyncService.purgeServerWatchState(serverKey);
-    }
   }
 
   const templateService = new TemplateService({
@@ -539,13 +651,34 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<JsmExtensi
     vscode.workspace.onDidChangeWorkspaceFolders(async (e) => {
       for (const folder of e.removed) {
         const scopeUri = workspaceFolderUriString(folder);
-        teardownWorkspaceFolder(scopeUri);
+        teardownWorkspaceFolder({
+          scopeUri,
+          workspaceServiceRegistry,
+          lifecycle,
+          logChannel,
+          autoSyncService,
+        });
         workspaceServiceRegistry.removeEntry(scopeUri);
       }
       for (const folder of e.added) {
-        const entry = buildWorkspaceServiceEntry(folder);
+        const entry = buildWorkspaceServiceEntry({
+          folder,
+          baseManagedStorageRoot,
+          validator,
+          eventBus,
+          logger,
+          trustGate,
+          pluginRegistry,
+        });
         workspaceServiceRegistry.registerEntry(entry);
-        const loaded = await loadAndRegisterServersForWorkspace(entry.scope.uri, entry.scope.name);
+        const loaded = await loadAndRegisterServersForWorkspace({
+          scopeUri: entry.scope.uri,
+          scopeNameForLog: entry.scope.name,
+          workspaceServiceRegistry,
+          lifecycle,
+          opQueueFactory,
+          logger,
+        });
         if (loaded.length > 0) {
           lifecycle.reconcileRunningServers(loaded).catch((err: unknown) => {
             logger.error('Reconciliation failed after workspace folder added', err);
@@ -560,31 +693,27 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<JsmExtensi
 
   // ── 9. Load workspace ────────────────────────────────────────────────
 
-  const loadedServers: Array<{ serverKey: ServerId; config: ReturnType<typeof workspaceServiceRegistry.getAllServers>[number]['config'] }> = [];
+  const loadedServers: LoadedServerRegistration[] = [];
   for (const scope of workspaceServiceRegistry.getWorkspaceScopes()) {
-    const chunk = await loadAndRegisterServersForWorkspace(scope.uri, scope.name);
+    const chunk = await loadAndRegisterServersForWorkspace({
+      scopeUri: scope.uri,
+      scopeNameForLog: scope.name,
+      workspaceServiceRegistry,
+      lifecycle,
+      opQueueFactory,
+      logger,
+    });
     loadedServers.push(...chunk);
   }
 
   treeProvider.forceRefresh();
 
-  if (loadedServers.length > 0) {
-    const reconcilePromise = lifecycle.reconcileRunningServers(loadedServers);
-    if (e2eEnabled) {
-      try {
-        await reconcilePromise;
-      } catch (e) {
-        logger.error('Reconciliation failed', e);
-      }
-      for (const s of loadedServers) {
-        lifecycle.getRuntime(s.serverKey)?.forceState('running', { pid: process.pid });
-      }
-    } else {
-      reconcilePromise.catch((e) => {
-        logger.error('Reconciliation failed', e);
-      });
-    }
-  }
+  await reconcileLoadedServers({
+    loadedServers,
+    lifecycle,
+    logger,
+    e2eEnabled,
+  });
 
   // Push all to context subscriptions for cleanup
   ctx.subscriptions.push(...disposables);

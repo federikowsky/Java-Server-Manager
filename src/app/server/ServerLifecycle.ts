@@ -113,10 +113,11 @@ export class ServerLifecycle {
 
   /** Enqueue a start operation. */
   start(serverId: ServerId, mode: StartMode): Result<void, JsmError> {
-    if (!this.checkTrust()) return this.untrustedErr();
-
-    const entry = this.servers.get(serverId);
-    if (!entry) return this.notFound(serverId);
+    const entryResult = this.requireServerEntry(serverId, { requireTrust: true });
+    if (!entryResult.ok) {
+      return entryResult;
+    }
+    const entry = entryResult.value;
 
     if (!canStart(entry.runtime.state)) {
       return err(new JsmError({
@@ -125,19 +126,19 @@ export class ServerLifecycle {
       }));
     }
 
-    entry.queue.enqueue({
+    return this.enqueueServerEntry(entry, {
       kind: 'LifecycleStart',
       meta: { mode },
     });
-    return ok(undefined);
   }
 
   /** Enqueue a stop operation. */
   stop(serverId: ServerId): Result<void, JsmError> {
-    if (!this.checkTrust()) return this.untrustedErr();
-
-    const entry = this.servers.get(serverId);
-    if (!entry) return this.notFound(serverId);
+    const entryResult = this.requireServerEntry(serverId, { requireTrust: true });
+    if (!entryResult.ok) {
+      return entryResult;
+    }
+    const entry = entryResult.value;
 
     if (!canStop(entry.runtime.state)) {
       return err(new JsmError({
@@ -146,22 +147,20 @@ export class ServerLifecycle {
       }));
     }
 
-    entry.queue.enqueue({ kind: 'LifecycleStop' });
-    return ok(undefined);
+    return this.enqueueServerEntry(entry, { kind: 'LifecycleStop' });
   }
 
   /** Enqueue a restart (stop + start). */
   restart(serverId: ServerId, mode: StartMode): Result<void, JsmError> {
-    if (!this.checkTrust()) return this.untrustedErr();
+    const entryResult = this.requireServerEntry(serverId, { requireTrust: true });
+    if (!entryResult.ok) {
+      return entryResult;
+    }
 
-    const entry = this.servers.get(serverId);
-    if (!entry) return this.notFound(serverId);
-
-    entry.queue.enqueue({
+    return this.enqueueServerEntry(entryResult.value, {
       kind: 'LifecycleRestart',
       meta: { mode },
     });
-    return ok(undefined);
   }
 
   /** Cancel all pending operations for a server. */
@@ -177,11 +176,7 @@ export class ServerLifecycle {
 
   /** Enqueue a status refresh operation (§9). */
   refreshStatus(serverId: ServerId): Result<void, JsmError> {
-    const entry = this.servers.get(serverId);
-    if (!entry) return this.notFound(serverId);
-
-    entry.queue.enqueue({ kind: 'StatusRefresh' });
-    return ok(undefined);
+    return this.enqueueForServer(serverId, { kind: 'StatusRefresh' });
   }
 
   /**
@@ -193,62 +188,42 @@ export class ServerLifecycle {
     deploymentId: DeploymentId,
     batch: FileChangeBatch,
   ): Result<void, JsmError> {
-    if (!this.checkTrust()) return this.untrustedErr();
-
-    const entry = this.servers.get(serverId);
-    if (!entry) return this.notFound(serverId);
-
-    entry.queue.enqueue({
+    return this.enqueueForServer(serverId, {
       kind: 'DeploySync',
       targetDeploymentId: deploymentId,
       meta: { [QUEUE_META_FILE_CHANGE_BATCH]: batch },
-    });
-    return ok(undefined);
+    }, { requireTrust: true });
   }
 
   /** Enqueue first-time deploy for all currently undeployed applications (pre-start). */
   enqueueDeployUndeployed(serverId: ServerId): Result<void, JsmError> {
-    if (!this.checkTrust()) return this.untrustedErr();
-    const entry = this.servers.get(serverId);
-    if (!entry) return this.notFound(serverId);
-    entry.queue.enqueue({ kind: 'DeployUndeployed' });
-    return ok(undefined);
+    return this.enqueueForServer(serverId, { kind: 'DeployUndeployed' }, { requireTrust: true });
   }
 
   /** Enqueue full redeploy for one deployment. */
   enqueueDeployFull(serverId: ServerId, deploymentId: DeploymentId): Result<void, JsmError> {
-    if (!this.checkTrust()) return this.untrustedErr();
-    const entry = this.servers.get(serverId);
-    if (!entry) return this.notFound(serverId);
-    entry.queue.enqueue({ kind: 'DeployFull', targetDeploymentId: deploymentId });
-    return ok(undefined);
+    return this.enqueueForServer(serverId, {
+      kind: 'DeployFull',
+      targetDeploymentId: deploymentId,
+    }, { requireTrust: true });
   }
 
   /** Enqueue undeploy for one deployment. */
   enqueueUndeploy(serverId: ServerId, deploymentId: DeploymentId): Result<void, JsmError> {
-    if (!this.checkTrust()) return this.untrustedErr();
-    const entry = this.servers.get(serverId);
-    if (!entry) return this.notFound(serverId);
-    entry.queue.enqueue({ kind: 'Undeploy', targetDeploymentId: deploymentId });
-    return ok(undefined);
+    return this.enqueueForServer(serverId, {
+      kind: 'Undeploy',
+      targetDeploymentId: deploymentId,
+    }, { requireTrust: true });
   }
 
   /** Enqueue full redeploy for every deployment on the server. */
   enqueueRedeployAll(serverId: ServerId): Result<void, JsmError> {
-    if (!this.checkTrust()) return this.untrustedErr();
-    const entry = this.servers.get(serverId);
-    if (!entry) return this.notFound(serverId);
-    entry.queue.enqueue({ kind: 'RedeployAll' });
-    return ok(undefined);
+    return this.enqueueForServer(serverId, { kind: 'RedeployAll' }, { requireTrust: true });
   }
 
   /** Enqueue HTTP health checks for deployments with `healthCheckPath` (tooltip cache). */
   enqueueRunDeploymentHealthChecks(serverId: ServerId): Result<void, JsmError> {
-    if (!this.checkTrust()) return this.untrustedErr();
-    const entry = this.servers.get(serverId);
-    if (!entry) return this.notFound(serverId);
-    entry.queue.enqueue({ kind: 'RunDeploymentHealthChecks' });
-    return ok(undefined);
+    return this.enqueueForServer(serverId, { kind: 'RunDeploymentHealthChecks' }, { requireTrust: true });
   }
 
   /** True if the server queue is executing or has pending entries. */
@@ -799,6 +774,40 @@ export class ServerLifecycle {
 
   private checkTrust(): boolean {
     return !this.deps.trustGate || this.deps.trustGate.isTrusted();
+  }
+
+  private requireServerEntry(
+    serverId: ServerId,
+    options: { requireTrust?: boolean } = {},
+  ): Result<ServerEntry, JsmError> {
+    if (options.requireTrust && !this.checkTrust()) {
+      return this.untrustedErr();
+    }
+
+    const entry = this.servers.get(serverId);
+    if (!entry) {
+      return this.notFound(serverId);
+    }
+
+    return ok(entry);
+  }
+
+  private enqueueForServer(
+    serverId: ServerId,
+    queueEntry: QueueEntry,
+    options: { requireTrust?: boolean } = {},
+  ): Result<void, JsmError> {
+    const entryResult = this.requireServerEntry(serverId, options);
+    if (!entryResult.ok) {
+      return entryResult;
+    }
+
+    return this.enqueueServerEntry(entryResult.value, queueEntry);
+  }
+
+  private enqueueServerEntry(entry: ServerEntry, queueEntry: QueueEntry): Result<void, JsmError> {
+    entry.queue.enqueue(queueEntry);
+    return ok(undefined);
   }
 
   private getStartTimeoutMs(config: ServerConfig, mode: StartMode): number {

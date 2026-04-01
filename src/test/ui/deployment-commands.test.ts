@@ -18,6 +18,7 @@ import { ok, err } from '@core/result';
 const mockShowErrorMessage = vi.fn();
 const mockShowInfoMessage = vi.fn();
 const mockShowWarningMessage = vi.fn();
+const mockShowQuickPick = vi.fn();
 const mockOpenTextDocument = vi.fn();
 const mockShowTextDocument = vi.fn();
 const mockExecuteCommand = vi.fn();
@@ -37,6 +38,7 @@ vi.mock('vscode', () => ({
     showErrorMessage: mockShowErrorMessage,
     showInformationMessage: mockShowInfoMessage,
     showWarningMessage: mockShowWarningMessage,
+    showQuickPick: mockShowQuickPick,
     showTextDocument: mockShowTextDocument,
     withProgress: mockWithProgress,
     createTreeView: vi.fn(() => ({ dispose: vi.fn() })),
@@ -233,6 +235,47 @@ describe('Deployment Commands', () => {
         data: {
           serverId: 'srv-1',
           deploymentId: 'dep-2',
+        },
+      }));
+    });
+
+    it('jsm.deployment.edit should persist a SPA deployment payload and return a command result', async () => {
+      const server = makeServer();
+      server.deployments = [makeDeployment('dep-1', 'auto', 'exploded')];
+      deps.configService.getServer.mockReturnValue(server);
+
+      const result = await invoke('jsm.deployment.edit', {
+        serverId: 'srv-1',
+        serverKey: 'srv-1',
+        workspaceFolderUri: '',
+        deploymentId: 'dep-1',
+        draft: {
+          type: 'exploded',
+          sourcePath: '/src/updated',
+          deployName: 'updated-app',
+          syncMode: 'manual',
+          hotReload: false,
+          ignoreGlobs: [],
+          hooks: [],
+        },
+      });
+
+      expect(deps.configService.updateServer).toHaveBeenCalledWith(
+        expect.objectContaining({
+          deployments: [expect.objectContaining({
+            id: 'dep-1',
+            deployName: 'updated-app',
+            sourcePath: '/src/updated',
+            syncMode: 'manual',
+          })],
+        }),
+      );
+      expect(deps.treeProvider.requestRefresh).toHaveBeenCalled();
+      expect(result).toEqual(expect.objectContaining({
+        ok: true,
+        data: {
+          serverId: 'srv-1',
+          deploymentId: 'dep-1',
         },
       }));
     });
@@ -541,6 +584,31 @@ describe('Deployment Commands', () => {
         await invoke('jsm.deployment.openLogs', node);
         expect(mockOpenTextDocument).toHaveBeenCalled();
         expect(mockShowTextDocument).toHaveBeenCalled();
+      });
+
+      it('should show a picker when multiple file log sources are returned', async () => {
+        mockOpenTextDocument.mockResolvedValue({});
+        mockShowTextDocument.mockResolvedValue(undefined);
+        mockShowQuickPick.mockResolvedValue({
+          label: 'localhost Log',
+          description: '/tmp/logs/localhost.log',
+          path: '/tmp/logs/localhost.log',
+        });
+        deps.pluginRegistry.get.mockReturnValue({
+          getLogSources: vi.fn(async () => ok({
+            primary: { id: 'catalina-out', title: 'Catalina Log', kind: 'file' as const, path: '/tmp/logs/catalina.out' },
+            others: [{ id: 'localhost-log', title: 'localhost Log', kind: 'file' as const, path: '/tmp/logs/localhost.log' }],
+          })),
+        });
+
+        const node = createDeploymentNode();
+        await invoke('jsm.deployment.openLogs', node);
+
+        expect(mockShowQuickPick).toHaveBeenCalledOnce();
+        expect(mockOpenTextDocument).toHaveBeenCalledWith({
+          fsPath: '/tmp/logs/localhost.log',
+          path: '/tmp/logs/localhost.log',
+        });
       });
 
       it('should show error when server config is not found', async () => {

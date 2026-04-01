@@ -22,6 +22,8 @@ export interface QueueProgressLifecycle {
   getAndClearQueueDrainFailure(serverId: ServerId): unknown | undefined;
 }
 
+export type QueueProgressAction = () => Result<void, JsmError>;
+
 /**
  * Shows a cancellable progress notification while the server operation queue drains.
  * "Annulla" calls `lifecycle.cancel(serverKey)` (same as tree Cancel Operation).
@@ -61,6 +63,23 @@ export async function runUntilQueueIdleWithProgressResult(
   if (failure === undefined) return ok(undefined);
   if (failure instanceof JsmError) return err(failure);
   return err(JsmError.fromUnknown(failure));
+}
+
+/**
+ * Runs a queue-producing action and then waits for the queue to drain with the
+ * same progress/error semantics used by command handlers.
+ */
+export async function runQueuedActionWithProgressResult(
+  options: { title: string; serverKey: ServerId },
+  lifecycle: QueueProgressLifecycle,
+  action: QueueProgressAction,
+): Promise<Result<void, JsmError>> {
+  const actionResult = action();
+  if (!actionResult.ok) {
+    return err(actionResult.error);
+  }
+
+  return runUntilQueueIdleWithProgressResult(options, lifecycle);
 }
 
 // ── Deferred command stub ───────────────────────────────────────────────────

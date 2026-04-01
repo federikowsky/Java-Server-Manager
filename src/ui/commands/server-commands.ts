@@ -4,7 +4,7 @@ import {
   serverDraftToCreateServerRequest,
 } from '@core/authoring';
 import type { ServerAuthoringDraft } from '@core/authoring';
-import type { ServerConfig } from '@core/types';
+import type { ServerConfig, ServerId } from '@core/types';
 import type { Result } from '@core/result';
 import { ok, err } from '@core/result';
 import { JsmError } from '@core/errors/JsmError';
@@ -20,7 +20,7 @@ import type { ServerTreeViewProvider } from '@ui/tree/ServerTreeViewProvider';
 import {
   isServerNode,
   registerMany,
-  runUntilQueueIdleWithProgressResult,
+  runQueuedActionWithProgressResult,
   showErr,
   showSuccess,
 } from './shared';
@@ -34,6 +34,17 @@ type ServerCommandArg = {
   serverKey?: string;
   serverConfig?: ServerConfig;
 };
+
+type ServerResolver = (workspaceFolderUri: string, serverId: string) => ServerConfig | undefined;
+
+type ServerCommandContext = {
+  arg: ServerCommandArg;
+  serverKey: ServerId;
+  label: string;
+  resolvedConfig: ServerConfig | undefined;
+};
+
+type ServerQueueAction = (context: ServerCommandContext) => Result<void, JsmError>;
 
 export interface ServerCommandsDeps {
   lifecycle: ServerLifecycle;
@@ -98,6 +109,116 @@ async function resolveConfigSources(
   return plugin.getConfigSources(config);
 }
 
+function resolveServerKey(
+  workspaceRegistry: WorkspaceServiceRegistry | undefined,
+  arg: ServerCommandArg,
+): ServerId {
+  if (typeof arg.serverKey === 'string' && arg.serverKey.length > 0) {
+    return arg.serverKey as ServerId;
+  }
+  if (workspaceRegistry) {
+    return makeWorkspaceServerKey(arg.workspaceFolderUri, arg.serverId);
+  }
+  return arg.serverId as ServerId;
+}
+
+function resolveServerLabel(
+  resolveServer: ServerResolver,
+  arg: ServerCommandArg,
+): string {
+  return arg.serverConfig?.name ?? resolveServer(arg.workspaceFolderUri, arg.serverId)?.name ?? arg.serverId;
+}
+
+function getContextConfig(
+  context: ServerCommandContext,
+  options: { allowInlineConfig?: boolean } = {},
+): ServerConfig | undefined {
+  return context.resolvedConfig ?? (options.allowInlineConfig ? context.arg.serverConfig : undefined);
+}
+
+function serverConfigNotFoundError(): JsmError {
+  return new JsmError({
+    code: ErrorCode.InvalidConfig,
+    message: 'Server configuration not found.',
+  });
+}
+
+async function pickConfigSource(
+  candidates: ConfigSource[],
+  serverName: string,
+): Promise<ConfigSource | undefined> {
+  if (candidates.length === 0) {
+    return undefined;
+  }
+
+  if (candidates.length === 1) {
+    return candidates[0];
+  }
+
+  const picked = await vscode.window.showQuickPick(
+    candidates.map(candidate => ({
+      label: candidate.title,
+      description: candidate.description,
+      detail: candidate.path,
+      candidate,
+    })),
+    {
+      placeHolder: `Open a configuration file for '${serverName}'`,
+      ignoreFocusOut: true,
+    },
+  );
+
+  return picked?.candidate;
+}
+
+async function writeExportFile(
+  filePath: string,
+  configs: ServerConfig[],
+): Promise<Result<void, JsmError>> {
+  try {
+    await fs.writeFile(filePath, JSON.stringify({ servers: configs }, null, 2), 'utf8');
+    return ok(undefined);
+  } catch (e) {
+    return err(JsmError.fromUnknown(e));
+  }
+}
+
+async function readImportedServerConfigs(
+  filePath: string,
+  schemaValidator: SchemaValidator,
+): Promise<Result<ServerConfig[], JsmError>> {
+  let content: string;
+  try {
+    content = await fs.readFile(filePath, 'utf8');
+  } catch (e) {
+    return err(JsmError.fromUnknown(e));
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    return err(new JsmError({
+      code: ErrorCode.InvalidConfig,
+      message: 'Invalid JSON.',
+    }));
+  }
+
+  if (typeof parsed !== 'object' || parsed === null || !Array.isArray((parsed as { servers?: unknown }).servers)) {
+    return err(new JsmError({
+      code: ErrorCode.InvalidConfig,
+      message: 'Invalid format: expected { servers: [...] }.',
+    }));
+  }
+
+  const validationResult = schemaValidator.validate(parsed, 'workspace');
+  if (!validationResult.ok) {
+    return err(validationResult.error);
+  }
+
+  return ok((parsed as { servers: ServerConfig[] }).servers);
+}
+
 export function registerServerCommands(
   deps: ServerCommandsDeps,
 ): vscode.Disposable[] {
@@ -116,20 +237,116 @@ export function registerServerCommands(
   const resolveServer = (workspaceFolderUri: string, serverId: string) => workspaceRegistry
     ? workspaceRegistry.getServer({ workspaceFolderUri, serverId })
     : configService?.getServer(serverId);
+  const createContext = (arg: ServerCommandArg): ServerCommandContext => ({
+    arg,
+    serverKey: resolveServerKey(workspaceRegistry, arg),
+    label: resolveServerLabel(resolveServer, arg),
+    resolvedConfig: resolveServer(arg.workspaceFolderUri, arg.serverId),
+  });
 
-  function serverDisplayName(arg: ServerCommandArg): string {
-    return arg.serverConfig?.name ?? resolveServer(arg.workspaceFolderUri, arg.serverId)?.name ?? arg.serverId;
-  }
+  const requireContextConfig = (
+    context: ServerCommandContext,
+    options: { allowInlineConfig?: boolean } = {},
+  ): ServerConfig | undefined => {
+    const config = getContextConfig(context, options);
+    if (!config) {
+      showErr(serverConfigNotFoundError());
+    }
+    return config;
+  };
 
-  function serverKeyResolved(arg: ServerCommandArg): string {
-    if (typeof arg.serverKey === 'string' && arg.serverKey.length > 0) {
-      return arg.serverKey;
+  const runQueueAction = async (
+    context: ServerCommandContext,
+    title: string,
+    action: ServerQueueAction,
+  ): Promise<boolean> => {
+    const result = await runQueuedActionWithProgressResult(
+      { title, serverKey: context.serverKey },
+      lifecycle,
+      () => action(context),
+    );
+    if (!result.ok) {
+      showErr(result.error);
+      return false;
     }
-    if (workspaceRegistry) {
-      return makeWorkspaceServerKey(arg.workspaceFolderUri, arg.serverId);
+    return true;
+  };
+
+  const prepareDeploymentsIfNeeded = async (context: ServerCommandContext): Promise<boolean> => {
+    if (!context.resolvedConfig?.deployments.length) {
+      return true;
     }
-    return arg.serverId;
-  }
+
+    return runQueueAction(
+      context,
+      `Preparing deployments for ${context.label}...`,
+      () => lifecycle.enqueueDeployUndeployed(context.serverKey),
+    );
+  };
+
+  const runServerQueueCommand = async (
+    arg: unknown,
+    options: {
+      title: (context: ServerCommandContext) => string;
+      action: ServerQueueAction;
+      prepareDeployments?: boolean;
+      onSuccess?: (context: ServerCommandContext) => void;
+    },
+  ): Promise<void> => {
+    if (!isServerNode(arg)) return;
+    const context = createContext(arg as ServerCommandArg);
+    if (options.prepareDeployments && !await prepareDeploymentsIfNeeded(context)) {
+      return;
+    }
+
+    const completed = await runQueueAction(context, options.title(context), options.action);
+    if (completed) {
+      options.onSuccess?.(context);
+    }
+  };
+
+  const openDashboardTarget = (target: DashboardNavigationTarget): void => {
+    if (openDashboard) {
+      openDashboard(target);
+      return;
+    }
+    void vscode.commands.executeCommand('jsm.dashboard.open', target);
+  };
+
+  const refreshRunningServerState = async (): Promise<void> => {
+    const runningOrStartingKeys = lifecycle.getServerKeysInState('running', 'starting');
+    for (const serverKey of runningOrStartingKeys) {
+      lifecycle.refreshStatus(serverKey);
+    }
+
+    if (!workspaceRegistry) {
+      return;
+    }
+
+    await Promise.all(
+      runningOrStartingKeys.map(async serverKey => {
+        const record = workspaceRegistry.getServerRecordByKey(serverKey);
+        if (!record?.config) return;
+        const enqueued = lifecycle.enqueueRunDeploymentHealthChecks(serverKey);
+        if (!enqueued.ok) return;
+        await lifecycle.waitUntilQueueIdle(serverKey);
+      }),
+    );
+  };
+
+  const getWorkspaceEntry = (workspaceFolderUri: string) => {
+    const entry = workspaceRegistry?.getEntry(workspaceFolderUri);
+    if (entry) {
+      return entry;
+    }
+
+    showErr(new JsmError({
+      code: ErrorCode.InvalidConfig,
+      message: 'Workspace not found.',
+      details: workspaceFolderUri,
+    }));
+    return undefined;
+  };
 
   return registerMany([
     ['jsm.server.add', async (arg: unknown) => {
@@ -167,159 +384,67 @@ export function registerServerCommands(
       }
 
       const nav: DashboardNavigationTarget = { type: 'new-server', globalTab: 'home' };
-      if (openDashboard) {
-        openDashboard(nav);
-      } else {
-        void vscode.commands.executeCommand('jsm.dashboard.open', nav);
-      }
+      openDashboardTarget(nav);
       return undefined;
     }],
 
-    ['jsm.server.startRun', async (arg: unknown) => {
-      if (!isServerNode(arg)) return;
-      const a = arg as ServerCommandArg;
-      const sk = serverKeyResolved(a);
-      const label = serverDisplayName(a);
-      const config = resolveServer(a.workspaceFolderUri, a.serverId);
-      if (config?.deployments?.length) {
-        const prep = lifecycle.enqueueDeployUndeployed(sk);
-        if (!prep.ok) {
-          showErr(prep.error);
-          return;
-        }
-        const prepDone = await runUntilQueueIdleWithProgressResult(
-          { title: `Preparing deployments for ${label}...`, serverKey: sk },
-          lifecycle,
-        );
-        if (!prepDone.ok) {
-          showErr(prepDone.error);
-          return;
-        }
-      }
-      const result = lifecycle.start(sk, 'run');
-      if (!result.ok) {
-        showErr(result.error);
-        return;
-      }
-      const startDone = await runUntilQueueIdleWithProgressResult(
-        { title: `Starting ${label}...`, serverKey: sk },
-        lifecycle,
-      );
-      if (!startDone.ok) showErr(startDone.error);
-    }],
+    ['jsm.server.startRun', async (arg: unknown) => runServerQueueCommand(arg, {
+      title: context => `Starting ${context.label}...`,
+      action: context => lifecycle.start(context.serverKey, 'run'),
+      prepareDeployments: true,
+    })],
 
-    ['jsm.server.startDebug', async (arg: unknown) => {
-      if (!isServerNode(arg)) return;
-      const a = arg as ServerCommandArg;
-      const sk = serverKeyResolved(a);
-      const label = serverDisplayName(a);
-      const config = resolveServer(a.workspaceFolderUri, a.serverId);
-      if (config?.deployments?.length) {
-        const prep = lifecycle.enqueueDeployUndeployed(sk);
-        if (!prep.ok) {
-          showErr(prep.error);
-          return;
-        }
-        const prepDone = await runUntilQueueIdleWithProgressResult(
-          { title: `Preparing deployments for ${label}...`, serverKey: sk },
-          lifecycle,
-        );
-        if (!prepDone.ok) {
-          showErr(prepDone.error);
-          return;
-        }
-      }
-      const result = lifecycle.start(sk, 'debug');
-      if (!result.ok) {
-        showErr(result.error);
-        return;
-      }
-      const startDone = await runUntilQueueIdleWithProgressResult(
-        { title: `Starting ${label} (debug)...`, serverKey: sk },
-        lifecycle,
-      );
-      if (!startDone.ok) showErr(startDone.error);
-    }],
+    ['jsm.server.startDebug', async (arg: unknown) => runServerQueueCommand(arg, {
+      title: context => `Starting ${context.label} (debug)...`,
+      action: context => lifecycle.start(context.serverKey, 'debug'),
+      prepareDeployments: true,
+    })],
 
-    ['jsm.server.stop', async (arg: unknown) => {
-      if (!isServerNode(arg)) return;
-      const a = arg as ServerCommandArg;
-      const sk = serverKeyResolved(a);
-      const result = lifecycle.stop(sk);
-      if (!result.ok) {
-        showErr(result.error);
-        return;
-      }
-      const done = await runUntilQueueIdleWithProgressResult(
-        { title: `Stopping ${serverDisplayName(a)}...`, serverKey: sk },
-        lifecycle,
-      );
-      if (!done.ok) showErr(done.error);
-    }],
+    ['jsm.server.stop', async (arg: unknown) => runServerQueueCommand(arg, {
+      title: context => `Stopping ${context.label}...`,
+      action: context => lifecycle.stop(context.serverKey),
+    })],
 
-    ['jsm.server.restartRun', async (arg: unknown) => {
-      if (!isServerNode(arg)) return;
-      const a = arg as ServerCommandArg;
-      const sk = serverKeyResolved(a);
-      const result = lifecycle.restart(sk, 'run');
-      if (!result.ok) {
-        showErr(result.error);
-        return;
-      }
-      const done = await runUntilQueueIdleWithProgressResult(
-        { title: `Restarting ${serverDisplayName(a)}...`, serverKey: sk },
-        lifecycle,
-      );
-      if (!done.ok) showErr(done.error);
-    }],
+    ['jsm.server.restartRun', async (arg: unknown) => runServerQueueCommand(arg, {
+      title: context => `Restarting ${context.label}...`,
+      action: context => lifecycle.restart(context.serverKey, 'run'),
+    })],
 
-    ['jsm.server.restartDebug', async (arg: unknown) => {
-      if (!isServerNode(arg)) return;
-      const a = arg as ServerCommandArg;
-      const sk = serverKeyResolved(a);
-      const result = lifecycle.restart(sk, 'debug');
-      if (!result.ok) {
-        showErr(result.error);
-        return;
-      }
-      const done = await runUntilQueueIdleWithProgressResult(
-        { title: `Restarting ${serverDisplayName(a)} (debug)...`, serverKey: sk },
-        lifecycle,
-      );
-      if (!done.ok) showErr(done.error);
-    }],
+    ['jsm.server.restartDebug', async (arg: unknown) => runServerQueueCommand(arg, {
+      title: context => `Restarting ${context.label} (debug)...`,
+      action: context => lifecycle.restart(context.serverKey, 'debug'),
+    })],
 
     ['jsm.server.attachDebug', async (arg: unknown) => {
       if (!isServerNode(arg)) return;
-      const a = arg as ServerCommandArg;
-      const result = await lifecycle.attachDebug(serverKeyResolved(a));
+      const context = createContext(arg as ServerCommandArg);
+      const result = await lifecycle.attachDebug(context.serverKey);
       if (!result.ok) showErr(result.error);
       else showSuccess('Debugger attached.');
     }],
 
     ['jsm.server.detachDebug', async (arg: unknown) => {
       if (!isServerNode(arg)) return;
-      const a = arg as ServerCommandArg;
-      const result = await lifecycle.detachDebug(serverKeyResolved(a));
+      const context = createContext(arg as ServerCommandArg);
+      const result = await lifecycle.detachDebug(context.serverKey);
       if (!result.ok) showErr(result.error);
       else showSuccess('Debugger detached.');
     }],
 
     ['jsm.server.cancelOperation', (arg: unknown) => {
       if (!isServerNode(arg)) return;
-      lifecycle.cancel(serverKeyResolved(arg as ServerCommandArg));
+      lifecycle.cancel(createContext(arg as ServerCommandArg).serverKey);
     }],
 
     ['jsm.server.showLogs', (arg: unknown) => {
       if (!isServerNode(arg)) return;
-      const a = arg as ServerCommandArg;
-      const sk = serverKeyResolved(a);
-      logChannel.showLogs(sk, serverDisplayName(a));
+      const context = createContext(arg as ServerCommandArg);
+      logChannel.showLogs(context.serverKey, context.label);
     }],
 
     ['jsm.server.edit', (arg: unknown) => {
       if (!isServerNode(arg)) return;
-      vscode.commands.executeCommand('jsm.dashboard.open', {
+      openDashboardTarget({
         type: 'server',
         id: arg.serverId,
         globalTab: 'home',
@@ -337,22 +462,14 @@ export function registerServerCommands(
         return;
       }
 
-      const entry = workspaceRegistry.getEntry(arg.workspaceFolderUri);
+      const entry = getWorkspaceEntry(arg.workspaceFolderUri);
       if (!entry) {
-        showErr(new JsmError({
-          code: ErrorCode.InvalidConfig,
-          message: 'Workspace not found.',
-          details: arg.workspaceFolderUri,
-        }));
         return;
       }
 
-      const sourceConfig = resolveServer(arg.workspaceFolderUri, arg.serverId) ?? arg.serverConfig;
+      const context = createContext(arg as ServerCommandArg);
+      const sourceConfig = requireContextConfig(context, { allowInlineConfig: true });
       if (!sourceConfig) {
-        showErr(new JsmError({
-          code: ErrorCode.InvalidConfig,
-          message: 'Server configuration not found.',
-        }));
         return;
       }
 
@@ -367,33 +484,28 @@ export function registerServerCommands(
 
     ['jsm.server.remove', async (arg: unknown) => {
       if (!isServerNode(arg)) return;
-      const a = arg as ServerCommandArg;
-      const label = serverDisplayName(a);
+      const context = createContext(arg as ServerCommandArg);
       const answer = await vscode.window.showWarningMessage(
-        `Remove server "${label}"? This cannot be undone.`,
+        `Remove server "${context.label}"? This cannot be undone.`,
         { modal: true },
         'Remove',
       );
       if (answer !== 'Remove') return;
 
       const result = workspaceRegistry
-        ? await workspaceRegistry.getEntry(a.workspaceFolderUri)?.provisioningService.removeServer(a.serverId)
-        : await provisioningService?.removeServer(a.serverId);
+        ? await workspaceRegistry.getEntry(context.arg.workspaceFolderUri)?.provisioningService.removeServer(context.arg.serverId)
+        : await provisioningService?.removeServer(context.arg.serverId);
       if (!result) return;
       if (!result.ok) { showErr(result.error); return; }
-      showSuccess(`Server "${label}" removed.`);
+      showSuccess(`Server "${context.label}" removed.`);
       treeProvider.requestRefresh();
     }],
 
     ['jsm.server.openFolder', async (arg: unknown) => {
       if (!isServerNode(arg)) return;
-      const a = arg as ServerCommandArg;
-      const config = resolveServer(a.workspaceFolderUri, a.serverId) ?? a.serverConfig;
+      const context = createContext(arg as ServerCommandArg);
+      const config = requireContextConfig(context, { allowInlineConfig: true });
       if (!config) {
-        showErr(new JsmError({
-          code: ErrorCode.InvalidConfig,
-          message: 'Server configuration not found.',
-        }));
         return;
       }
 
@@ -426,13 +538,9 @@ export function registerServerCommands(
 
     ['jsm.server.openConfig', async (arg: unknown) => {
       if (!isServerNode(arg)) return;
-      const a = arg as ServerCommandArg;
-      const config = resolveServer(a.workspaceFolderUri, a.serverId) ?? a.serverConfig;
+      const context = createContext(arg as ServerCommandArg);
+      const config = requireContextConfig(context, { allowInlineConfig: true });
       if (!config) {
-        showErr(new JsmError({
-          code: ErrorCode.InvalidConfig,
-          message: 'Server configuration not found.',
-        }));
         return;
       }
 
@@ -452,51 +560,27 @@ export function registerServerCommands(
         return;
       }
 
-      if (candidates.length === 1) {
-        await openConfigFile(candidates[0].path);
-        return;
-      }
-
-      const picked = await vscode.window.showQuickPick(
-        candidates.map(candidate => ({
-          label: candidate.title,
-          description: candidate.description,
-          detail: candidate.path,
-          candidate,
-        })),
-        {
-          placeHolder: `Open a configuration file for '${config.name}'`,
-          ignoreFocusOut: true,
-        },
-      );
-
+      const picked = await pickConfigSource(candidates, config.name);
       if (!picked) {
         return;
       }
 
-      await openConfigFile(picked.candidate.path);
+      await openConfigFile(picked.path);
     }],
 
     ['jsm.server.redeployAll', async (arg: unknown) => {
       if (!isServerNode(arg)) return;
-      const a = arg as ServerCommandArg;
-      const sk = serverKeyResolved(a);
-      const config = resolveServer(a.workspaceFolderUri, a.serverId) ?? a.serverConfig;
+      const context = createContext(arg as ServerCommandArg);
+      const config = requireContextConfig(context, { allowInlineConfig: true });
       if (!config || config.deployments.length === 0) return;
-      const enq = lifecycle.enqueueRedeployAll(sk);
-      if (!enq.ok) {
-        showErr(enq.error);
-        return;
-      }
-      const done = await runUntilQueueIdleWithProgressResult(
-        { title: `Redeploying all applications on ${config.name}...`, serverKey: sk },
-        lifecycle,
+      const completed = await runQueueAction(
+        context,
+        `Redeploying all applications on ${config.name}...`,
+        () => lifecycle.enqueueRedeployAll(context.serverKey),
       );
-      if (!done.ok) {
-        showErr(done.error);
-        return;
+      if (completed) {
+        showSuccess(`Redeploy All completed for "${config.name}".`);
       }
-      showSuccess(`Redeploy All completed for "${config.name}".`);
     }],
 
     ['jsm.view.refresh', async () => {
@@ -505,21 +589,7 @@ export function registerServerCommands(
         : await configService?.reload();
       if (!result) return;
       if (!result.ok) { showErr(result.error); return; }
-      for (const serverKey of lifecycle.getServerKeysInState('running', 'starting')) {
-        lifecycle.refreshStatus(serverKey);
-      }
-      if (workspaceRegistry) {
-        const keys = lifecycle.getServerKeysInState('running', 'starting');
-        await Promise.all(
-          keys.map(async serverKey => {
-            const record = workspaceRegistry.getServerRecordByKey(serverKey);
-            if (!record?.config) return;
-            const enq = lifecycle.enqueueRunDeploymentHealthChecks(serverKey);
-            if (!enq.ok) return;
-            await lifecycle.waitUntilQueueIdle(serverKey);
-          }),
-        );
-      }
+      await refreshRunningServerState();
       treeProvider.forceRefresh();
     }],
 
@@ -545,12 +615,12 @@ export function registerServerCommands(
         defaultUri: defaultUri ? vscode.Uri.joinPath(defaultUri, 'jsm.servers.export.json') : undefined,
       });
       if (!saveUri) return;
-      try {
-        await fs.writeFile(saveUri.fsPath, JSON.stringify({ servers: configs }, null, 2), 'utf8');
-        showSuccess(`Config exported to ${saveUri.fsPath}.`);
-      } catch (e) {
-        showErr(JsmError.fromUnknown(e));
+      const writeResult = await writeExportFile(saveUri.fsPath, configs);
+      if (!writeResult.ok) {
+        showErr(writeResult.error);
+        return;
       }
+      showSuccess(`Config exported to ${saveUri.fsPath}.`);
     }],
 
     ['jsm.server.import', async () => {
@@ -577,36 +647,12 @@ export function registerServerCommands(
       });
       if (!uris?.length) return;
       const fileUri = uris[0];
-      let content: string;
-      try {
-        content = await fs.readFile(fileUri.fsPath, 'utf8');
-      } catch (e) {
-        showErr(JsmError.fromUnknown(e));
+      const readResult = await readImportedServerConfigs(fileUri.fsPath, schemaValidator);
+      if (!readResult.ok) {
+        showErr(readResult.error);
         return;
       }
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(content);
-      } catch {
-        showErr(new JsmError({
-          code: ErrorCode.InvalidConfig,
-          message: 'Invalid JSON.',
-        }));
-        return;
-      }
-      if (typeof parsed !== 'object' || parsed === null || !Array.isArray((parsed as { servers?: unknown }).servers)) {
-        showErr(new JsmError({
-          code: ErrorCode.InvalidConfig,
-          message: 'Invalid format: expected { servers: [...] }.',
-        }));
-        return;
-      }
-      const validationResult = schemaValidator.validate(parsed, 'workspace');
-      if (!validationResult.ok) {
-        showErr(validationResult.error);
-        return;
-      }
-      const { servers: serverConfigs } = parsed as { servers: ServerConfig[] };
+      const serverConfigs = readResult.value;
       if (serverConfigs.length === 0) {
         void vscode.window.showInformationMessage('JSM: No servers in file.');
         return;

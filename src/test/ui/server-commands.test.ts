@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ServerConfig } from '@core/types/domain';
+import type { DeploymentConfig, ServerConfig } from '@core/types/domain';
 import { ok, err } from '@core/result';
 import { JsmError } from '@core/errors/JsmError';
 import { ErrorCode } from '@core/errors/codes';
@@ -93,6 +93,19 @@ function makeServer(id = 'srv-1', name = 'My Tomcat'): ServerConfig {
     debug: { enabled: true, bind: '127.0.0.1', attachDelayMs: 1000 },
     deployments: [],
     autosync: { enabled: true, debounceMs: 400, maxBatchFiles: 200, maxBatchBytes: 20_000_000, stormBackoffMs: 2000, ignoreGlobs: [] },
+    hooks: [],
+  };
+}
+
+function makeDeployment(id = 'dep-1', name = 'myapp'): DeploymentConfig {
+  return {
+    id,
+    type: 'exploded',
+    sourcePath: '/src/app',
+    deployName: name,
+    syncMode: 'auto',
+    hotReload: false,
+    ignoreGlobs: [],
     hooks: [],
   };
 }
@@ -302,6 +315,47 @@ describe('Server Commands', () => {
       expect(deps.lifecycle.start).toHaveBeenCalledWith(
         makeWorkspaceServerKey('file:///ws', 'srv-1'),
         'run',
+      );
+    });
+
+    it('jsm.server.startRun prepares deployments before starting when deployments exist', async () => {
+      const srv = makeServer('srv-1', 'Tom');
+      srv.deployments = [makeDeployment()];
+      deps.workspaceRegistry.getServer.mockReturnValue(srv);
+
+      await invoke('jsm.server.startRun', {
+        serverId: 'srv-1',
+        workspaceFolderUri: 'file:///ws',
+      });
+
+      const serverKey = makeWorkspaceServerKey('file:///ws', 'srv-1');
+      expect(deps.lifecycle.enqueueDeployUndeployed).toHaveBeenCalledWith(serverKey);
+      expect(deps.lifecycle.start).toHaveBeenCalledWith(serverKey, 'run');
+      expect(mockWithProgress).toHaveBeenCalledTimes(2);
+      expect(mockWithProgress.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
+        title: 'Preparing deployments for Tom...',
+      }));
+      expect(mockWithProgress.mock.calls[1]?.[0]).toEqual(expect.objectContaining({
+        title: 'Starting Tom...',
+      }));
+    });
+
+    it('jsm.server.startDebug stops before start when deployment preparation fails', async () => {
+      const srv = makeServer('srv-1', 'Tom');
+      srv.deployments = [makeDeployment()];
+      deps.workspaceRegistry.getServer.mockReturnValue(srv);
+      deps.lifecycle.enqueueDeployUndeployed.mockReturnValue(
+        err(new JsmError({ code: ErrorCode.DeployFailed, message: 'prep failed' })),
+      );
+
+      await invoke('jsm.server.startDebug', {
+        serverId: 'srv-1',
+        workspaceFolderUri: 'file:///ws',
+      });
+
+      expect(deps.lifecycle.start).not.toHaveBeenCalled();
+      expect(mockShowErrorMessage).toHaveBeenCalledWith(
+        expect.stringContaining('prep failed'),
       );
     });
   });

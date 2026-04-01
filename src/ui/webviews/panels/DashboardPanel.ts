@@ -44,74 +44,83 @@ export class DashboardPanel implements vscode.Disposable {
 
   constructor(private readonly deps: DashboardPanelDeps) {
     this.panelLog = deps.logger.child?.('webview.dashboard') ?? deps.logger;
+    this.registerBusListeners();
+  }
 
-    // Listen to events to push state changes to webview
-    this.deps.bus.on('ServerStateChanged', (e) => {
-      this.postMessage({
-        v: WEBVIEW_PROTOCOL_VERSION,
-        command: 'serverStateChanged',
-        serverKey: e.serverId,
-        state: this.deps.lifecycle.getRuntime(e.serverId)?.getState(),
-      });
-    });
-
-    this.deps.bus.on('ConfigChanged', (e) => {
-      this.panelLog.debug('event.ConfigChanged', {
-        source: e.source,
-        workspaceFolderUri: e.workspaceFolderUri,
-      });
-      this.postMessage({
-        v: WEBVIEW_PROTOCOL_VERSION,
-        command: 'configChanged',
-      });
-      this.syncState();
-    });
-
+  private registerBusListeners(): void {
     const inventorySync = (reason: string, extra?: Record<string, unknown>) => {
       this.panelLog.debug('syncState.trigger', { reason, ...extra });
       this.syncState();
     };
 
-    this.deps.bus.on('ServerAdded', e => {
-      inventorySync('ServerAdded', { serverId: e.serverId, workspaceFolderUri: e.workspaceFolderUri });
-    });
-    this.deps.bus.on('ServerDeleted', e => {
-      inventorySync('ServerDeleted', { serverId: e.serverId, workspaceFolderUri: e.workspaceFolderUri });
-    });
-    this.deps.bus.on('ServerUpdated', e => {
-      inventorySync('ServerUpdated', { serverId: e.serverId, workspaceFolderUri: e.workspaceFolderUri });
-    });
-    this.deps.bus.on('DeploymentAdded', e => {
-      inventorySync('DeploymentAdded', {
-        serverId: e.serverId,
-        deploymentId: e.deploymentId,
-        workspaceFolderUri: e.workspaceFolderUri,
-      });
-    });
-    this.deps.bus.on('DeploymentUpdated', e => {
-      inventorySync('DeploymentUpdated', {
-        serverId: e.serverId,
-        deploymentId: e.deploymentId,
-        workspaceFolderUri: e.workspaceFolderUri,
-      });
-    });
-    this.deps.bus.on('DeploymentRemoved', e => {
-      inventorySync('DeploymentRemoved', {
-        serverId: e.serverId,
-        deploymentId: e.deploymentId,
-        workspaceFolderUri: e.workspaceFolderUri,
-      });
-    });
+    this.disposables.push(
+      this.deps.bus.on('ServerStateChanged', (e) => {
+        this.postMessage({
+          v: WEBVIEW_PROTOCOL_VERSION,
+          command: 'serverStateChanged',
+          serverKey: e.serverId,
+          state: this.deps.lifecycle.getRuntime(e.serverId)?.getState(),
+        });
+      }),
+      this.deps.bus.on('ConfigChanged', (e) => {
+        this.panelLog.debug('event.ConfigChanged', {
+          source: e.source,
+          workspaceFolderUri: e.workspaceFolderUri,
+        });
+        this.postMessage({
+          v: WEBVIEW_PROTOCOL_VERSION,
+          command: 'configChanged',
+        });
+        this.syncState();
+      }),
+      this.deps.bus.on('ServerAdded', e => {
+        inventorySync('ServerAdded', { serverId: e.serverId, workspaceFolderUri: e.workspaceFolderUri });
+      }),
+      this.deps.bus.on('ServerDeleted', e => {
+        inventorySync('ServerDeleted', { serverId: e.serverId, workspaceFolderUri: e.workspaceFolderUri });
+      }),
+      this.deps.bus.on('ServerUpdated', e => {
+        inventorySync('ServerUpdated', { serverId: e.serverId, workspaceFolderUri: e.workspaceFolderUri });
+      }),
+      this.deps.bus.on('DeploymentAdded', e => {
+        inventorySync('DeploymentAdded', {
+          serverId: e.serverId,
+          deploymentId: e.deploymentId,
+          workspaceFolderUri: e.workspaceFolderUri,
+        });
+      }),
+      this.deps.bus.on('DeploymentUpdated', e => {
+        inventorySync('DeploymentUpdated', {
+          serverId: e.serverId,
+          deploymentId: e.deploymentId,
+          workspaceFolderUri: e.workspaceFolderUri,
+        });
+      }),
+      this.deps.bus.on('DeploymentRemoved', e => {
+        inventorySync('DeploymentRemoved', {
+          serverId: e.serverId,
+          deploymentId: e.deploymentId,
+          workspaceFolderUri: e.workspaceFolderUri,
+        });
+      }),
+      this.deps.bus.on('DeploymentStateChanged', e => {
+        this.postMessage({
+          v: WEBVIEW_PROTOCOL_VERSION,
+          command: 'deploymentStateChanged',
+          serverKey: e.serverId,
+          deploymentId: e.deploymentId,
+          state: e.state,
+        });
+      }),
+    );
+  }
 
-    this.deps.bus.on('DeploymentStateChanged', (e: any) => {
-      this.postMessage({
-        v: WEBVIEW_PROTOCOL_VERSION,
-        command: 'deploymentStateChanged',
-        serverKey: e.serverId,
-        deploymentId: e.deploymentId,
-        state: e.state,
-      });
-    });
+  private resetFormSession(): void {
+    this.currentFormId = undefined;
+    this.currentFormMode = undefined;
+    this.currentFormTargetId = undefined;
+    this.currentFormTargetWorkspaceFolderUri = undefined;
+    this.currentFormTargetScope = undefined;
   }
 
   show(target?: DashboardNavigationTarget): void {
@@ -196,68 +205,50 @@ export class DashboardPanel implements vscode.Disposable {
     });
   }
 
+  private handleReadyMessage(): void {
+    this.isWebviewReady = true;
+    this.resetFormSession();
+    this.syncState();
+    this.flushPendingNavigation();
+    this.pushHookTaskOptions();
+    void this.refreshHookTaskOptions();
+  }
+
+  private async handleSubmitMessage(
+    msg: Extract<WebviewToHost, { command: 'submit' }>,
+  ): Promise<void> {
+    // Store last submitted data so we can persist it when the host handler runs.
+    this.lastSubmittedFormData = msg.data;
+
+    try {
+      if (this.currentFormId === 'jsm.serverForm') {
+        await this.handleServerFormSubmit();
+      } else if (this.currentFormId === 'jsm.templateForm') {
+        await this.handleTemplateFormSubmit();
+      } else {
+        this.postError('Submit is not supported in the current view.');
+      }
+    } catch (e) {
+      this.deps.logger.error('[DashboardPanel] Form submit failed', e);
+      this.postError(`Save failed: ${String(e)}`);
+    } finally {
+      this.postMessage({
+        v: WEBVIEW_PROTOCOL_VERSION,
+        command: 'submitFinished',
+      });
+    }
+  }
+
   private async handleMessage(msg: WebviewToHost): Promise<void> {
     switch (msg.command) {
       case 'ready':
-        this.isWebviewReady = true;
-        this.currentFormId = undefined;
-        this.currentFormMode = undefined;
-        this.currentFormTargetId = undefined;
-        this.currentFormTargetWorkspaceFolderUri = undefined;
-        this.currentFormTargetScope = undefined;
-        this.syncState();
-        this.flushPendingNavigation();
-        this.pushHookTaskOptions();
-        void this.refreshHookTaskOptions();
+        this.handleReadyMessage();
         break;
 
       case 'executeCommand': {
         let commandResult: CommandExecutionResult | undefined;
         try {
-          if (msg.id === 'jsm.internal.requestServerSchema') {
-            const [mode, serverId, workspaceFolderUri] = msg.args as ['edit' | 'create', string?, string?];
-            await this.handleSchemaRequest(mode, serverId, workspaceFolderUri);
-          } else if (msg.id === 'jsm.internal.requestTemplateSchema') {
-            const [mode, templateId] = msg.args as ['edit' | 'create', string?];
-            await this.handleTemplateSchemaRequest(mode, templateId);
-          } else if (msg.id === 'jsm.server.autodiscover') {
-            await this.handleAutodiscover();
-          } else if (msg.id === 'jsm.java.detect') {
-            await this.handleJavaDetect();
-          } else if (msg.id === 'jsm.template.createServer') {
-            const [templateId] = msg.args as [string?];
-            commandResult = await this.handleTemplateCreateServer(templateId);
-          } else if (msg.id === 'jsm.template.delete') {
-            const [templateId] = msg.args as [string?];
-            commandResult = await this.handleTemplateDelete(templateId);
-          } else if (msg.id === 'jsm.settings.save') {
-            commandResult = await this.handleSettingsSave(msg.args?.[0]);
-          } else if (msg.id === 'jsm.server.add') {
-            const first = msg.args?.[0];
-            const argShape = first && typeof first === 'object'
-              ? {
-                  hasWorkspaceFolderUri: 'workspaceFolderUri' in (first as object),
-                  hasDraft: 'draft' in (first as object),
-                  hasConfig: 'config' in (first as object),
-                  workspaceFolderUriLen: typeof (first as { workspaceFolderUri?: string }).workspaceFolderUri === 'string'
-                    ? (first as { workspaceFolderUri: string }).workspaceFolderUri.length
-                    : undefined,
-                }
-              : { note: 'first arg missing or not object' };
-            this.panelLog.debug('command.jsm.server.add.before', { requestId: msg.requestId, argShape });
-            const raw = await vscode.commands.executeCommand(msg.id, ...(msg.args || []));
-            commandResult = this.normalizeCommandResult(raw);
-            this.panelLog.debug('command.jsm.server.add.after', {
-              requestId: msg.requestId,
-              ok: commandResult.ok,
-              message: commandResult.message,
-              dataServerId: commandResult.data?.serverId,
-            });
-          } else {
-            commandResult = this.normalizeCommandResult(
-              await vscode.commands.executeCommand(msg.id, ...(msg.args || [])),
-            );
-          }
+          commandResult = await this.handleExecuteCommandMessage(msg);
         } catch (e) {
           this.deps.logger.error(`Error executing command ${msg.id}`, e);
           const message = `Error executing command: ${String(e)}`;
@@ -273,29 +264,9 @@ export class DashboardPanel implements vscode.Disposable {
         break;
       }
 
-      case 'submit': {
-        // Store last submitted data so we can persist it when the host handler runs.
-        this.lastSubmittedFormData = msg.data;
-
-        try {
-          if (this.currentFormId === 'jsm.serverForm') {
-            await this.handleServerFormSubmit();
-          } else if (this.currentFormId === 'jsm.templateForm') {
-            await this.handleTemplateFormSubmit();
-          } else {
-            this.postError('Submit is not supported in the current view.');
-          }
-        } catch (e) {
-          this.deps.logger.error('[DashboardPanel] Form submit failed', e);
-          this.postError(`Save failed: ${String(e)}`);
-        } finally {
-          this.postMessage({
-            v: WEBVIEW_PROTOCOL_VERSION,
-            command: 'submitFinished',
-          });
-        }
+      case 'submit':
+        await this.handleSubmitMessage(msg);
         break;
-      }
 
       case 'validate':
         // Basic pass-through validation; forms can opt-in to more complex checks if needed.
@@ -320,11 +291,7 @@ export class DashboardPanel implements vscode.Disposable {
 
       case 'cancel':
         // Reset any active form context
-        this.currentFormId = undefined;
-        this.currentFormMode = undefined;
-        this.currentFormTargetId = undefined;
-        this.currentFormTargetWorkspaceFolderUri = undefined;
-        this.currentFormTargetScope = undefined;
+        this.resetFormSession();
         break;
 
       case 'requestWorkspaceFolders':
@@ -387,6 +354,76 @@ export class DashboardPanel implements vscode.Disposable {
     }
   }
 
+  private async handleExecuteCommandMessage(
+    msg: Extract<WebviewToHost, { command: 'executeCommand' }>,
+  ): Promise<CommandExecutionResult | undefined> {
+    if (msg.id === 'jsm.internal.requestServerSchema') {
+      const [mode, serverId, workspaceFolderUri] = msg.args as ['edit' | 'create', string?, string?];
+      await this.handleSchemaRequest(mode, serverId, workspaceFolderUri);
+      return undefined;
+    }
+
+    if (msg.id === 'jsm.internal.requestTemplateSchema') {
+      const [mode, templateId] = msg.args as ['edit' | 'create', string?];
+      await this.handleTemplateSchemaRequest(mode, templateId);
+      return undefined;
+    }
+
+    if (msg.id === 'jsm.server.autodiscover') {
+      await this.handleAutodiscover();
+      return undefined;
+    }
+
+    if (msg.id === 'jsm.java.detect') {
+      await this.handleJavaDetect();
+      return undefined;
+    }
+
+    if (msg.id === 'jsm.template.createServer') {
+      const [templateId] = msg.args as [string?];
+      return this.handleTemplateCreateServer(templateId);
+    }
+
+    if (msg.id === 'jsm.template.delete') {
+      const [templateId] = msg.args as [string?];
+      return this.handleTemplateDelete(templateId);
+    }
+
+    if (msg.id === 'jsm.settings.save') {
+      return this.handleSettingsSave(msg.args?.[0]);
+    }
+
+    if (msg.id === 'jsm.server.add') {
+      const first = msg.args?.[0];
+      const argShape = first && typeof first === 'object'
+        ? {
+            hasWorkspaceFolderUri: 'workspaceFolderUri' in (first as object),
+            hasDraft: 'draft' in (first as object),
+            hasConfig: 'config' in (first as object),
+            workspaceFolderUriLen: typeof (first as { workspaceFolderUri?: string }).workspaceFolderUri === 'string'
+              ? (first as { workspaceFolderUri: string }).workspaceFolderUri.length
+              : undefined,
+          }
+        : { note: 'first arg missing or not object' };
+      this.panelLog.debug('command.jsm.server.add.before', { requestId: msg.requestId, argShape });
+
+      const raw = await vscode.commands.executeCommand(msg.id, ...(msg.args || []));
+      const result = this.normalizeCommandResult(raw);
+
+      this.panelLog.debug('command.jsm.server.add.after', {
+        requestId: msg.requestId,
+        ok: result.ok,
+        message: result.message,
+        dataServerId: result.data?.serverId,
+      });
+      return result;
+    }
+
+    return this.normalizeCommandResult(
+      await vscode.commands.executeCommand(msg.id, ...(msg.args || [])),
+    );
+  }
+
   // ── Schema & Form Handlers ─────────────────────────────────────────────────
 
   private async handleSchemaRequest(
@@ -409,7 +446,7 @@ export class DashboardPanel implements vscode.Disposable {
       )
       : undefined;
     const serverType = record?.config.type ?? 'tomcat';
-    const plugin = this.deps.pluginRegistry.get(serverType as any);
+    const plugin = this.deps.pluginRegistry.get(serverType);
     const jsmConfig = vscode.workspace.getConfiguration('jsm');
 
     const schema = buildServerFormSchema({
@@ -612,11 +649,7 @@ export class DashboardPanel implements vscode.Disposable {
     });
 
     if (outcome.ok) {
-      this.currentFormId = undefined;
-      this.currentFormMode = undefined;
-      this.currentFormTargetId = undefined;
-      this.currentFormTargetWorkspaceFolderUri = undefined;
-      this.currentFormTargetScope = undefined;
+      this.resetFormSession();
       this.navigate({ type: 'template', id: outcome.templateId, globalTab: 'templates' });
     }
   }

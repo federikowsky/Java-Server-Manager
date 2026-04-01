@@ -7,6 +7,7 @@ import type {
   OutputSink,
 } from '@core/types';
 import type { FileChangeBatch } from '@core/types/events';
+import type { Result } from '@core/result';
 import { JsmError } from '@core/errors/JsmError';
 import { ErrorCode } from '@core/errors/codes';
 import { throwIfCancelled } from '@core/ops';
@@ -29,6 +30,13 @@ export interface ServerLifecycleDeployDeps {
 export interface ServerLifecycleDeployEntry {
   serverKey: ServerId;
   config: ServerConfig;
+}
+
+interface TargetedDeploymentOperationContext {
+  config: ServerConfig;
+  deploymentId: DeploymentId;
+  deployment: ServerConfig['deployments'][number];
+  ctx: OperationContext;
 }
 
 function resolveRunningConfig(
@@ -71,6 +79,87 @@ function makeDeployCtx(
   );
 }
 
+function requireTargetDeploymentId(entry: QueueEntry, operationName: string): DeploymentId {
+  const deploymentId = entry.targetDeploymentId;
+  if (deploymentId) {
+    return deploymentId;
+  }
+
+  throw new JsmError({
+    code: ErrorCode.InvalidConfig,
+    message: `${operationName} requires targetDeploymentId`,
+  });
+}
+
+function createTargetedDeploymentOperationContext(
+  deps: Pick<ServerLifecycleDeployDeps, 'getOutputSink' | 'resolveServerConfig'>,
+  server: ServerLifecycleDeployEntry,
+  options: {
+    deploymentId: DeploymentId;
+    kind: OperationContext['kind'];
+    timeoutMs: number;
+    cancel: OperationContext['cancel'];
+    operationId: OperationContext['operationId'];
+  },
+): TargetedDeploymentOperationContext {
+  const config = resolveRunningConfig(deps, server);
+  const deployment = resolveTargetDeployment(config, options.deploymentId);
+  const ctx = makeDeployCtx(
+    deps,
+    server,
+    config,
+    options.kind,
+    options.timeoutMs,
+    options.cancel,
+    options.operationId,
+  );
+  ctx.targetDeploymentId = options.deploymentId;
+
+  return {
+    config,
+    deploymentId: options.deploymentId,
+    deployment,
+    ctx,
+  };
+}
+
+async function runTargetedDeploymentOperation(
+  deps: ServerLifecycleDeployDeps,
+  server: ServerLifecycleDeployEntry,
+  entry: QueueEntry,
+  options: {
+    kind: 'DeployFull' | 'Undeploy';
+    timeoutMs: number;
+    operationId: OperationContext['operationId'];
+    cancel: OperationContext['cancel'];
+    run: (
+      ctx: OperationContext,
+      config: ServerConfig,
+      deployment: ServerConfig['deployments'][number],
+    ) => Promise<Result<void, JsmError>>;
+  },
+): Promise<void> {
+  const deploymentId = requireTargetDeploymentId(entry, options.kind);
+  const context = createTargetedDeploymentOperationContext(deps, server, {
+    deploymentId,
+    kind: options.kind,
+    timeoutMs: options.timeoutMs,
+    cancel: options.cancel,
+    operationId: options.operationId,
+  });
+  const result = await options.run(context.ctx, context.config, context.deployment);
+  if (!result.ok) {
+    throw result.error;
+  }
+}
+
+function resolveDeploySyncBatch(entry: QueueEntry): FileChangeBatch | undefined {
+  const batch = entry.meta?.[QUEUE_META_FILE_CHANGE_BATCH];
+  return batch && typeof batch === 'object' && Array.isArray((batch as FileChangeBatch).changes)
+    ? batch as FileChangeBatch
+    : undefined;
+}
+
 export async function runDeployFullOperation(
   deps: ServerLifecycleDeployDeps,
   server: ServerLifecycleDeployEntry,
@@ -78,23 +167,13 @@ export async function runDeployFullOperation(
   operationId: OperationContext['operationId'],
   cancel: OperationContext['cancel'],
 ): Promise<void> {
-  const deploymentId = entry.targetDeploymentId;
-  if (!deploymentId) {
-    throw new JsmError({
-      code: ErrorCode.InvalidConfig,
-      message: 'DeployFull requires targetDeploymentId',
-    });
-  }
-
-  const config = resolveRunningConfig(deps, server);
-  const dep = resolveTargetDeployment(config, deploymentId);
-  const ctx = makeDeployCtx(deps, server, config, 'DeployFull', 600_000, cancel, operationId);
-  ctx.targetDeploymentId = deploymentId;
-
-  const result = await deps.deployService.fullRedeploy(ctx, config, dep);
-  if (!result.ok) {
-    throw result.error;
-  }
+  await runTargetedDeploymentOperation(deps, server, entry, {
+    kind: 'DeployFull',
+    timeoutMs: 600_000,
+    operationId,
+    cancel,
+    run: (ctx, config, deployment) => deps.deployService.fullRedeploy(ctx, config, deployment),
+  });
 }
 
 export async function runUndeployOperation(
@@ -104,23 +183,13 @@ export async function runUndeployOperation(
   operationId: OperationContext['operationId'],
   cancel: OperationContext['cancel'],
 ): Promise<void> {
-  const deploymentId = entry.targetDeploymentId;
-  if (!deploymentId) {
-    throw new JsmError({
-      code: ErrorCode.InvalidConfig,
-      message: 'Undeploy requires targetDeploymentId',
-    });
-  }
-
-  const config = resolveRunningConfig(deps, server);
-  const dep = resolveTargetDeployment(config, deploymentId);
-  const ctx = makeDeployCtx(deps, server, config, 'Undeploy', 600_000, cancel, operationId);
-  ctx.targetDeploymentId = deploymentId;
-
-  const result = await deps.deployService.undeploy(ctx, config, dep);
-  if (!result.ok) {
-    throw result.error;
-  }
+  await runTargetedDeploymentOperation(deps, server, entry, {
+    kind: 'Undeploy',
+    timeoutMs: 600_000,
+    operationId,
+    cancel,
+    run: (ctx, config, deployment) => deps.deployService.undeploy(ctx, config, deployment),
+  });
 }
 
 export async function runRedeployAllOperation(
@@ -168,24 +237,36 @@ export async function runDeploySyncOperation(
     return;
   }
 
-  const batch = entry.meta?.[QUEUE_META_FILE_CHANGE_BATCH] as FileChangeBatch | undefined;
-  if (!batch || !Array.isArray(batch.changes)) {
+  const batch = resolveDeploySyncBatch(entry);
+  if (!batch) {
     deps.logger.warn('ServerLifecycle: DeploySync missing fileChangeBatch meta');
     return;
   }
 
-  const config = resolveRunningConfig(deps, server);
-  const dep = config.deployments.find(candidate => candidate.id === deploymentId);
-  if (!dep) {
-    deps.logger.warn(`ServerLifecycle: DeploySync deployment '${deploymentId}' not found`);
-    return;
+  let context: TargetedDeploymentOperationContext;
+  try {
+    context = createTargetedDeploymentOperationContext(deps, server, {
+      deploymentId,
+      kind: 'DeploySync',
+      timeoutMs: 30_000,
+      cancel,
+      operationId,
+    });
+  } catch (error) {
+    if (error instanceof JsmError && error.code === ErrorCode.InvalidConfig) {
+      deps.logger.warn(`ServerLifecycle: DeploySync deployment '${deploymentId}' not found`);
+      return;
+    }
+    throw error;
   }
 
-  const ctx = makeDeployCtx(deps, server, config, 'DeploySync', 30_000, cancel, operationId);
-  ctx.targetDeploymentId = deploymentId;
-
   try {
-    const result = await deps.deployService.sync(ctx, config, dep, batch);
+    const result = await deps.deployService.sync(
+      context.ctx,
+      context.config,
+      context.deployment,
+      batch,
+    );
     if (!result.ok) {
       deps.onDeploySyncFailure?.(server.serverKey, deploymentId);
     }

@@ -3,8 +3,9 @@ import {
   deploymentDraftToConfig,
 } from '@core/authoring';
 import type { DeploymentAuthoringDraft } from '@core/authoring';
-import type { SyncMode, ServerConfig, DeploymentConfig } from '@core/types';
+import type { SyncMode, ServerConfig, DeploymentConfig, DeploymentId, ServerId } from '@core/types';
 import type { Result } from '@core/result';
+import { ok, err } from '@core/result';
 import { JsmError } from '@core/errors/JsmError';
 import { ErrorCode } from '@core/errors/codes';
 import type { WorkspaceServiceRegistry } from '@app/config';
@@ -19,7 +20,7 @@ import {
   isDeploymentNode,
   isServerNode,
   registerMany,
-  runUntilQueueIdleWithProgressResult,
+  runQueuedActionWithProgressResult,
 } from './shared';
 
 // ── Dependency contract ─────────────────────────────────────────────────────
@@ -35,6 +36,35 @@ export interface DeploymentCommandsDeps {
   lifecycle: ServerLifecycle;
   treeProvider: ServerTreeViewProvider;
 }
+
+type DeploymentDraftCommandArg = {
+  serverId: string;
+  serverKey: string;
+  workspaceFolderUri: string;
+  draft?: unknown;
+  deploymentId?: string;
+};
+
+type DeploymentResolutionArg = {
+  workspaceFolderUri: string;
+  serverId: string;
+  deploymentId: string;
+  deploymentConfig?: DeploymentConfig;
+};
+
+type DeploymentCommandResult = {
+  ok: boolean;
+  message: string;
+  data?: {
+    serverId: string;
+    deploymentId: string;
+  };
+};
+
+type ResolvedDeploymentContext = {
+  server: ServerConfig;
+  deployment: DeploymentConfig;
+};
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -55,8 +85,99 @@ async function openLogFile(filePath: string): Promise<void> {
 }
 
 function nextSyncMode(current: SyncMode): SyncMode {
-  const cycle: SyncMode[] = ['manual', 'auto'];
-  return cycle[(cycle.indexOf(current) + 1) % cycle.length];
+  return current === 'manual' ? 'auto' : 'manual';
+}
+
+function asDeploymentDraftCommandArg(arg: unknown): DeploymentDraftCommandArg | undefined {
+  if (
+    !arg
+    || typeof arg !== 'object'
+    || !('serverId' in arg)
+    || !('workspaceFolderUri' in arg)
+    || !('draft' in arg)
+  ) {
+    return undefined;
+  }
+
+  return arg as DeploymentDraftCommandArg;
+}
+
+function resolveDeploymentConfig(
+  resolveServer: (workspaceFolderUri: string, serverId: string) => ServerConfig | undefined,
+  arg: DeploymentResolutionArg,
+  options: { allowInlineDeployment?: boolean } = {},
+): { server: ServerConfig | undefined; deployment: DeploymentConfig | undefined } {
+  const server = resolveServer(arg.workspaceFolderUri, arg.serverId);
+  const deployment = server?.deployments.find((candidate: DeploymentConfig) => candidate.id === arg.deploymentId)
+    ?? (options.allowInlineDeployment ? arg.deploymentConfig : undefined);
+  return { server, deployment };
+}
+
+function resolveDeploymentDraft(
+  spaArg: DeploymentDraftCommandArg,
+  deploymentId?: string,
+): DeploymentAuthoringDraft | undefined {
+  if (!spaArg.draft || typeof spaArg.draft !== 'object') {
+    return undefined;
+  }
+
+  return deploymentId
+    ? { ...(spaArg.draft as DeploymentAuthoringDraft), id: deploymentId }
+    : (spaArg.draft as DeploymentAuthoringDraft);
+}
+
+function replaceDeployment(
+  server: ServerConfig,
+  deploymentId: DeploymentId,
+  deployment: DeploymentConfig,
+): ServerConfig {
+  return {
+    ...server,
+    deployments: server.deployments.map(candidate =>
+      candidate.id === deploymentId ? deployment : candidate,
+    ),
+  };
+}
+
+function successResult(
+  action: 'added' | 'updated',
+  serverId: ServerId,
+  deployment: DeploymentConfig,
+): DeploymentCommandResult {
+  const verb = action === 'added' ? 'added' : 'updated';
+  return {
+    ok: true,
+    message: `Deployment "${deployment.deployName}" ${verb}.`,
+    data: {
+      serverId,
+      deploymentId: deployment.id,
+    },
+  };
+}
+
+async function pickLogFilePath(files: Array<{ path: string; title: string }>): Promise<string | undefined> {
+  if (files.length === 0) {
+    return undefined;
+  }
+
+  if (files.length === 1) {
+    return files[0].path;
+  }
+
+  const picked = await vscode.window.showQuickPick(
+    files.map(file => ({ label: file.title, description: file.path, path: file.path })),
+    { placeHolder: 'Select a log file to open', ignoreFocusOut: true },
+  );
+  return picked?.path;
+}
+
+async function openLogFileSafely(filePath: string): Promise<Result<void, JsmError>> {
+  try {
+    await openLogFile(filePath);
+    return ok(undefined);
+  } catch (e) {
+    return err(JsmError.fromUnknown(e, ErrorCode.InvalidConfig));
+  }
 }
 
 // ── Registration ────────────────────────────────────────────────────────────
@@ -68,137 +189,159 @@ export function registerDeploymentCommands(
   const resolveServer = (workspaceFolderUri: string, serverId: string) => workspaceRegistry
     ? workspaceRegistry.getServer({ workspaceFolderUri, serverId })
     : configService?.getServer(serverId);
-  const resolveDeployment = (workspaceFolderUri: string, serverId: string, deploymentId: string) =>
-    resolveServer(workspaceFolderUri, serverId)?.deployments.find((d: DeploymentConfig) => d.id === deploymentId);
+  const resolveDeployment = (
+    arg: DeploymentResolutionArg,
+    options: { allowInlineDeployment?: boolean } = {},
+  ) => resolveDeploymentConfig(resolveServer, arg, options);
+
+  const updateServerConfig = async (
+    workspaceFolderUri: string,
+    serverId: string,
+    updatedServer: ServerConfig,
+  ) => workspaceRegistry
+    ? workspaceRegistry.updateServer({ workspaceFolderUri, serverId }, updatedServer)
+    : configService?.updateServer(updatedServer);
+
+  const runQueuedDeploymentAction = async (
+    serverKey: string,
+    title: string,
+    action: () => Result<void, JsmError>,
+    successMessage: string,
+  ): Promise<void> => {
+    const result = await runQueuedActionWithProgressResult(
+      { title, serverKey },
+      lifecycle,
+      action,
+    );
+    if (!result.ok) {
+      showErr(result.error);
+      return;
+    }
+
+    showSuccess(successMessage);
+  };
+
+  const requireDeploymentContext = (
+    arg: DeploymentResolutionArg,
+    options: { allowInlineDeployment?: boolean } = {},
+  ): ResolvedDeploymentContext | undefined => {
+    const { server, deployment } = resolveDeployment(arg, options);
+    if (!server || !deployment) {
+      return undefined;
+    }
+    return { server, deployment };
+  };
+
+  const openDeploymentDashboard = (
+    arg: { serverId: string; deploymentId?: string },
+    mode: 'create' | 'edit',
+  ): void => {
+    void vscode.commands.executeCommand('jsm.dashboard.open', {
+      type: 'deployment',
+      serverId: arg.serverId,
+      id: arg.deploymentId,
+      mode,
+      globalTab: 'home',
+    });
+  };
+
+  const persistAddedDeployment = async (spaArg: DeploymentDraftCommandArg) => {
+    const config = resolveServer(spaArg.workspaceFolderUri, spaArg.serverId);
+    if (!config) {
+      return { ok: false, message: 'Server not found' } as const;
+    }
+
+    const draft = resolveDeploymentDraft(spaArg);
+    if (!draft) {
+      return { ok: false, message: 'Invalid deployment draft payload.' } as const;
+    }
+
+    const deployment = deploymentDraftToConfig(draft, draft.id ?? crypto.randomUUID());
+    const result = workspaceRegistry
+      ? await workspaceRegistry.addDeployment({ workspaceFolderUri: spaArg.workspaceFolderUri, serverId: spaArg.serverId }, deployment)
+      : await configService?.updateServer({ ...config, deployments: [...config.deployments, deployment] });
+    if (!result) return { ok: false, message: 'Unable to add deployment.' } as const;
+    if (!result.ok) return { ok: false, message: result.error.message } as const;
+    treeProvider.requestRefresh();
+    return successResult('added', spaArg.serverId, deployment);
+  };
+
+  const persistEditedDeployment = async (spaArg: DeploymentDraftCommandArg) => {
+    const config = resolveServer(spaArg.workspaceFolderUri, spaArg.serverId);
+    if (!config) {
+      return { ok: false, message: 'Server not found' } as const;
+    }
+
+    const draft = resolveDeploymentDraft(spaArg, spaArg.deploymentId);
+    if (!draft?.id) {
+      return { ok: false, message: 'Invalid deployment draft payload.' } as const;
+    }
+
+    const deployment = deploymentDraftToConfig(draft, draft.id);
+    const updatedServer = replaceDeployment(config, deployment.id, deployment);
+
+    const result = await updateServerConfig(spaArg.workspaceFolderUri, spaArg.serverId, updatedServer);
+    if (!result) return { ok: false, message: 'Unable to update deployment.' } as const;
+    if (!result.ok) return { ok: false, message: result.error.message } as const;
+    treeProvider.requestRefresh();
+    return successResult('updated', spaArg.serverId, deployment);
+  };
 
   return registerMany([
 
     // §8.2 — jsm.deployment.add
     ['jsm.deployment.add', async (arg: unknown) => {
-      if (
-        arg
-        && typeof arg === 'object'
-        && 'serverId' in arg
-        && 'workspaceFolderUri' in arg
-        && 'draft' in arg
-      ) {
-        const spaArg = arg as {
-          serverId: string;
-          serverKey: string;
-          workspaceFolderUri: string;
-          draft?: unknown;
-        };
-        const config = resolveServer(spaArg.workspaceFolderUri, spaArg.serverId);
-        if (!config) {
-          return { ok: false, message: 'Server not found' };
-        }
-
-        const draft = spaArg.draft && typeof spaArg.draft === 'object'
-          ? (spaArg.draft as DeploymentAuthoringDraft)
-          : undefined;
-        if (!draft) {
-          return { ok: false, message: 'Invalid deployment draft payload.' };
-        }
-
-        const deployment = deploymentDraftToConfig(draft, draft.id ?? crypto.randomUUID());
-        const result = workspaceRegistry
-          ? await workspaceRegistry.addDeployment({ workspaceFolderUri: spaArg.workspaceFolderUri, serverId: spaArg.serverId }, deployment)
-          : await configService?.updateServer({ ...config, deployments: [...config.deployments, deployment] });
-        if (!result) return { ok: false, message: 'Unable to add deployment.' };
-        if (!result.ok) return { ok: false, message: result.error.message };
-        treeProvider.requestRefresh();
-        return {
-          ok: true,
-          message: `Deployment "${deployment.deployName}" added.`,
-          data: {
-            serverId: spaArg.serverId,
-            deploymentId: deployment.id,
-          },
-        };
+      const spaArg = asDeploymentDraftCommandArg(arg);
+      if (spaArg) {
+        return persistAddedDeployment(spaArg);
       }
-      
+
       if (!isServerNode(arg)) return;
-      void vscode.commands.executeCommand('jsm.dashboard.open', {
-        type: 'deployment',
-        serverId: arg.serverId,
-        mode: 'create',
-        globalTab: 'home',
-      });
+      openDeploymentDashboard(arg, 'create');
       return undefined;
     }],
 
     // §8.2 — jsm.deployment.redeploy
     ['jsm.deployment.redeploy', async (arg: unknown) => {
       if (!isDeploymentNode(arg)) return;
-      const config = resolveServer(arg.workspaceFolderUri, arg.serverId);
-      const dep = config?.deployments.find((d: DeploymentConfig) => d.id === arg.deploymentId);
-      if (!config || !dep) return;
-      const enq = lifecycle.enqueueDeployFull(arg.serverKey, arg.deploymentId);
-      if (!enq.ok) {
-        showErr(enq.error);
-        return;
-      }
-      const done = await runUntilQueueIdleWithProgressResult(
-        { title: `Redeploying ${dep.deployName}...`, serverKey: arg.serverKey },
-        lifecycle,
+      const context = requireDeploymentContext(arg);
+      if (!context) return;
+      await runQueuedDeploymentAction(
+        arg.serverKey,
+        `Redeploying ${context.deployment.deployName}...`,
+        () => lifecycle.enqueueDeployFull(arg.serverKey, arg.deploymentId),
+        `Redeploy completed for "${context.deployment.deployName}".`,
       );
-      if (!done.ok) {
-        showErr(done.error);
-        return;
-      }
-      showSuccess(`Redeploy completed for "${dep.deployName}".`);
     }],
 
     // §8.2 — jsm.deployment.undeploy
     ['jsm.deployment.undeploy', async (arg: unknown) => {
       if (!isDeploymentNode(arg)) return;
-      const config = resolveServer(arg.workspaceFolderUri, arg.serverId);
-      const dep = config?.deployments.find((d: DeploymentConfig) => d.id === arg.deploymentId);
-      if (!config || !dep) return;
-      const enq = lifecycle.enqueueUndeploy(arg.serverKey, arg.deploymentId);
-      if (!enq.ok) {
-        showErr(enq.error);
-        return;
-      }
-      const done = await runUntilQueueIdleWithProgressResult(
-        { title: `Undeploying ${dep.deployName}...`, serverKey: arg.serverKey },
-        lifecycle,
+      const context = requireDeploymentContext(arg);
+      if (!context) return;
+      await runQueuedDeploymentAction(
+        arg.serverKey,
+        `Undeploying ${context.deployment.deployName}...`,
+        () => lifecycle.enqueueUndeploy(arg.serverKey, arg.deploymentId),
+        `Undeployed "${context.deployment.deployName}".`,
       );
-      if (!done.ok) {
-        showErr(done.error);
-        return;
-      }
-      showSuccess(`Undeployed "${dep.deployName}".`);
     }],
 
     // §8.2 — jsm.deployment.toggleAutosync
     ['jsm.deployment.toggleAutosync', async (arg: unknown) => {
       if (!isDeploymentNode(arg)) return;
-      const locator = {
-        workspaceFolderUri: arg.workspaceFolderUri,
-        serverId: arg.serverId,
-      };
-      const server = resolveServer(locator.workspaceFolderUri, locator.serverId);
-      if (!server) return;
+      const context = requireDeploymentContext(arg);
+      if (!context) return;
 
-      const dep = server.deployments.find((d: DeploymentConfig) => d.id === arg.deploymentId);
-      if (!dep) return;
-      const newMode = nextSyncMode(dep.syncMode);
-      const updatedDep = { ...dep, syncMode: newMode };
-      const updatedServer = {
-        ...server,
-        deployments: server.deployments.map((d: DeploymentConfig) =>
-          d.id === arg.deploymentId ? updatedDep : d,
-        ),
-      };
+      const newMode = nextSyncMode(context.deployment.syncMode);
+      const updatedDep = { ...context.deployment, syncMode: newMode };
+      const updatedServer = replaceDeployment(context.server, arg.deploymentId, updatedDep);
 
-      const result = workspaceRegistry
-        ? await workspaceRegistry.updateServer(locator, updatedServer)
-        : await configService?.updateServer(updatedServer);
+      const result = await updateServerConfig(arg.workspaceFolderUri, arg.serverId, updatedServer);
       if (!result) return;
       if (!result.ok) { showErr(result.error); return; }
 
-      showSuccess(`AutoSync for "${dep.deployName}" set to "${newMode}".`);
+      showSuccess(`AutoSync for "${context.deployment.deployName}" set to "${newMode}".`);
       treeProvider.requestRefresh();
     }],
 
@@ -207,72 +350,21 @@ export function registerDeploymentCommands(
 
     // §8.2 — jsm.deployment.edit
     ['jsm.deployment.edit', async (arg: unknown) => {
-      if (
-        arg
-        && typeof arg === 'object'
-        && 'serverId' in arg
-        && 'workspaceFolderUri' in arg
-        && 'draft' in arg
-      ) {
-        const spaArg = arg as {
-          serverId: string;
-          serverKey: string;
-          workspaceFolderUri: string;
-          draft?: unknown;
-          deploymentId?: string;
-        };
-        const config = resolveServer(spaArg.workspaceFolderUri, spaArg.serverId);
-        if (!config) {
-          return { ok: false, message: 'Server not found' };
-        }
-
-        const draft = spaArg.draft && typeof spaArg.draft === 'object'
-          ? { ...(spaArg.draft as DeploymentAuthoringDraft), id: spaArg.deploymentId }
-          : undefined;
-        if (!draft?.id) {
-          return { ok: false, message: 'Invalid deployment draft payload.' };
-        }
-
-        const deployment = deploymentDraftToConfig(draft, draft.id);
-        const updatedServer = {
-          ...config,
-          deployments: config.deployments.map((d: DeploymentConfig) =>
-            d.id === deployment.id ? deployment : d,
-          ),
-        };
-
-        const result = workspaceRegistry
-          ? await workspaceRegistry.updateServer({ workspaceFolderUri: spaArg.workspaceFolderUri, serverId: spaArg.serverId }, updatedServer)
-          : await configService?.updateServer(updatedServer);
-        if (!result) return { ok: false, message: 'Unable to update deployment.' };
-        if (!result.ok) return { ok: false, message: result.error.message };
-        treeProvider.requestRefresh();
-        return {
-          ok: true,
-          message: `Deployment "${deployment.deployName}" updated.`,
-          data: {
-            serverId: spaArg.serverId,
-            deploymentId: deployment.id,
-          },
-        };
+      const spaArg = asDeploymentDraftCommandArg(arg);
+      if (spaArg) {
+        return persistEditedDeployment(spaArg);
       }
-      
+
       if (!isDeploymentNode(arg)) return;
-      void vscode.commands.executeCommand('jsm.dashboard.open', {
-        type: 'deployment',
-        id: arg.deploymentId,
-        serverId: arg.serverId,
-        mode: 'edit',
-        globalTab: 'home',
-      });
+      openDeploymentDashboard(arg, 'edit');
       return undefined;
     }],
 
     // §8.2 — jsm.deployment.remove
     ['jsm.deployment.remove', async (arg: unknown) => {
       if (!isDeploymentNode(arg)) return;
-      const dep = arg.deploymentConfig ?? resolveDeployment(arg.workspaceFolderUri, arg.serverId, arg.deploymentId);
-      if (!dep) {
+      const context = requireDeploymentContext(arg, { allowInlineDeployment: true });
+      if (!context) {
         showErr(new JsmError({
           code: ErrorCode.InvalidConfig,
           message: 'Deployment not found.',
@@ -280,7 +372,7 @@ export function registerDeploymentCommands(
         return;
       }
       const answer = await vscode.window.showWarningMessage(
-        `Remove deployment "${dep.deployName}"? This cannot be undone.`,
+        `Remove deployment "${context.deployment.deployName}"? This cannot be undone.`,
         { modal: true },
         'Remove',
       );
@@ -294,19 +386,15 @@ export function registerDeploymentCommands(
         : await configService?.removeDeployment(arg.serverId, arg.deploymentId);
       if (!result) return;
       if (!result.ok) { showErr(result.error); return; }
-      showSuccess(`Deployment "${dep.deployName}" removed.`);
+      showSuccess(`Deployment "${context.deployment.deployName}" removed.`);
       treeProvider.requestRefresh();
     }],
 
     // Reveal deployment source in OS explorer / VS Code explorer (spec §17.3 download/export slot).
     ['jsm.deployment.revealSource', async (arg: unknown) => {
       if (!isDeploymentNode(arg)) return;
-      const dep =
-        arg.deploymentConfig
-        ?? resolveDeployment(arg.workspaceFolderUri, arg.serverId, arg.deploymentId);
-      const raw = dep && typeof (dep as DeploymentConfig).sourcePath === 'string'
-        ? (dep as DeploymentConfig).sourcePath.trim()
-        : '';
+      const context = requireDeploymentContext(arg, { allowInlineDeployment: true });
+      const raw = context?.deployment.sourcePath.trim() ?? '';
       if (!raw) {
         void vscode.window.showWarningMessage('JSM: No source path to reveal.');
         return;
@@ -323,8 +411,8 @@ export function registerDeploymentCommands(
     ['jsm.deployment.openLogs', async (arg: unknown) => {
       if (!isDeploymentNode(arg)) return;
 
-      const config = resolveServer(arg.workspaceFolderUri, arg.serverId);
-      if (!config) {
+      const { server } = resolveDeployment(arg);
+      if (!server) {
         showErr(new JsmError({
           code: ErrorCode.InvalidConfig,
           message: `Server not found for deployment.`,
@@ -333,16 +421,16 @@ export function registerDeploymentCommands(
         return;
       }
 
-      const plugin = pluginRegistry.get(config.type);
+      const plugin = pluginRegistry.get(server.type);
       if (!plugin) {
         showErr(new JsmError({
           code: ErrorCode.InvalidConfig,
-          message: `No plugin registered for server type '${config.type}'.`,
+          message: `No plugin registered for server type '${server.type}'.`,
         }));
         return;
       }
 
-      const sourcesResult = await plugin.getLogSources(config);
+      const sourcesResult = await plugin.getLogSources(server);
       if (!sourcesResult.ok) {
         showErr(sourcesResult.error);
         return;
@@ -351,30 +439,18 @@ export function registerDeploymentCommands(
       const files = collectFileLogPaths(sourcesResult.value);
       if (files.length === 0) {
         await vscode.window.showInformationMessage(
-          `No file log sources are available for server "${config.name}".`,
+          `No file log sources are available for server "${server.name}".`,
         );
         return;
       }
 
-      const openOne = async (filePath: string): Promise<void> => {
-        try {
-          await openLogFile(filePath);
-        } catch (e) {
-          showErr(JsmError.fromUnknown(e, ErrorCode.InvalidConfig));
-        }
-      };
+      const pickedPath = await pickLogFilePath(files);
+      if (!pickedPath) return;
 
-      if (files.length === 1) {
-        await openOne(files[0].path);
-        return;
+      const openResult = await openLogFileSafely(pickedPath);
+      if (!openResult.ok) {
+        showErr(openResult.error);
       }
-
-      const picked = await vscode.window.showQuickPick(
-        files.map(f => ({ label: f.title, description: f.path, path: f.path })),
-        { placeHolder: 'Select a log file to open', ignoreFocusOut: true },
-      );
-      if (!picked) return;
-      await openOne(picked.path);
     }],
   ]);
 }

@@ -357,7 +357,7 @@ export class TomcatPlugin implements IServerPlugin {
     config: ServerConfig,
     mode: StartMode,
   ): Promise<Result<StartResult, JsmError>> {
-    const script = path.join(config.runtime.homePath, 'bin', catalinaScript());
+    const script = this.getCatalinaScriptPath(config);
 
     if (!(await exists(script))) {
       return err(new JsmError({
@@ -367,74 +367,18 @@ export class TomcatPlugin implements IServerPlugin {
       }));
     }
 
-    const env: Record<string, string> = {
-      CATALINA_HOME: config.runtime.homePath,
-      CATALINA_BASE: config.instancePath,
-      JAVA_HOME: config.javaHome,
-      ...config.run.env,
-    };
+    const env = this.createCatalinaEnv(config, { includeRunEnv: true });
+    const shutdownPort = await this.reserveShutdownPort(ctx, config);
+    this.appendCatalinaOpts(env, config, shutdownPort, config.run.vmArgs);
 
-    let shutdownPort: number = (config.pluginConfig as TomcatPluginConfig | undefined)?.shutdownPort ?? DEFAULT_SHUTDOWN_PORT;
-    const free = await this.portScanner.findFreePort(DEFAULT_SHUTDOWN_PORT);
-    if (free !== null) {
-      shutdownPort = free;
-      await this.keyValueStore.set(SHUTDOWN_PORT_KEY_PREFIX + ctx.serverId, free);
+    const startupMonitorResult = await this.createStartupMonitor(config);
+    if (!startupMonitorResult.ok) {
+      return startupMonitorResult;
     }
+    const startupMonitor = startupMonitorResult.value;
 
-    const catOpts: string[] = tomcatConfigVmArgs(config, shutdownPort);
-    if (config.run.vmArgs.length > 0) {
-      catOpts.push(...config.run.vmArgs);
-    }
-    if (catOpts.length > 0) {
-      env['CATALINA_OPTS'] = ((env['CATALINA_OPTS'] ?? '') + ' ' + catOpts.join(' ')).trim();
-    }
-
-    let startupMonitor: TomcatStartupMonitor | undefined;
-    if (this.startupListenerJarPath) {
-      const prepareResult = await this.prepareStartupListener(config);
-      if (!prepareResult.ok) {
-        return prepareResult;
-      }
-
-      try {
-        startupMonitor = await TomcatStartupMonitor.create({
-          serverKey: config.id,
-          serverName: config.name,
-          logger: this.logger,
-        });
-      } catch (cause) {
-        return err(new JsmError({
-          code: ErrorCode.Unknown,
-          message: `Failed to initialize Tomcat startup callback for ${config.name}`,
-          details: cause instanceof Error ? cause.message : String(cause),
-          cause,
-        }));
-      }
-    }
-
-    const args: string[] = [];
-
-    if (mode === 'debug') {
-      // §12.1: Debug MUST bind to localhost. JPDA_ADDRESS = bind:port
-      const bind = config.debug.bind || '127.0.0.1';
-      const debugPort = config.ports.debug ?? 5005;
-      env['JPDA_ADDRESS'] = `${bind}:${debugPort}`;
-      env['JPDA_TRANSPORT'] = 'dt_socket';
-      args.push('jpda', 'run');
-    } else {
-      args.push('run');
-    }
-
-    if (startupMonitor) {
-      const callbackVmArgs = [
-        `-Djsm.startup.callback.url=${startupMonitor.callbackUrl}`,
-        `-Djsm.startup.callback.token=${startupMonitor.token}`,
-        `-Djsm.startup.callback.startupId=${startupMonitor.startupId}`,
-        `-Djsm.startup.callback.serverKey=${config.id}`,
-      ];
-      const existing = env['JAVA_OPTS'] ?? '';
-      env['JAVA_OPTS'] = (existing + ' ' + callbackVmArgs.join(' ')).trim();
-    }
+    const args = this.buildStartArgs(env, config, mode);
+    this.applyStartupMonitorJavaOpts(env, config, startupMonitor);
 
     ctx.progress.report('Starting Tomcat...');
 
@@ -456,28 +400,9 @@ export class TomcatPlugin implements IServerPlugin {
     }
 
     startupMonitor?.bindProcess(child);
+    this.trackChildProcess(config.id, child);
 
-    this.childProcesses.set(config.id, child);
-
-    // Handle process exit
-    child.on('exit', (code, signal) => {
-      this.childProcesses.delete(config.id);
-      this.logger.info(`TomcatPlugin: process exited for ${config.id}`, { code, signal });
-    });
-
-    const hints: string[] = [];
-    const result: StartResult = {
-      pid: child.pid,
-      httpUrl: `http://${config.host}:${config.ports.http}`,
-      hints,
-      startupMonitor,
-    };
-
-    if (mode === 'debug') {
-      const debugPort = config.ports.debug ?? 5005;
-      result.debugPort = debugPort;
-      hints.push(`Debug port: ${debugPort}`);
-    }
+    const result = this.buildStartResult(config, mode, child.pid, startupMonitor);
 
     this.logger.info(`TomcatPlugin: started ${config.name} (PID ${child.pid}, mode=${mode})`);
     return ok(result);
@@ -493,45 +418,15 @@ export class TomcatPlugin implements IServerPlugin {
     ctx.progress.report('Stopping Tomcat...');
 
     // Try graceful stop via catalina.sh stop
-    const script = path.join(config.runtime.homePath, 'bin', catalinaScript());
-    const env: Record<string, string> = {
-      CATALINA_HOME: config.runtime.homePath,
-      CATALINA_BASE: config.instancePath,
-      JAVA_HOME: config.javaHome,
-    };
-    let shutdownPort: number = (config.pluginConfig as TomcatPluginConfig | undefined)?.shutdownPort ?? DEFAULT_SHUTDOWN_PORT;
-    const saved = this.keyValueStore.get<number>(SHUTDOWN_PORT_KEY_PREFIX + ctx.serverId);
-    if (saved !== undefined) shutdownPort = saved;
-    const stopOpts = tomcatConfigVmArgs(config, shutdownPort);
-    if (stopOpts.length > 0) {
-      env['CATALINA_OPTS'] = stopOpts.join(' ');
-    }
+    const script = this.getCatalinaScriptPath(config);
+    const env = this.createCatalinaEnv(config);
+    const shutdownPort = this.resolveShutdownPortForStop(ctx, config);
+    this.appendCatalinaOpts(env, config, shutdownPort);
 
-    const exitCode = await new Promise<number | null>((resolve) => {
-      const child = this.spawner.spawn({
-        exe: script,
-        args: ['stop'],
-        env,
-        onData: (chunk) => ctx.output.appendLine(chunk),
-        onExit: (code) => resolve(code),
-      });
-
-      // Timeout for the stop command itself
-      const timeout = config.timeouts?.stopMs ?? 20_000;
-      const timer = setTimeout(() => {
-        this.spawner.kill(child.pid!, true);
-        resolve(null);
-      }, timeout);
-
-      child.on('exit', () => clearTimeout(timer));
-    });
+    const exitCode = await this.invokeStopCommand(ctx, config, script, env);
 
     // Also kill the tracked child process if still running
-    const tracked = this.childProcesses.get(config.id);
-    if (tracked?.pid) {
-      this.spawner.kill(tracked.pid);
-      this.childProcesses.delete(config.id);
-    }
+    this.cleanupTrackedChildProcess(config.id);
 
     if (exitCode !== 0 && exitCode !== null) {
       this.logger.warn(`TomcatPlugin: stop script exited with code ${exitCode}`);
@@ -1161,5 +1056,186 @@ export class TomcatPlugin implements IServerPlugin {
     }
 
     return ok(undefined);
+  }
+
+  private getCatalinaScriptPath(config: ServerConfig): string {
+    return path.join(config.runtime.homePath, 'bin', catalinaScript());
+  }
+
+  private createCatalinaEnv(
+    config: ServerConfig,
+    options: { includeRunEnv?: boolean } = {},
+  ): Record<string, string> {
+    return {
+      CATALINA_HOME: config.runtime.homePath,
+      CATALINA_BASE: config.instancePath,
+      JAVA_HOME: config.javaHome,
+      ...(options.includeRunEnv ? config.run.env : {}),
+    };
+  }
+
+  private configuredShutdownPort(config: ServerConfig): number {
+    return (config.pluginConfig as TomcatPluginConfig | undefined)?.shutdownPort ?? DEFAULT_SHUTDOWN_PORT;
+  }
+
+  private async reserveShutdownPort(ctx: OperationContext, config: ServerConfig): Promise<number> {
+    let shutdownPort = this.configuredShutdownPort(config);
+    const free = await this.portScanner.findFreePort(DEFAULT_SHUTDOWN_PORT);
+    if (free !== null) {
+      shutdownPort = free;
+      await this.keyValueStore.set(SHUTDOWN_PORT_KEY_PREFIX + ctx.serverId, free);
+    }
+    return shutdownPort;
+  }
+
+  private resolveShutdownPortForStop(ctx: OperationContext, config: ServerConfig): number {
+    let shutdownPort = this.configuredShutdownPort(config);
+    const saved = this.keyValueStore.get<number>(SHUTDOWN_PORT_KEY_PREFIX + ctx.serverId);
+    if (saved !== undefined) {
+      shutdownPort = saved;
+    }
+    return shutdownPort;
+  }
+
+  private appendCatalinaOpts(
+    env: Record<string, string>,
+    config: ServerConfig,
+    shutdownPort: number,
+    additionalVmArgs: string[] = [],
+  ): void {
+    const catOpts = tomcatConfigVmArgs(config, shutdownPort);
+    if (additionalVmArgs.length > 0) {
+      catOpts.push(...additionalVmArgs);
+    }
+    if (catOpts.length > 0) {
+      env['CATALINA_OPTS'] = ((env['CATALINA_OPTS'] ?? '') + ' ' + catOpts.join(' ')).trim();
+    }
+  }
+
+  private async createStartupMonitor(
+    config: ServerConfig,
+  ): Promise<Result<TomcatStartupMonitor | undefined, JsmError>> {
+    if (!this.startupListenerJarPath) {
+      return ok(undefined);
+    }
+
+    const prepareResult = await this.prepareStartupListener(config);
+    if (!prepareResult.ok) {
+      return prepareResult;
+    }
+
+    try {
+      return ok(await TomcatStartupMonitor.create({
+        serverKey: config.id,
+        serverName: config.name,
+        logger: this.logger,
+      }));
+    } catch (cause) {
+      return err(new JsmError({
+        code: ErrorCode.Unknown,
+        message: `Failed to initialize Tomcat startup callback for ${config.name}`,
+        details: cause instanceof Error ? cause.message : String(cause),
+        cause,
+      }));
+    }
+  }
+
+  private buildStartArgs(
+    env: Record<string, string>,
+    config: ServerConfig,
+    mode: StartMode,
+  ): string[] {
+    if (mode === 'debug') {
+      const bind = config.debug.bind || '127.0.0.1';
+      const debugPort = config.ports.debug ?? 5005;
+      env['JPDA_ADDRESS'] = `${bind}:${debugPort}`;
+      env['JPDA_TRANSPORT'] = 'dt_socket';
+      return ['jpda', 'run'];
+    }
+
+    return ['run'];
+  }
+
+  private applyStartupMonitorJavaOpts(
+    env: Record<string, string>,
+    config: ServerConfig,
+    startupMonitor: TomcatStartupMonitor | undefined,
+  ): void {
+    if (!startupMonitor) {
+      return;
+    }
+
+    const callbackVmArgs = [
+      `-Djsm.startup.callback.url=${startupMonitor.callbackUrl}`,
+      `-Djsm.startup.callback.token=${startupMonitor.token}`,
+      `-Djsm.startup.callback.startupId=${startupMonitor.startupId}`,
+      `-Djsm.startup.callback.serverKey=${config.id}`,
+    ];
+    const existing = env['JAVA_OPTS'] ?? '';
+    env['JAVA_OPTS'] = (existing + ' ' + callbackVmArgs.join(' ')).trim();
+  }
+
+  private trackChildProcess(serverId: string, child: ChildProcess): void {
+    this.childProcesses.set(serverId, child);
+    child.on('exit', (code, signal) => {
+      this.childProcesses.delete(serverId);
+      this.logger.info(`TomcatPlugin: process exited for ${serverId}`, { code, signal });
+    });
+  }
+
+  private buildStartResult(
+    config: ServerConfig,
+    mode: StartMode,
+    pid: number,
+    startupMonitor: TomcatStartupMonitor | undefined,
+  ): StartResult {
+    const hints: string[] = [];
+    const result: StartResult = {
+      pid,
+      httpUrl: `http://${config.host}:${config.ports.http}`,
+      hints,
+      startupMonitor,
+    };
+
+    if (mode === 'debug') {
+      const debugPort = config.ports.debug ?? 5005;
+      result.debugPort = debugPort;
+      hints.push(`Debug port: ${debugPort}`);
+    }
+
+    return result;
+  }
+
+  private async invokeStopCommand(
+    ctx: OperationContext,
+    config: ServerConfig,
+    script: string,
+    env: Record<string, string>,
+  ): Promise<number | null> {
+    return new Promise<number | null>((resolve) => {
+      const child = this.spawner.spawn({
+        exe: script,
+        args: ['stop'],
+        env,
+        onData: (chunk) => ctx.output.appendLine(chunk),
+        onExit: (code) => resolve(code),
+      });
+
+      const timeout = config.timeouts?.stopMs ?? 20_000;
+      const timer = setTimeout(() => {
+        this.spawner.kill(child.pid!, true);
+        resolve(null);
+      }, timeout);
+
+      child.on('exit', () => clearTimeout(timer));
+    });
+  }
+
+  private cleanupTrackedChildProcess(serverId: string): void {
+    const tracked = this.childProcesses.get(serverId);
+    if (tracked?.pid) {
+      this.spawner.kill(tracked.pid);
+      this.childProcesses.delete(serverId);
+    }
   }
 }

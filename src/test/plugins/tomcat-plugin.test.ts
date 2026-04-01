@@ -1,7 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
+import { EventEmitter } from 'events';
+import type { ChildProcess } from 'child_process';
 import { TomcatPlugin } from '@plugins/tomcat/TomcatPlugin';
 import { TomcatStartupMonitor } from '@plugins/tomcat/TomcatStartupMonitor';
 import type { ServerConfig, DeploymentConfig, OperationContext } from '@core/types';
@@ -16,6 +18,24 @@ function mockKeyValueStore(): KeyValueStore {
     get: <T>(key: string) => data.get(key) as T | undefined,
     set: async <T>(key: string, value: T) => { data.set(key, value); },
     delete: async (key: string) => { data.delete(key); },
+  };
+}
+
+function spyKeyValueStore(initialEntries: Record<string, unknown> = {}) {
+  const data = new Map<string, unknown>(Object.entries(initialEntries));
+  const get = vi.fn(<T>(key: string) => data.get(key) as T | undefined);
+  const set = vi.fn(async <T>(key: string, value: T) => { data.set(key, value); });
+  const remove = vi.fn(async (key: string) => { data.delete(key); });
+  return {
+    data,
+    get,
+    set,
+    delete: remove,
+    store: {
+      get,
+      set,
+      delete: remove,
+    } satisfies KeyValueStore,
   };
 }
 
@@ -56,6 +76,8 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await plugin.dispose();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
@@ -116,6 +138,21 @@ function fakeConfig(
     pluginConfig: { type: 'tomcat', shutdownPort: 8005, disableAjp: true },
     ...overrides,
   } as ServerConfig;
+}
+
+type FakeChildProcess = ChildProcess & {
+  emitExit: (code: number | null, signal?: string | null) => void;
+};
+
+function createFakeChildProcess(pid = 1234): FakeChildProcess {
+  const child = new EventEmitter() as FakeChildProcess;
+  Object.assign(child, {
+    pid,
+    emitExit: (code: number | null, signal: string | null = null) => {
+      child.emit('exit', code, signal);
+    },
+  });
+  return child;
 }
 
 // ── Detection Tests ─────────────────────────────────────────────────────────
@@ -552,6 +589,238 @@ describe('TomcatStartupMonitor', () => {
     } finally {
       await monitor.dispose();
     }
+  });
+});
+
+// ── Runtime Lifecycle ──────────────────────────────────────────────────────
+
+describe('TomcatPlugin — runtime lifecycle', () => {
+  it('returns ScriptNotExecutable when the catalina script is missing', async () => {
+    const config = fakeConfig(path.join(tmpDir, 'missing-home'), path.join(tmpDir, 'instance'));
+
+    const result = await plugin.start(dummyCtx(), config, 'run');
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('ScriptNotExecutable');
+      expect(result.error.message).toContain('Catalina script not found');
+    }
+  });
+
+  it('returns startup listener preparation errors before spawning', async () => {
+    const homePath = path.join(tmpDir, 'tomcat-home');
+    await createFakeTomcatHome(homePath);
+    const store = spyKeyValueStore();
+    plugin = new TomcatPlugin(noopLogger(), {
+      keyValueStore: store.store,
+      startupListenerJarPath: path.join(tmpDir, 'missing-listener.jar'),
+    });
+
+    const spawnSpy = vi.spyOn(plugin['spawner'], 'spawn');
+    const config = fakeConfig(homePath, path.join(tmpDir, 'instance'));
+
+    const result = await plugin.start(dummyCtx(), config, 'run');
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('SourceNotFound');
+      expect(result.error.message).toContain('Tomcat startup listener asset not found');
+    }
+    expect(spawnSpy).not.toHaveBeenCalled();
+  });
+
+  it('shapes debug start env and JPDA args without changing startup behavior', async () => {
+    const homePath = path.join(tmpDir, 'tomcat-home');
+    await createFakeTomcatHome(homePath);
+    const child = createFakeChildProcess(4321);
+    const store = spyKeyValueStore();
+    plugin = new TomcatPlugin(noopLogger(), { keyValueStore: store.store });
+
+    vi.spyOn(plugin['portScanner'], 'findFreePort').mockResolvedValue(8123);
+    const spawnSpy = vi.spyOn(plugin['spawner'], 'spawn').mockImplementation((opts) => {
+      expect(opts.args).toEqual(['jpda', 'run']);
+      expect(opts.cwd).toBe(path.join(tmpDir, 'instance'));
+      expect(opts.env).toMatchObject({
+        CATALINA_HOME: homePath,
+        CATALINA_BASE: path.join(tmpDir, 'instance'),
+        JAVA_HOME: path.join(tmpDir, 'java'),
+        APP_ENV: 'test',
+        JPDA_ADDRESS: '0.0.0.0:6006',
+        JPDA_TRANSPORT: 'dt_socket',
+      });
+      expect(opts.env?.['CATALINA_OPTS']).toContain('-Dexisting=true');
+      expect(opts.env?.['CATALINA_OPTS']).toContain('-Dhttp.port=9080');
+      expect(opts.env?.['CATALINA_OPTS']).toContain('-Dshutdown.port=8123');
+      expect(opts.env?.['CATALINA_OPTS']).toContain('-Xmx512m');
+      return child;
+    });
+
+    const config = fakeConfig(homePath, path.join(tmpDir, 'instance'), {
+      ports: { http: 9080, debug: 6006 },
+      debug: { enabled: true, bind: '0.0.0.0', attachDelayMs: 1000 },
+      run: {
+        env: { APP_ENV: 'test', CATALINA_OPTS: '-Dexisting=true' },
+        vmArgs: ['-Xmx512m'],
+      },
+    });
+
+    const result = await plugin.start(dummyCtx(), config, 'debug');
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.pid).toBe(4321);
+      expect(result.value.debugPort).toBe(6006);
+      expect(result.value.hints).toContain('Debug port: 6006');
+    }
+    expect(spawnSpy).toHaveBeenCalledTimes(1);
+    expect(store.set).toHaveBeenCalledWith('jsm.tomcat.shutdownPort.srv-1', 8123);
+    child.emitExit(0);
+  });
+
+  it('persists the reserved shutdown port on start', async () => {
+    const homePath = path.join(tmpDir, 'tomcat-home');
+    await createFakeTomcatHome(homePath);
+    const child = createFakeChildProcess(4322);
+    const store = spyKeyValueStore();
+    plugin = new TomcatPlugin(noopLogger(), { keyValueStore: store.store });
+
+    vi.spyOn(plugin['portScanner'], 'findFreePort').mockResolvedValue(8111);
+    vi.spyOn(plugin['spawner'], 'spawn').mockImplementation((opts) => {
+      expect(opts.env?.['CATALINA_OPTS']).toContain('-Dshutdown.port=8111');
+      return child;
+    });
+
+    const result = await plugin.start(dummyCtx(), fakeConfig(homePath, path.join(tmpDir, 'instance')), 'run');
+
+    expect(result.ok).toBe(true);
+    expect(store.set).toHaveBeenCalledWith('jsm.tomcat.shutdownPort.srv-1', 8111);
+    child.emitExit(0);
+  });
+
+  it('retrieves the saved shutdown port during stop and clears it afterwards', async () => {
+    const homePath = path.join(tmpDir, 'tomcat-home');
+    await createFakeTomcatHome(homePath);
+    const store = spyKeyValueStore({ 'jsm.tomcat.shutdownPort.srv-1': 8123 });
+    plugin = new TomcatPlugin(noopLogger(), { keyValueStore: store.store });
+
+    const child = createFakeChildProcess(9876);
+    const spawnSpy = vi.spyOn(plugin['spawner'], 'spawn').mockImplementation((opts) => {
+      expect(opts.args).toEqual(['stop']);
+      expect(opts.env?.['CATALINA_OPTS']).toContain('-Dshutdown.port=8123');
+      queueMicrotask(() => {
+        opts.onExit?.(0, null);
+        child.emitExit(0);
+      });
+      return child;
+    });
+
+    const result = await plugin.stop(dummyCtx(), fakeConfig(homePath, path.join(tmpDir, 'instance')));
+
+    expect(result.ok).toBe(true);
+    expect(spawnSpy).toHaveBeenCalledTimes(1);
+    expect(store.get).toHaveBeenCalledWith('jsm.tomcat.shutdownPort.srv-1');
+    expect(store.delete).toHaveBeenCalledWith('jsm.tomcat.shutdownPort.srv-1');
+  });
+
+  it('forces the stop command to exit on timeout and cleans up the tracked child', async () => {
+    vi.useFakeTimers();
+
+    const homePath = path.join(tmpDir, 'tomcat-home');
+    await createFakeTomcatHome(homePath);
+    const stopCommandChild = createFakeChildProcess(4501);
+    const trackedChild = createFakeChildProcess(4502);
+    const killSpy = vi.spyOn(plugin['spawner'], 'kill').mockReturnValue(true);
+    vi.spyOn(plugin['spawner'], 'spawn').mockReturnValue(stopCommandChild);
+
+    const config = fakeConfig(homePath, path.join(tmpDir, 'instance'), {
+      timeouts: { stopMs: 25 },
+    });
+    plugin['childProcesses'].set(config.id, trackedChild);
+
+    const stopPromise = plugin.stop(dummyCtx(), config);
+    await vi.advanceTimersByTimeAsync(26);
+    const result = await stopPromise;
+
+    expect(result.ok).toBe(true);
+    expect(killSpy).toHaveBeenCalledWith(4501, true);
+    expect(killSpy).toHaveBeenCalledWith(4502);
+    expect(plugin['childProcesses'].has(config.id)).toBe(false);
+  });
+
+  it('reports running when the tracked child is alive and the HTTP port responds', async () => {
+    const config = fakeConfig(path.join(tmpDir, 'home'), path.join(tmpDir, 'instance'));
+    const child = createFakeChildProcess(5101);
+    plugin['childProcesses'].set(config.id, child);
+
+    vi.spyOn(process, 'kill').mockImplementation(() => true);
+    vi.spyOn(plugin['portScanner'], 'probe').mockResolvedValue(true);
+
+    const result = await plugin.getStatus(dummyCtx(), config);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toEqual({
+        state: 'running',
+        pid: 5101,
+        httpPort: config.ports.http,
+      });
+    }
+    plugin['childProcesses'].clear();
+  });
+
+  it('reports starting when the tracked child is alive but the HTTP port is not ready', async () => {
+    const config = fakeConfig(path.join(tmpDir, 'home'), path.join(tmpDir, 'instance'));
+    const child = createFakeChildProcess(5102);
+    plugin['childProcesses'].set(config.id, child);
+
+    vi.spyOn(process, 'kill').mockImplementation(() => true);
+    vi.spyOn(plugin['portScanner'], 'probe').mockResolvedValue(false);
+
+    const result = await plugin.getStatus(dummyCtx(), config);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toEqual({
+        state: 'starting',
+        pid: 5102,
+        httpPort: undefined,
+      });
+    }
+    plugin['childProcesses'].clear();
+  });
+
+  it('reports stopped and clears stale tracked children when the process is gone', async () => {
+    const config = fakeConfig(path.join(tmpDir, 'home'), path.join(tmpDir, 'instance'));
+    const child = createFakeChildProcess(5103);
+    plugin['childProcesses'].set(config.id, child);
+
+    vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw new Error('no such process');
+    });
+    const probeSpy = vi.spyOn(plugin['portScanner'], 'probe');
+
+    const result = await plugin.getStatus(dummyCtx(), config);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toEqual({ state: 'stopped' });
+    }
+    expect(plugin['childProcesses'].has(config.id)).toBe(false);
+    expect(probeSpy).not.toHaveBeenCalled();
+  });
+
+  it('reports health using the HTTP probe and records latency', async () => {
+    const config = fakeConfig(path.join(tmpDir, 'home'), path.join(tmpDir, 'instance'));
+    const probeSpy = vi.spyOn(plugin['portScanner'], 'probe').mockResolvedValue(true);
+
+    const result = await plugin.healthCheck(dummyCtx(), config);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.ok).toBe(true);
+      expect(result.value.latencyMs).toBeGreaterThanOrEqual(0);
+    }
+    expect(probeSpy).toHaveBeenCalledWith(config.ports.http, config.host);
   });
 });
 

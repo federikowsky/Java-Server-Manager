@@ -26,7 +26,7 @@ import {
 import type { OperationQueue, QueueEntry } from '@core/ops/OperationQueue';
 import { QUEUE_META_FILE_CHANGE_BATCH } from '@core/ops/OperationQueue';
 import type { CancellationTokenSource } from '@core/ops';
-import type { IServerPlugin } from '@plugins/interfaces/IServerPlugin';
+import type { IServerPlugin, StartupMonitor } from '@plugins/interfaces/IServerPlugin';
 import type { PluginRegistry } from '@plugins/registry/PluginRegistry';
 import { PidManager } from '@infra/pid';
 import { PortScanner } from '@infra/ports';
@@ -69,6 +69,8 @@ interface ServerEntry {
   queue: OperationQueue;
   activeCancellation?: CancellationTokenSource;
 }
+
+type ServerEntryGuard = (entry: ServerEntry) => Result<void, JsmError>;
 
 /**
  * Server lifecycle orchestration (§9.1–§9.9).
@@ -113,51 +115,20 @@ export class ServerLifecycle {
 
   /** Enqueue a start operation. */
   start(serverId: ServerId, mode: StartMode): Result<void, JsmError> {
-    const entryResult = this.requireServerEntry(serverId, { requireTrust: true });
-    if (!entryResult.ok) {
-      return entryResult;
-    }
-    const entry = entryResult.value;
-
-    if (!canStart(entry.runtime.state)) {
-      return err(new JsmError({
-        code: ErrorCode.AlreadyRunning,
-        message: `Cannot start: server is in '${entry.runtime.state}' state`,
-      }));
-    }
-
-    return this.enqueueServerEntry(entry, {
+    return this.enqueueLifecycleOperation(serverId, {
       kind: 'LifecycleStart',
       meta: { mode },
-    });
+    }, entry => this.requireStartableState(entry));
   }
 
   /** Enqueue a stop operation. */
   stop(serverId: ServerId): Result<void, JsmError> {
-    const entryResult = this.requireServerEntry(serverId, { requireTrust: true });
-    if (!entryResult.ok) {
-      return entryResult;
-    }
-    const entry = entryResult.value;
-
-    if (!canStop(entry.runtime.state)) {
-      return err(new JsmError({
-        code: ErrorCode.NotRunning,
-        message: `Cannot stop: server is in '${entry.runtime.state}' state`,
-      }));
-    }
-
-    return this.enqueueServerEntry(entry, { kind: 'LifecycleStop' });
+    return this.enqueueLifecycleOperation(serverId, { kind: 'LifecycleStop' }, entry => this.requireStoppableState(entry));
   }
 
   /** Enqueue a restart (stop + start). */
   restart(serverId: ServerId, mode: StartMode): Result<void, JsmError> {
-    const entryResult = this.requireServerEntry(serverId, { requireTrust: true });
-    if (!entryResult.ok) {
-      return entryResult;
-    }
-
-    return this.enqueueServerEntry(entryResult.value, {
+    return this.enqueueLifecycleOperation(serverId, {
       kind: 'LifecycleRestart',
       meta: { mode },
     });
@@ -188,42 +159,42 @@ export class ServerLifecycle {
     deploymentId: DeploymentId,
     batch: FileChangeBatch,
   ): Result<void, JsmError> {
-    return this.enqueueForServer(serverId, {
+    return this.enqueueTrustedOperation(serverId, {
       kind: 'DeploySync',
       targetDeploymentId: deploymentId,
       meta: { [QUEUE_META_FILE_CHANGE_BATCH]: batch },
-    }, { requireTrust: true });
+    });
   }
 
   /** Enqueue first-time deploy for all currently undeployed applications (pre-start). */
   enqueueDeployUndeployed(serverId: ServerId): Result<void, JsmError> {
-    return this.enqueueForServer(serverId, { kind: 'DeployUndeployed' }, { requireTrust: true });
+    return this.enqueueTrustedOperation(serverId, { kind: 'DeployUndeployed' });
   }
 
   /** Enqueue full redeploy for one deployment. */
   enqueueDeployFull(serverId: ServerId, deploymentId: DeploymentId): Result<void, JsmError> {
-    return this.enqueueForServer(serverId, {
+    return this.enqueueTrustedOperation(serverId, {
       kind: 'DeployFull',
       targetDeploymentId: deploymentId,
-    }, { requireTrust: true });
+    });
   }
 
   /** Enqueue undeploy for one deployment. */
   enqueueUndeploy(serverId: ServerId, deploymentId: DeploymentId): Result<void, JsmError> {
-    return this.enqueueForServer(serverId, {
+    return this.enqueueTrustedOperation(serverId, {
       kind: 'Undeploy',
       targetDeploymentId: deploymentId,
-    }, { requireTrust: true });
+    });
   }
 
   /** Enqueue full redeploy for every deployment on the server. */
   enqueueRedeployAll(serverId: ServerId): Result<void, JsmError> {
-    return this.enqueueForServer(serverId, { kind: 'RedeployAll' }, { requireTrust: true });
+    return this.enqueueTrustedOperation(serverId, { kind: 'RedeployAll' });
   }
 
   /** Enqueue HTTP health checks for deployments with `healthCheckPath` (tooltip cache). */
   enqueueRunDeploymentHealthChecks(serverId: ServerId): Result<void, JsmError> {
-    return this.enqueueForServer(serverId, { kind: 'RunDeploymentHealthChecks' }, { requireTrust: true });
+    return this.enqueueTrustedOperation(serverId, { kind: 'RunDeploymentHealthChecks' });
   }
 
   /** True if the server queue is executing or has pending entries. */
@@ -453,32 +424,7 @@ export class ServerLifecycle {
       await this.deps.pidManager.writePid(server.serverKey, pid);
       throwIfCancelled(ctx.cancel, `Start operation for '${config.name}' was cancelled while waiting for readiness.`);
 
-      let ready = false;
-
-      try {
-        if (startupMonitor) {
-          const outcome = await Promise.race([
-            startupMonitor.waitForOutcome(this.remainingContextBudgetMs(ctx)),
-            cancellationPromise(ctx.cancel, `Start operation for '${config.name}' was cancelled while waiting for readiness.`),
-          ]);
-          if (outcome.state === 'failed') {
-            throw outcome.error ?? new JsmError({
-              code: ErrorCode.ProcessSpawnFailed,
-              message: outcome.message ?? `Server '${config.name}' reported a startup failure`,
-            });
-          }
-          ready = await probeAfterStartupEvent(
-            this.deps.portScanner,
-            config,
-            STARTUP_CALLBACK_DEBOUNCE_MS,
-            ctx,
-          );
-        } else {
-          ready = await waitForHttpReadiness(this.deps.portScanner, config, timeoutMs, ctx.startedAt, ctx);
-        }
-      } finally {
-        await startupMonitor?.dispose();
-      }
+      const ready = await this.waitForStartReadiness(config, timeoutMs, ctx, startupMonitor);
 
       if (!ready) {
         runtime.transition('error', {
@@ -496,43 +442,8 @@ export class ServerLifecycle {
       throwIfCancelled(ctx.cancel, `Start operation for '${config.name}' was cancelled after readiness.`);
       runtime.transition('running', { pid });
 
-      if (plugin.healthCheck) {
-        throwIfCancelled(ctx.cancel, `Start operation for '${config.name}' was cancelled before health checks.`);
-        const healthResult = await plugin.healthCheck(ctx, config);
-        if (!healthResult.ok) {
-          runtime.transition('error', { error: healthResult.error });
-          throw healthResult.error;
-        }
-        if (!healthResult.value.ok) {
-          const err = new JsmError({
-            code: ErrorCode.ValidationFailed,
-            message: 'Health check failed: server not responding',
-            details: `HTTP probe to ${config.host}:${config.ports.http} failed`,
-          });
-          runtime.transition('error', { error: err });
-          throw err;
-        }
-      }
-
-      throwIfCancelled(ctx.cancel, `Start operation for '${config.name}' was cancelled before deployment health checks.`);
-      await this.deps.deployService.runHealthChecksForServer(server.serverKey, config);
-
-      if (mode === 'debug' && config.debug.enabled) {
-        await Promise.race([
-          sleep(config.debug.attachDelayMs),
-          cancellationPromise(ctx.cancel, `Start operation for '${config.name}' was cancelled before debugger attach.`),
-        ]);
-        throwIfCancelled(ctx.cancel, `Start operation for '${config.name}' was cancelled before debugger attach.`);
-        const attachResult = await this.deps.debugAttacher.attach({
-          serverId: server.serverKey,
-          port: config.ports.debug ?? 5005,
-          name: `Debug: ${config.name}`,
-          bind: config.debug.bind,
-        });
-        if (attachResult.ok) {
-          runtime.setDebugAttached(true);
-        }
-      }
+      await this.runPostStartVerification(server, plugin, ctx);
+      await this.attachDebuggerAfterStart(server, mode, ctx);
 
       if (hookEvent) {
         await this.runServerHooks(server, ctx, 'post', hookEvent);
@@ -546,6 +457,93 @@ export class ServerLifecycle {
         await this.runServerOnErrorHooks(server, ctx, hookEvent, error);
       }
       throw error;
+    }
+  }
+
+  private async waitForStartReadiness(
+    config: ServerConfig,
+    timeoutMs: number,
+    ctx: OperationContext,
+    startupMonitor?: StartupMonitor,
+  ): Promise<boolean> {
+    try {
+      if (startupMonitor) {
+        const outcome = await Promise.race([
+          startupMonitor.waitForOutcome(this.remainingContextBudgetMs(ctx)),
+          cancellationPromise(ctx.cancel, `Start operation for '${config.name}' was cancelled while waiting for readiness.`),
+        ]);
+        if (outcome.state === 'failed') {
+          throw outcome.error ?? new JsmError({
+            code: ErrorCode.ProcessSpawnFailed,
+            message: outcome.message ?? `Server '${config.name}' reported a startup failure`,
+          });
+        }
+        return probeAfterStartupEvent(
+          this.deps.portScanner,
+          config,
+          STARTUP_CALLBACK_DEBOUNCE_MS,
+          ctx,
+        );
+      }
+
+      return waitForHttpReadiness(this.deps.portScanner, config, timeoutMs, ctx.startedAt, ctx);
+    } finally {
+      await startupMonitor?.dispose();
+    }
+  }
+
+  private async runPostStartVerification(
+    server: ServerEntry,
+    plugin: IServerPlugin,
+    ctx: OperationContext,
+  ): Promise<void> {
+    const { config, runtime } = server;
+
+    if (plugin.healthCheck) {
+      throwIfCancelled(ctx.cancel, `Start operation for '${config.name}' was cancelled before health checks.`);
+      const healthResult = await plugin.healthCheck(ctx, config);
+      if (!healthResult.ok) {
+        runtime.transition('error', { error: healthResult.error });
+        throw healthResult.error;
+      }
+      if (!healthResult.value.ok) {
+        const error = new JsmError({
+          code: ErrorCode.ValidationFailed,
+          message: 'Health check failed: server not responding',
+          details: `HTTP probe to ${config.host}:${config.ports.http} failed`,
+        });
+        runtime.transition('error', { error });
+        throw error;
+      }
+    }
+
+    throwIfCancelled(ctx.cancel, `Start operation for '${config.name}' was cancelled before deployment health checks.`);
+    await this.deps.deployService.runHealthChecksForServer(server.serverKey, config);
+  }
+
+  private async attachDebuggerAfterStart(
+    server: ServerEntry,
+    mode: StartMode,
+    ctx: OperationContext,
+  ): Promise<void> {
+    const { config, runtime } = server;
+    if (mode !== 'debug' || !config.debug.enabled) {
+      return;
+    }
+
+    await Promise.race([
+      sleep(config.debug.attachDelayMs),
+      cancellationPromise(ctx.cancel, `Start operation for '${config.name}' was cancelled before debugger attach.`),
+    ]);
+    throwIfCancelled(ctx.cancel, `Start operation for '${config.name}' was cancelled before debugger attach.`);
+    const attachResult = await this.deps.debugAttacher.attach({
+      serverId: server.serverKey,
+      port: config.ports.debug ?? 5005,
+      name: `Debug: ${config.name}`,
+      bind: config.debug.bind,
+    });
+    if (attachResult.ok) {
+      runtime.setDebugAttached(true);
     }
   }
 
@@ -590,30 +588,8 @@ export class ServerLifecycle {
         this.deps.logger.warn(`ServerLifecycle: stop error for '${config.name}'`, stopResult.error);
       }
 
-      const pid = runtime.pid;
-
-      if (pid) {
-        while (Date.now() - ctx.startedAt < timeoutMs) {
-          throwIfCancelled(ctx.cancel, `Stop operation for '${config.name}' was cancelled while waiting for shutdown.`);
-          if (!this.deps.pidManager.isProcessAlive(pid)) break;
-
-          const decision = decideStopEscalation(Date.now() - ctx.startedAt, timeoutMs);
-          if (decision === 'force-kill') {
-            this.deps.logger.warn(`ServerLifecycle: force-killing ${config.name} (PID ${pid})`);
-            try { process.kill(pid, 'SIGKILL'); } catch { /* already dead */ }
-            break;
-          }
-          await Promise.race([
-            sleep(500),
-            cancellationPromise(ctx.cancel, `Stop operation for '${config.name}' was cancelled while waiting for shutdown.`),
-          ]);
-        }
-      }
-
-      await this.deps.pidManager.clearPid(server.serverKey);
-      await this.deps.debugAttacher.detach(server.serverKey);
-      runtime.setDebugAttached(false);
-      runtime.transition('stopped');
+      await this.waitForShutdownOrEscalate(config, runtime.pid, timeoutMs, ctx);
+      await this.finalizeStoppedServer(server);
 
       if (hookEvent) {
         await this.runServerHooks(server, ctx, 'post', hookEvent);
@@ -627,30 +603,69 @@ export class ServerLifecycle {
     }
   }
 
+  private async waitForShutdownOrEscalate(
+    config: ServerConfig,
+    pid: number | undefined,
+    timeoutMs: number,
+    ctx: OperationContext,
+  ): Promise<void> {
+    if (!pid) {
+      return;
+    }
+
+    while (Date.now() - ctx.startedAt < timeoutMs) {
+      throwIfCancelled(ctx.cancel, `Stop operation for '${config.name}' was cancelled while waiting for shutdown.`);
+      if (!this.deps.pidManager.isProcessAlive(pid)) {
+        break;
+      }
+
+      const decision = decideStopEscalation(Date.now() - ctx.startedAt, timeoutMs);
+      if (decision === 'force-kill') {
+        this.deps.logger.warn(`ServerLifecycle: force-killing ${config.name} (PID ${pid})`);
+        try { process.kill(pid, 'SIGKILL'); } catch { /* already dead */ }
+        break;
+      }
+
+      await Promise.race([
+        sleep(500),
+        cancellationPromise(ctx.cancel, `Stop operation for '${config.name}' was cancelled while waiting for shutdown.`),
+      ]);
+    }
+  }
+
+  private async finalizeStoppedServer(server: ServerEntry): Promise<void> {
+    const { runtime } = server;
+    await this.deps.pidManager.clearPid(server.serverKey);
+    await this.deps.debugAttacher.detach(server.serverKey);
+    runtime.setDebugAttached(false);
+    runtime.transition('stopped');
+  }
+
   private async doRestart(
     server: ServerEntry,
     mode: StartMode,
     cancel: OperationContext['cancel'],
   ): Promise<void> {
+    const { config, runtime } = server;
     const hookEvent: HookEvent = 'lifecycle.restart';
-    const timeoutMs = (server.config.timeouts?.stopMs ?? 20_000) + this.getStartTimeoutMs(server.config, mode);
+    const timeoutMs = (config.timeouts?.stopMs ?? 20_000) + this.getStartTimeoutMs(config, mode);
     const ctx = makeCtx(
       server.serverKey,
       'LifecycleRestart',
       timeoutMs,
       cancel,
-      this.deps.getOutputSink?.(server.serverKey, server.config.name),
+      this.deps.getOutputSink?.(server.serverKey, config.name),
     );
 
     try {
       await this.runServerHooks(server, ctx, 'pre', hookEvent);
-      throwIfCancelled(ctx.cancel, `Restart operation for '${server.config.name}' was cancelled before restart.`);
+      throwIfCancelled(ctx.cancel, `Restart operation for '${config.name}' was cancelled before restart.`);
       await this.doStopInternal(server, cancel);
       await this.doStartInternal(server, mode, cancel);
       await this.runServerHooks(server, ctx, 'post', hookEvent);
     } catch (cause) {
       const error = cause instanceof JsmError ? cause : JsmError.fromUnknown(cause);
-      if (!(error.code === ErrorCode.Cancelled && server.runtime.state === 'running')) {
+      if (!(error.code === ErrorCode.Cancelled && runtime.state === 'running')) {
         await this.runServerOnErrorHooks(server, ctx, hookEvent, error);
       }
       throw error;
@@ -795,11 +810,18 @@ export class ServerLifecycle {
   private enqueueForServer(
     serverId: ServerId,
     queueEntry: QueueEntry,
-    options: { requireTrust?: boolean } = {},
+    options: { requireTrust?: boolean; guard?: ServerEntryGuard } = {},
   ): Result<void, JsmError> {
     const entryResult = this.requireServerEntry(serverId, options);
     if (!entryResult.ok) {
       return entryResult;
+    }
+
+    if (options.guard) {
+      const guardResult = options.guard(entryResult.value);
+      if (!guardResult.ok) {
+        return guardResult;
+      }
     }
 
     return this.enqueueServerEntry(entryResult.value, queueEntry);
@@ -808,6 +830,40 @@ export class ServerLifecycle {
   private enqueueServerEntry(entry: ServerEntry, queueEntry: QueueEntry): Result<void, JsmError> {
     entry.queue.enqueue(queueEntry);
     return ok(undefined);
+  }
+
+  private enqueueLifecycleOperation(
+    serverId: ServerId,
+    queueEntry: QueueEntry,
+    guard?: ServerEntryGuard,
+  ): Result<void, JsmError> {
+    return this.enqueueForServer(serverId, queueEntry, { requireTrust: true, guard });
+  }
+
+  private enqueueTrustedOperation(serverId: ServerId, queueEntry: QueueEntry): Result<void, JsmError> {
+    return this.enqueueForServer(serverId, queueEntry, { requireTrust: true });
+  }
+
+  private requireStartableState(entry: ServerEntry): Result<void, JsmError> {
+    if (canStart(entry.runtime.state)) {
+      return ok(undefined);
+    }
+
+    return err(new JsmError({
+      code: ErrorCode.AlreadyRunning,
+      message: `Cannot start: server is in '${entry.runtime.state}' state`,
+    }));
+  }
+
+  private requireStoppableState(entry: ServerEntry): Result<void, JsmError> {
+    if (canStop(entry.runtime.state)) {
+      return ok(undefined);
+    }
+
+    return err(new JsmError({
+      code: ErrorCode.NotRunning,
+      message: `Cannot stop: server is in '${entry.runtime.state}' state`,
+    }));
   }
 
   private getStartTimeoutMs(config: ServerConfig, mode: StartMode): number {

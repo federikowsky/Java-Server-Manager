@@ -131,6 +131,7 @@ describe('ServerLifecycle', () => {
   let debugAttacher: ReturnType<typeof mockDebugAttacher>;
   let hookRunner: ReturnType<typeof mockHookRunner>;
   let deployService: ReturnType<typeof mockDeployService>;
+  let logger: ReturnType<typeof mockLogger>;
   let lifecycle: ServerLifecycle;
 
   beforeEach(() => {
@@ -141,6 +142,7 @@ describe('ServerLifecycle', () => {
     debugAttacher = mockDebugAttacher();
     hookRunner = mockHookRunner();
     deployService = mockDeployService();
+    logger = mockLogger();
 
     lifecycle = new ServerLifecycle({
       pluginRegistry: pluginRegistry as never,
@@ -148,7 +150,7 @@ describe('ServerLifecycle', () => {
       pidManager: pidManager as never,
       portScanner: portScanner as never,
       debugAttacher: debugAttacher as never,
-      logger: mockLogger(),
+      logger,
       hookRunner: hookRunner as never,
       deployService: deployService as never,
     });
@@ -402,13 +404,149 @@ describe('ServerLifecycle', () => {
       }));
     });
 
-    it('runs only lifecycle.restart hooks for restart operations', async () => {
+    it('transitions to error when plugin health check returns an error result', async () => {
+      const queue = mockQueue();
+      const runtime = lifecycle.register('srv-1', makeServer(), queue as never);
+      const healthError = new JsmError({
+        code: ErrorCode.ValidationFailed,
+        message: 'plugin health failed',
+      });
+
+      pluginRegistry.get.mockReturnValue({
+        start: vi.fn(async () => ok({
+          pid: 123,
+          httpUrl: 'http://127.0.0.1:8080',
+          hints: [],
+        })),
+        stop: vi.fn(),
+        getStatus: vi.fn(),
+        detect: vi.fn(),
+        healthCheck: vi.fn(async () => err(healthError)),
+      });
+      portScanner.probe.mockResolvedValue(true);
+
+      const executor = queue.setExecutor.mock.calls[0][0] as (entry: { kind: string; meta?: Record<string, unknown> }) => Promise<void>;
+      await executor({ kind: 'LifecycleStart', meta: { mode: 'run' } });
+
+      expect(runtime.state).toBe('error');
+      expect(deployService.runHealthChecksForServer).not.toHaveBeenCalled();
+      expect(bus.emit).toHaveBeenCalledWith('OperationFailed', expect.objectContaining({
+        serverId: 'srv-1',
+        kind: 'LifecycleStart',
+        error: healthError,
+      }));
+    });
+
+    it('transitions to error when plugin health check reports unhealthy', async () => {
+      const queue = mockQueue();
+      const runtime = lifecycle.register('srv-1', makeServer(), queue as never);
+
+      pluginRegistry.get.mockReturnValue({
+        start: vi.fn(async () => ok({
+          pid: 123,
+          httpUrl: 'http://127.0.0.1:8080',
+          hints: [],
+        })),
+        stop: vi.fn(),
+        getStatus: vi.fn(),
+        detect: vi.fn(),
+        healthCheck: vi.fn(async () => ok({ ok: false })),
+      });
+      portScanner.probe.mockResolvedValue(true);
+
+      const executor = queue.setExecutor.mock.calls[0][0] as (entry: { kind: string; meta?: Record<string, unknown> }) => Promise<void>;
+      await executor({ kind: 'LifecycleStart', meta: { mode: 'run' } });
+
+      expect(runtime.state).toBe('error');
+      expect(deployService.runHealthChecksForServer).not.toHaveBeenCalled();
+      expect(bus.emit).toHaveBeenCalledWith('OperationFailed', expect.objectContaining({
+        serverId: 'srv-1',
+        kind: 'LifecycleStart',
+        error: expect.objectContaining({
+          code: ErrorCode.ValidationFailed,
+          message: 'Health check failed: server not responding',
+        }),
+      }));
+    });
+
+    it('runs deployment health checks only after runtime reaches running', async () => {
+      const queue = mockQueue();
+      const runtime = lifecycle.register('srv-1', makeServer(), queue as never);
+      let runtimeStateAtDeploymentHealthCheck: string | undefined;
+
+      pluginRegistry.get.mockReturnValue({
+        start: vi.fn(async () => ok({
+          pid: 123,
+          httpUrl: 'http://127.0.0.1:8080',
+          hints: [],
+        })),
+        stop: vi.fn(),
+        getStatus: vi.fn(),
+        detect: vi.fn(),
+      });
+      portScanner.probe.mockResolvedValue(true);
+      deployService.runHealthChecksForServer.mockImplementation(async () => {
+        runtimeStateAtDeploymentHealthCheck = runtime.state;
+      });
+
+      const executor = queue.setExecutor.mock.calls[0][0] as (entry: { kind: string; meta?: Record<string, unknown> }) => Promise<void>;
+      await executor({ kind: 'LifecycleStart', meta: { mode: 'run' } });
+
+      expect(runtime.state).toBe('running');
+      expect(runtimeStateAtDeploymentHealthCheck).toBe('running');
+    });
+
+    it('transitions to error when start is cancelled before debugger attach', async () => {
+      const queue = mockQueue();
+      const baseConfig = makeServer();
+      const config = {
+        ...baseConfig,
+        debug: { ...baseConfig.debug, attachDelayMs: 10_000 },
+      };
+      const runtime = lifecycle.register('srv-1', config, queue as never);
+
+      pluginRegistry.get.mockReturnValue({
+        start: vi.fn(async () => ok({
+          pid: 123,
+          httpUrl: 'http://127.0.0.1:8080',
+          hints: [],
+        })),
+        stop: vi.fn(),
+        getStatus: vi.fn(),
+        detect: vi.fn(),
+      });
+      portScanner.probe.mockResolvedValue(true);
+      debugAttacher.attach.mockResolvedValue(ok(undefined));
+
+      const executor = queue.setExecutor.mock.calls[0][0] as (entry: { kind: string; meta?: Record<string, unknown> }) => Promise<void>;
+      const running = executor({ kind: 'LifecycleStart', meta: { mode: 'debug' } });
+
+      await vi.waitFor(() => {
+        expect(runtime.state).toBe('running');
+      });
+
+      lifecycle.cancel('srv-1');
+      await running;
+
+      expect(debugAttacher.attach).not.toHaveBeenCalled();
+      expect(runtime.state).toBe('error');
+      expect(runtime.debugAttached).toBe(false);
+      expect(bus.emit).toHaveBeenCalledWith('OperationFailed', expect.objectContaining({
+        serverId: 'srv-1',
+        kind: 'LifecycleStart',
+        error: expect.objectContaining({ code: ErrorCode.Cancelled }),
+      }));
+    });
+
+    it('runs only lifecycle.restart hooks and preserves restart ordering around internal stop/start', async () => {
       const queue = mockQueue();
       const config = {
         ...makeServer(),
         hooks: [
           makeHook('lifecycle.restart'),
           { ...makeHook('lifecycle.restart'), id: 'hook-restart-post', phase: 'post' },
+          { ...makeHook('lifecycle.start'), id: 'hook-start-pre' },
+          { ...makeHook('lifecycle.stop'), id: 'hook-stop-pre' },
         ],
       };
       const pluginStart = vi.fn(async () => ok({
@@ -449,6 +587,273 @@ describe('ServerLifecycle', () => {
       }));
       expect(postCall[0].parent).toBe(preCall[0].parent);
       expect(hookRunner.runHooks).toHaveBeenCalledTimes(2);
+      expect(hookRunner.runHooks.mock.calls.every(([call]) => call.event === 'lifecycle.restart')).toBe(true);
+      expect(hookRunner.runHooks.mock.invocationCallOrder[0]).toBeLessThan(pluginStop.mock.invocationCallOrder[0]);
+      expect(pluginStop.mock.invocationCallOrder[0]).toBeLessThan(pluginStart.mock.invocationCallOrder[0]);
+      expect(pluginStart.mock.invocationCallOrder[0]).toBeLessThan(hookRunner.runHooks.mock.invocationCallOrder[1]);
+    });
+
+    it('keeps the server running when restart is cancelled before internal stop begins', async () => {
+      const queue = mockQueue();
+      const config = {
+        ...makeServer(),
+        hooks: [
+          makeHook('lifecycle.restart'),
+          { ...makeHook('lifecycle.restart'), id: 'hook-restart-on-error', phase: 'onError' },
+        ],
+      };
+      const pluginStart = vi.fn(async () => ok({
+        pid: 123,
+        httpUrl: 'http://127.0.0.1:8080',
+        hints: [],
+      }));
+      const pluginStop = vi.fn(async () => ok(undefined));
+      let releaseRestartPreHook: (() => void) | undefined;
+      const waitForRestartPreHook = new Promise<void>((resolve) => {
+        releaseRestartPreHook = resolve;
+      });
+
+      hookRunner.runHooks.mockImplementation(async ({ phase, event }) => {
+        if (phase === 'pre' && event === 'lifecycle.restart') {
+          await waitForRestartPreHook;
+        }
+        return ok({ executed: 0, skipped: 0, failed: 0, errors: [] });
+      });
+
+      pluginRegistry.get.mockReturnValue({
+        start: pluginStart,
+        stop: pluginStop,
+        getStatus: vi.fn(),
+        detect: vi.fn(),
+      });
+
+      const runtime = lifecycle.register('srv-1', config, queue as never);
+      runtime.forceState('running', { pid: 321 });
+      const executor = queue.setExecutor.mock.calls[0][0] as (entry: { kind: string; meta?: Record<string, unknown> }) => Promise<void>;
+      const running = executor({ kind: 'LifecycleRestart', meta: { mode: 'run' } });
+
+      await vi.waitFor(() => {
+        expect(hookRunner.runHooks).toHaveBeenCalledWith(expect.objectContaining({
+          phase: 'pre',
+          event: 'lifecycle.restart',
+        }));
+      });
+
+      lifecycle.cancel('srv-1');
+      releaseRestartPreHook?.();
+      await running;
+
+      expect(queue.clear).toHaveBeenCalledOnce();
+      expect(pluginStop).not.toHaveBeenCalled();
+      expect(pluginStart).not.toHaveBeenCalled();
+      expect(runtime.state).toBe('running');
+      expect(hookRunner.runHooks).toHaveBeenCalledTimes(1);
+      expect(bus.emit).toHaveBeenCalledWith('OperationFailed', expect.objectContaining({
+        serverId: 'srv-1',
+        kind: 'LifecycleRestart',
+        error: expect.objectContaining({ code: ErrorCode.Cancelled }),
+      }));
+    });
+
+    it('runs only lifecycle.restart onError hooks when internal start fails during restart', async () => {
+      const queue = mockQueue();
+      const config = {
+        ...makeServer(),
+        hooks: [
+          makeHook('lifecycle.restart'),
+          { ...makeHook('lifecycle.restart'), id: 'hook-restart-on-error', phase: 'onError' },
+          { ...makeHook('lifecycle.start'), id: 'hook-start-on-error', phase: 'onError' },
+          { ...makeHook('lifecycle.stop'), id: 'hook-stop-on-error', phase: 'onError' },
+        ],
+      };
+      const startError = new JsmError({
+        code: ErrorCode.ProcessSpawnFailed,
+        message: 'restart start failed',
+      });
+      const pluginStart = vi.fn(async () => err(startError));
+      const pluginStop = vi.fn(async () => ok(undefined));
+
+      pluginRegistry.get.mockReturnValue({
+        start: pluginStart,
+        stop: pluginStop,
+        getStatus: vi.fn(),
+        detect: vi.fn(),
+      });
+      pidManager.isProcessAlive.mockReturnValue(false);
+
+      const runtime = lifecycle.register('srv-1', config, queue as never);
+      runtime.forceState('running', { pid: 321 });
+      const executor = queue.setExecutor.mock.calls[0][0] as (entry: { kind: string; meta?: Record<string, unknown> }) => Promise<void>;
+
+      await executor({ kind: 'LifecycleRestart', meta: { mode: 'run' } });
+
+      expect(runtime.state).toBe('error');
+      expect(pluginStop).toHaveBeenCalledOnce();
+      expect(pluginStart).toHaveBeenCalledOnce();
+      expect(hookRunner.runHooks).toHaveBeenCalledTimes(2);
+      expect(hookRunner.runHooks.mock.calls.map(([call]) => `${call.phase}:${call.event}`)).toEqual([
+        'pre:lifecycle.restart',
+        'onError:lifecycle.restart',
+      ]);
+      expect(bus.emit).toHaveBeenCalledWith('OperationFailed', expect.objectContaining({
+        serverId: 'srv-1',
+        kind: 'LifecycleRestart',
+        error: startError,
+      }));
+    });
+
+    it('completes stop after the process exits gracefully', async () => {
+      const queue = mockQueue();
+      const runtime = lifecycle.register('srv-1', makeServer(), queue as never);
+      runtime.forceState('running', { pid: 123 });
+
+      pluginRegistry.get.mockReturnValue({
+        start: vi.fn(),
+        stop: vi.fn(async () => ok(undefined)),
+        getStatus: vi.fn(),
+        detect: vi.fn(),
+      });
+      pidManager.isProcessAlive.mockReturnValue(false);
+
+      const executor = queue.setExecutor.mock.calls[0][0] as (entry: { kind: string; meta?: Record<string, unknown> }) => Promise<void>;
+      await executor({ kind: 'LifecycleStop' });
+
+      expect(pidManager.isProcessAlive).toHaveBeenCalledWith(123);
+      expect(pidManager.clearPid).toHaveBeenCalledWith('srv-1');
+      expect(debugAttacher.detach).toHaveBeenCalledWith('srv-1');
+      expect(runtime.state).toBe('stopped');
+      expect(bus.emit).toHaveBeenCalledWith('OperationCompleted', expect.objectContaining({
+        serverId: 'srv-1',
+        kind: 'LifecycleStop',
+      }));
+    });
+
+    it('force-kills the process when stop escalation reaches the kill threshold', async () => {
+      const queue = mockQueue();
+      const runtime = lifecycle.register('srv-1', {
+        ...makeServer(),
+        timeouts: { stopMs: 20 },
+      } as ServerConfig, queue as never);
+      runtime.forceState('running', { pid: 123 });
+
+      pluginRegistry.get.mockReturnValue({
+        start: vi.fn(),
+        stop: vi.fn(async () => ok(undefined)),
+        getStatus: vi.fn(),
+        detect: vi.fn(),
+      });
+      pidManager.isProcessAlive.mockReturnValue(true);
+
+      const nowValues = [0, 0, 0, 0, 0, 25, 25];
+      const dateNowSpy = vi.spyOn(Date, 'now').mockImplementation(() => nowValues.shift() ?? 25);
+      const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+
+      try {
+        const executor = queue.setExecutor.mock.calls[0][0] as (entry: { kind: string; meta?: Record<string, unknown> }) => Promise<void>;
+        await executor({ kind: 'LifecycleStop' });
+
+        expect(killSpy).toHaveBeenCalledWith(123, 'SIGKILL');
+      } finally {
+        dateNowSpy.mockRestore();
+        killSpy.mockRestore();
+      }
+
+      expect(logger.warn).toHaveBeenCalledWith('ServerLifecycle: force-killing My Tomcat (PID 123)');
+      expect(pidManager.clearPid).toHaveBeenCalledWith('srv-1');
+      expect(runtime.state).toBe('stopped');
+    });
+
+    it('cancels an active stop operation while waiting for shutdown', async () => {
+      const queue = mockQueue();
+      const runtime = lifecycle.register('srv-1', makeServer(), queue as never);
+      runtime.forceState('running', { pid: 123 });
+
+      pluginRegistry.get.mockReturnValue({
+        start: vi.fn(),
+        stop: vi.fn(async () => ok(undefined)),
+        getStatus: vi.fn(),
+        detect: vi.fn(),
+      });
+      pidManager.isProcessAlive.mockReturnValue(true);
+
+      const executor = queue.setExecutor.mock.calls[0][0] as (entry: { kind: string; meta?: Record<string, unknown> }) => Promise<void>;
+      const running = executor({ kind: 'LifecycleStop' });
+
+      await vi.waitFor(() => {
+        expect(runtime.state).toBe('stopping');
+      });
+
+      lifecycle.cancel('srv-1');
+      await running;
+
+      expect(queue.clear).toHaveBeenCalledOnce();
+      expect(pidManager.clearPid).not.toHaveBeenCalled();
+      expect(debugAttacher.detach).not.toHaveBeenCalled();
+      expect(runtime.state).toBe('error');
+      expect(bus.emit).toHaveBeenCalledWith('OperationFailed', expect.objectContaining({
+        serverId: 'srv-1',
+        kind: 'LifecycleStop',
+        error: expect.objectContaining({ code: ErrorCode.Cancelled }),
+      }));
+    });
+
+    it('keeps plugin.stop errors warning-only and still finalizes stop', async () => {
+      const queue = mockQueue();
+      const runtime = lifecycle.register('srv-1', makeServer(), queue as never);
+      runtime.forceState('running', { pid: 123 });
+      runtime.setDebugAttached(true);
+      const stopError = new JsmError({
+        code: ErrorCode.ProcessSpawnFailed,
+        message: 'stop failed',
+      });
+
+      pluginRegistry.get.mockReturnValue({
+        start: vi.fn(),
+        stop: vi.fn(async () => err(stopError)),
+        getStatus: vi.fn(),
+        detect: vi.fn(),
+      });
+      pidManager.isProcessAlive.mockReturnValue(false);
+
+      const executor = queue.setExecutor.mock.calls[0][0] as (entry: { kind: string; meta?: Record<string, unknown> }) => Promise<void>;
+      await executor({ kind: 'LifecycleStop' });
+
+      expect(logger.warn).toHaveBeenCalledWith(`ServerLifecycle: stop error for 'My Tomcat'`, stopError);
+      expect(pidManager.clearPid).toHaveBeenCalledWith('srv-1');
+      expect(debugAttacher.detach).toHaveBeenCalledWith('srv-1');
+      expect(runtime.state).toBe('stopped');
+      expect(runtime.debugAttached).toBe(false);
+      expect(bus.emit).toHaveBeenCalledWith('OperationCompleted', expect.objectContaining({
+        serverId: 'srv-1',
+        kind: 'LifecycleStop',
+      }));
+    });
+
+    it('clears pid and detaches debug before the stopped transition', async () => {
+      const queue = mockQueue();
+      const runtime = lifecycle.register('srv-1', makeServer(), queue as never);
+      runtime.forceState('running', { pid: 123 });
+      runtime.setDebugAttached(true);
+
+      pluginRegistry.get.mockReturnValue({
+        start: vi.fn(),
+        stop: vi.fn(async () => ok(undefined)),
+        getStatus: vi.fn(),
+        detect: vi.fn(),
+      });
+      pidManager.isProcessAlive.mockReturnValue(false);
+
+      const transitionSpy = vi.spyOn(runtime, 'transition');
+
+      const executor = queue.setExecutor.mock.calls[0][0] as (entry: { kind: string; meta?: Record<string, unknown> }) => Promise<void>;
+      await executor({ kind: 'LifecycleStop' });
+
+      const stoppedTransitionIndex = transitionSpy.mock.calls.findIndex(([state]) => state === 'stopped');
+      expect(stoppedTransitionIndex).toBeGreaterThanOrEqual(0);
+      expect(pidManager.clearPid.mock.invocationCallOrder[0]).toBeLessThan(debugAttacher.detach.mock.invocationCallOrder[0]);
+      expect(debugAttacher.detach.mock.invocationCallOrder[0]).toBeLessThan(
+        transitionSpy.mock.invocationCallOrder[stoppedTransitionIndex],
+      );
     });
   });
 
@@ -541,6 +946,32 @@ describe('ServerLifecycle', () => {
     it('rejects restart for unknown server', () => {
       const result = lifecycle.restart('nope', 'run');
       expect(result.ok).toBe(false);
+    });
+  });
+
+  describe('deploy enqueue', () => {
+    it('enqueues DeploySync with fileChangeBatch metadata', () => {
+      const queue = mockQueue();
+      const batch = {
+        changes: [{ path: 'index.jsp', type: 'changed' as const }],
+        totalBytes: 12,
+      };
+
+      lifecycle.register('srv-1', makeServer(), queue as never);
+      const result = lifecycle.enqueueDeploySync('srv-1', 'dep-1', batch);
+
+      expect(result.ok).toBe(true);
+      expect(queue.enqueue).toHaveBeenCalledWith({
+        kind: 'DeploySync',
+        targetDeploymentId: 'dep-1',
+        meta: { fileChangeBatch: batch },
+      });
+    });
+
+    it('rejects deploy enqueue for unknown server through the shared enqueue seam', () => {
+      const result = lifecycle.enqueueRedeployAll('nope');
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe(ErrorCode.InvalidConfig);
     });
   });
 
@@ -984,6 +1415,14 @@ describe('ServerLifecycle', () => {
       const queue = mockQueue();
       untrustedLifecycle.register('srv-1', makeServer(), queue as never);
       const result = untrustedLifecycle.restart('srv-1', 'run');
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe(ErrorCode.WorkspaceUntrusted);
+    });
+
+    it('blocks trusted deploy enqueue paths in untrusted workspace', () => {
+      const queue = mockQueue();
+      untrustedLifecycle.register('srv-1', makeServer(), queue as never);
+      const result = untrustedLifecycle.enqueueRedeployAll('srv-1');
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error.code).toBe(ErrorCode.WorkspaceUntrusted);
     });

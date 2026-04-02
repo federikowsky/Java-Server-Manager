@@ -566,33 +566,16 @@ export class TomcatPlugin implements IServerPlugin {
 
     ctx.progress.report(`Syncing ${changes.changes.length} files for ${dep.deployName}...`);
 
-    try {
-      for (const change of changes.changes) {
-        this.throwIfCancelled(ctx, `Incremental deployment for '${dep.deployName}' was cancelled.`);
-        const targetFile = path.join(plan.targetPath, change.relativePath);
-
-        switch (change.type) {
-          case 'add':
-          case 'change':
-            await ensureDir(path.dirname(targetFile));
-            await fs.copyFile(change.path, targetFile);
-            break;
-          case 'delete':
-            await tryRm(targetFile);
-            break;
-        }
-      }
-
-      this.logger.debug(`TomcatPlugin: incremental sync ${changes.changes.length} files for ${dep.deployName}`);
-      return ok(undefined);
-    } catch (cause) {
-      return err(new JsmError({
-        code: ErrorCode.DeployFailed,
-        message: `Incremental deploy failed for ${dep.deployName}`,
-        details: cause instanceof Error ? cause.message : String(cause),
-        cause,
-      }));
+    const syncResult = await this.applyFileChanges(ctx, changes, plan.targetPath, {
+      cancellationMessage: `Incremental deployment for '${dep.deployName}' was cancelled.`,
+      failureMessage: `Incremental deploy failed for ${dep.deployName}`,
+    });
+    if (!syncResult.ok) {
+      return syncResult;
     }
+
+    this.logger.debug(`TomcatPlugin: incremental sync ${changes.changes.length} files for ${dep.deployName}`);
+    return ok(undefined);
   }
 
   // ── Hot Reload ──────────────────────────────────────────────────────
@@ -613,32 +596,14 @@ export class TomcatPlugin implements IServerPlugin {
 
     ctx.progress.report(`Hot-reloading ${dep.deployName} (${changes.changes.length} files)...`);
 
-    // Step 1: Copy changed files (same as incremental deploy)
-    try {
-      for (const change of changes.changes) {
-        this.throwIfCancelled(ctx, `Hot reload for '${dep.deployName}' was cancelled.`);
-        const targetFile = path.join(plan.targetPath, change.relativePath);
-
-        switch (change.type) {
-          case 'add':
-          case 'change':
-            await ensureDir(path.dirname(targetFile));
-            await fs.copyFile(change.path, targetFile);
-            break;
-          case 'delete':
-            await tryRm(targetFile);
-            break;
-        }
-      }
-      this.logger.debug(`TomcatPlugin: copied ${changes.changes.length} files for hot-reload of ${dep.deployName}`);
-    } catch (cause) {
-      return err(new JsmError({
-        code: ErrorCode.DeployFailed,
-        message: `Hot-reload file copy failed for ${dep.deployName}`,
-        details: cause instanceof Error ? cause.message : String(cause),
-        cause,
-      }));
+    const copyResult = await this.applyFileChanges(ctx, changes, plan.targetPath, {
+      cancellationMessage: `Hot reload for '${dep.deployName}' was cancelled.`,
+      failureMessage: `Hot-reload file copy failed for ${dep.deployName}`,
+    });
+    if (!copyResult.ok) {
+      return copyResult;
     }
+    this.logger.debug(`TomcatPlugin: copied ${changes.changes.length} files for hot-reload of ${dep.deployName}`);
 
     // Step 2: Trigger Tomcat reload via Manager API or context.xml touch
     this.throwIfCancelled(ctx, `Hot reload for '${dep.deployName}' was cancelled before triggering the reload step.`);
@@ -659,15 +624,12 @@ export class TomcatPlugin implements IServerPlugin {
     config: ServerConfig,
     dep: DeploymentConfig,
   ): Promise<Result<void, JsmError>> {
-    // Try Manager API reload first
     const managerResult = await this.callManagerReload(config, dep);
     if (managerResult.ok) {
       return ok(undefined);
     }
 
     this.logger.debug(`Manager reload failed for ${dep.deployName}, falling back to touch: ${managerResult.error.message}`);
-
-    // Fallback: touch context.xml to trigger auto-deploy reload
     return this.touchContextXml(config, dep);
   }
 
@@ -745,35 +707,15 @@ export class TomcatPlugin implements IServerPlugin {
     config: ServerConfig,
     dep: DeploymentConfig,
   ): Promise<Result<void, JsmError>> {
-    const contextXmlPath = path.join(
-      config.instancePath, 'conf', 'Catalina', 'localhost', `${dep.deployName}.xml`
-    );
-
-    try {
-      // Check if context.xml exists
-      if (await exists(contextXmlPath)) {
-        // Touch the file to update its timestamp
-        const now = new Date();
-        await fs.utimes(contextXmlPath, now, now);
-        this.logger.debug(`TomcatPlugin: touched ${contextXmlPath} for reload`);
-      } else {
-        // No context.xml exists, touch the WAR/directory in webapps
-        const webappPath = path.join(config.instancePath, 'webapps', dep.deployName);
-        if (await exists(webappPath)) {
-          const now = new Date();
-          await fs.utimes(webappPath, now, now);
-          this.logger.debug(`TomcatPlugin: touched ${webappPath} for reload`);
-        } else {
-          return err(new JsmError({
-            code: ErrorCode.DeployFailed,
-            message: `Neither context.xml nor webapp directory found for ${dep.deployName}`,
-          }));
-        }
-      }
-      return ok(undefined);
-    } catch (cause) {
-      return err(JsmError.fromUnknown(cause, ErrorCode.DeployFailed));
+    const reloadTarget = await this.resolveReloadTouchTarget(config, dep);
+    if (!reloadTarget) {
+      return err(new JsmError({
+        code: ErrorCode.DeployFailed,
+        message: `Neither context.xml nor webapp directory found for ${dep.deployName}`,
+      }));
     }
+
+    return this.touchReloadTarget(reloadTarget);
   }
 
   // ── Undeploy ────────────────────────────────────────────────────────
@@ -1060,6 +1002,73 @@ export class TomcatPlugin implements IServerPlugin {
 
   private getCatalinaScriptPath(config: ServerConfig): string {
     return path.join(config.runtime.homePath, 'bin', catalinaScript());
+  }
+
+  private async applyFileChanges(
+    ctx: OperationContext,
+    changes: FileChangeBatch,
+    targetPath: string,
+    options: {
+      cancellationMessage: string;
+      failureMessage: string;
+    },
+  ): Promise<Result<void, JsmError>> {
+    try {
+      for (const change of changes.changes) {
+        this.throwIfCancelled(ctx, options.cancellationMessage);
+        const targetFile = path.join(targetPath, change.relativePath);
+
+        switch (change.type) {
+          case 'add':
+          case 'change':
+            await ensureDir(path.dirname(targetFile));
+            await fs.copyFile(change.path, targetFile);
+            break;
+          case 'delete':
+            await tryRm(targetFile);
+            break;
+        }
+      }
+
+      return ok(undefined);
+    } catch (cause) {
+      return err(new JsmError({
+        code: ErrorCode.DeployFailed,
+        message: options.failureMessage,
+        details: cause instanceof Error ? cause.message : String(cause),
+        cause,
+      }));
+    }
+  }
+
+  private async resolveReloadTouchTarget(
+    config: ServerConfig,
+    dep: DeploymentConfig,
+  ): Promise<string | undefined> {
+    const contextXmlPath = path.join(
+      config.instancePath, 'conf', 'Catalina', 'localhost', `${dep.deployName}.xml`
+    );
+    if (await exists(contextXmlPath)) {
+      return contextXmlPath;
+    }
+
+    const webappPath = path.join(config.instancePath, 'webapps', dep.deployName);
+    if (await exists(webappPath)) {
+      return webappPath;
+    }
+
+    return undefined;
+  }
+
+  private async touchReloadTarget(targetPath: string): Promise<Result<void, JsmError>> {
+    try {
+      const now = new Date();
+      await fs.utimes(targetPath, now, now);
+      this.logger.debug(`TomcatPlugin: touched ${targetPath} for reload`);
+      return ok(undefined);
+    } catch (cause) {
+      return err(JsmError.fromUnknown(cause, ErrorCode.DeployFailed));
+    }
   }
 
   private createCatalinaEnv(

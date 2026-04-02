@@ -6,7 +6,7 @@ import { EventEmitter } from 'events';
 import type { ChildProcess } from 'child_process';
 import { TomcatPlugin } from '@plugins/tomcat/TomcatPlugin';
 import { TomcatStartupMonitor } from '@plugins/tomcat/TomcatStartupMonitor';
-import type { ServerConfig, DeploymentConfig, OperationContext } from '@core/types';
+import type { ServerConfig, DeploymentConfig, OperationContext, FileChangeBatch } from '@core/types';
 import type { KeyValueStore } from '@core/types';
 import type { Logger } from '@core/types/logger';
 
@@ -138,6 +138,40 @@ function fakeConfig(
     pluginConfig: { type: 'tomcat', shutdownPort: 8005, disableAjp: true },
     ...overrides,
   } as ServerConfig;
+}
+
+function fakeDeployment(
+  deployName: string,
+  overrides: Partial<DeploymentConfig> = {},
+): DeploymentConfig {
+  return {
+    id: 'dep-1' as DeploymentConfig['id'],
+    type: 'exploded',
+    sourcePath: path.join(tmpDir, 'source-app'),
+    deployName,
+    syncMode: 'auto',
+    hotReload: true,
+    ignoreGlobs: [],
+    hooks: [],
+    ...overrides,
+  };
+}
+
+function incrementalPlan(instancePath: string, deployName: string) {
+  return {
+    targetRoot: path.join(instancePath, 'webapps'),
+    targetPath: path.join(instancePath, 'webapps', deployName),
+    strategy: 'incremental-dir' as const,
+    notes: [],
+  };
+}
+
+function fileChangeBatch(changes: FileChangeBatch['changes']): FileChangeBatch {
+  return {
+    changes,
+    totalFiles: changes.length,
+    totalBytes: changes.reduce((sum, change) => sum + (change.sizeBytes ?? 0), 0),
+  };
 }
 
 type FakeChildProcess = ChildProcess & {
@@ -821,6 +855,210 @@ describe('TomcatPlugin — runtime lifecycle', () => {
       expect(result.value.latencyMs).toBeGreaterThanOrEqual(0);
     }
     expect(probeSpy).toHaveBeenCalledWith(config.ports.http, config.host);
+  });
+});
+
+// ── Incremental Deploy + Hot Reload ────────────────────────────────────────
+
+describe('TomcatPlugin — incremental deploy and hot reload', () => {
+  it('applies incremental add/change/delete file changes', async () => {
+    const instancePath = path.join(tmpDir, 'instance');
+    const targetPath = path.join(instancePath, 'webapps', 'myapp');
+    await fs.mkdir(path.join(targetPath, 'nested'), { recursive: true });
+    await fs.writeFile(path.join(targetPath, 'changed.txt'), 'before-change');
+    await fs.writeFile(path.join(targetPath, 'delete.txt'), 'before-delete');
+
+    const sourceRoot = path.join(tmpDir, 'changes');
+    await fs.mkdir(path.join(sourceRoot, 'nested'), { recursive: true });
+    const addedFile = path.join(sourceRoot, 'nested', 'added.txt');
+    const changedFile = path.join(sourceRoot, 'changed.txt');
+    await fs.writeFile(addedFile, 'added-content');
+    await fs.writeFile(changedFile, 'changed-content');
+
+    const config = fakeConfig(path.join(tmpDir, 'home'), instancePath);
+    const dep = fakeDeployment('myapp');
+    const plan = incrementalPlan(instancePath, dep.deployName);
+    const changes = fileChangeBatch([
+      { type: 'add', path: addedFile, relativePath: 'nested/added.txt' },
+      { type: 'change', path: changedFile, relativePath: 'changed.txt' },
+      { type: 'delete', path: path.join(sourceRoot, 'delete.txt'), relativePath: 'delete.txt' },
+    ]);
+
+    const result = await plugin.deployIncremental(dummyCtx(), config, dep, changes, plan);
+
+    expect(result.ok).toBe(true);
+    await expect(fs.readFile(path.join(targetPath, 'nested', 'added.txt'), 'utf-8')).resolves.toBe('added-content');
+    await expect(fs.readFile(path.join(targetPath, 'changed.txt'), 'utf-8')).resolves.toBe('changed-content');
+    await expect(fs.access(path.join(targetPath, 'delete.txt'))).rejects.toThrow();
+  });
+
+  it('hot-reloads via Manager when reload returns OK', async () => {
+    const instancePath = path.join(tmpDir, 'instance');
+    const targetPath = path.join(instancePath, 'webapps', 'myapp');
+    await fs.mkdir(targetPath, { recursive: true });
+
+    const sourceFile = path.join(tmpDir, 'updated.txt');
+    await fs.writeFile(sourceFile, 'updated-content');
+
+    const config = fakeConfig(path.join(tmpDir, 'home'), instancePath, {
+      run: {
+        env: { JSM_MANAGER_USER: 'admin', JSM_MANAGER_PASS: 'secret' },
+        vmArgs: [],
+      },
+    });
+    const dep = fakeDeployment('myapp');
+    const plan = incrementalPlan(instancePath, dep.deployName);
+    const changes = fileChangeBatch([
+      { type: 'add', path: sourceFile, relativePath: 'updated.txt' },
+    ]);
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('OK - Reloaded', { status: 200, statusText: 'OK' }),
+    );
+
+    const result = await plugin.hotReload(dummyCtx(), config, dep, changes, plan);
+
+    expect(result.ok).toBe(true);
+    await expect(fs.readFile(path.join(targetPath, 'updated.txt'), 'utf-8')).resolves.toBe('updated-content');
+    expect(fetchSpy).toHaveBeenCalledWith(
+      'http://127.0.0.1:9080/manager/text/reload?path=/myapp',
+      expect.objectContaining({
+        method: 'GET',
+        headers: {
+          Authorization: `Basic ${Buffer.from('admin:secret').toString('base64')}`,
+        },
+      }),
+    );
+  });
+
+  it('falls back to touching context.xml when Manager reload fails', async () => {
+    const instancePath = path.join(tmpDir, 'instance');
+    const contextDir = path.join(instancePath, 'conf', 'Catalina', 'localhost');
+    await fs.mkdir(contextDir, { recursive: true });
+    const contextXml = path.join(contextDir, 'myapp.xml');
+    const earlier = new Date(Date.now() - 60_000);
+    await fs.writeFile(contextXml, '<Context />');
+    await fs.utimes(contextXml, earlier, earlier);
+
+    const config = fakeConfig(path.join(tmpDir, 'home'), instancePath, {
+      run: {
+        env: { JSM_MANAGER_PASS: 'secret' },
+        vmArgs: [],
+      },
+    });
+    const dep = fakeDeployment('myapp');
+    const plan = incrementalPlan(instancePath, dep.deployName);
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('Manager unavailable', { status: 500, statusText: 'Server Error' }),
+    );
+
+    const result = await plugin.hotReload(dummyCtx(), config, dep, fileChangeBatch([]), plan);
+
+    expect(result.ok).toBe(true);
+    const stat = await fs.stat(contextXml);
+    expect(stat.mtimeMs).toBeGreaterThan(earlier.getTime());
+  });
+
+  it('reports Manager reload timeout as Timeout', async () => {
+    vi.useFakeTimers();
+
+    const config = fakeConfig(path.join(tmpDir, 'home'), path.join(tmpDir, 'instance'), {
+      run: {
+        env: { JSM_MANAGER_PASS: 'secret' },
+        vmArgs: [],
+      },
+    });
+    const dep = fakeDeployment('myapp');
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation((_input, init) => new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => {
+        const abortError = new Error('aborted');
+        abortError.name = 'AbortError';
+        reject(abortError);
+      });
+    }) as Promise<Response>);
+
+    const promise = plugin['callManagerReload'](config, dep);
+    await vi.advanceTimersByTimeAsync(10_000);
+    const result = await promise;
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('Timeout');
+      expect(result.error.message).toBe('Manager reload timed out');
+    }
+  });
+
+  it('reports missing Manager password as InvalidConfig', async () => {
+    const config = fakeConfig(path.join(tmpDir, 'home'), path.join(tmpDir, 'instance'));
+    const dep = fakeDeployment('myapp');
+
+    const result = await plugin['callManagerReload'](config, dep);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('InvalidConfig');
+      expect(result.error.message).toContain('Tomcat Manager password not configured');
+    }
+  });
+
+  it('returns DeployFailed when touching the reload target fails', async () => {
+    const instancePath = path.join(tmpDir, 'instance');
+    const contextDir = path.join(instancePath, 'conf', 'Catalina', 'localhost');
+    await fs.mkdir(contextDir, { recursive: true });
+    await fs.writeFile(path.join(contextDir, 'myapp.xml'), '<Context />');
+
+    const targetSpy = vi.spyOn(plugin as unknown as { resolveReloadTouchTarget: () => Promise<string | undefined> }, 'resolveReloadTouchTarget')
+      .mockResolvedValue(path.join(tmpDir, 'missing-target'));
+    const result = await plugin['touchContextXml'](fakeConfig(path.join(tmpDir, 'home'), instancePath), fakeDeployment('myapp'));
+
+    expect(targetSpy).toHaveBeenCalled();
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('DeployFailed');
+    }
+  });
+
+  it('cancels hot reload before triggering the reload step', async () => {
+    const instancePath = path.join(tmpDir, 'instance');
+    const targetPath = path.join(instancePath, 'webapps', 'myapp');
+    await fs.mkdir(targetPath, { recursive: true });
+
+    const sourceFile = path.join(tmpDir, 'cancelled.txt');
+    await fs.writeFile(sourceFile, 'copied-before-cancel');
+
+    let checks = 0;
+    const ctx: OperationContext = {
+      ...dummyCtx(),
+      cancel: {
+        get isCancelled() {
+          checks += 1;
+          return checks >= 2;
+        },
+        onCancelled: () => ({ dispose: () => {} }),
+      },
+    };
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const config = fakeConfig(path.join(tmpDir, 'home'), instancePath, {
+      run: {
+        env: { JSM_MANAGER_PASS: 'secret' },
+        vmArgs: [],
+      },
+    });
+    const dep = fakeDeployment('myapp');
+    const plan = incrementalPlan(instancePath, dep.deployName);
+    const changes = fileChangeBatch([
+      { type: 'add', path: sourceFile, relativePath: 'cancelled.txt' },
+    ]);
+
+    await expect(plugin.hotReload(ctx, config, dep, changes, plan)).rejects.toMatchObject({
+      code: 'Cancelled',
+      message: "Hot reload for 'myapp' was cancelled before triggering the reload step.",
+    });
+    await expect(fs.readFile(path.join(targetPath, 'cancelled.txt'), 'utf-8')).resolves.toBe('copied-before-cancel');
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
 

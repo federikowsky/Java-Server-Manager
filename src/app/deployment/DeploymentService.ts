@@ -328,7 +328,11 @@ export class DeploymentService {
   ): Promise<void> {
     for (const dep of config.deployments) {
       this.ensureNotCancelled(ctx, dep, 'before redeploying the next deployment.');
-      await this.fullRedeploy(ctx, config, dep);
+      this.recoverStaleRedeployAllState(ctx.serverId, dep);
+      const result = await this.fullRedeploy(ctx, config, dep);
+      if (!result.ok) {
+        throw result.error;
+      }
     }
   }
 
@@ -458,6 +462,22 @@ export class DeploymentService {
       ctx.cancel,
       `Deployment operation '${ctx.kind}' for '${dep.deployName}' was cancelled ${stage}`,
     );
+  }
+
+  private recoverStaleRedeployAllState(
+    serverId: ServerId,
+    dep: DeploymentConfig,
+  ): void {
+    if (this.getDeploymentState(serverId, dep.id) !== 'deploying') {
+      return;
+    }
+
+    const error = new JsmError({
+      code: ErrorCode.DeployFailed,
+      message: `Recovered stale deploying state for '${dep.deployName}' before RedeployAll.`,
+    });
+    this.logger.warn(`DeploymentService: ${error.message}`);
+    this.transitionDeploy(serverId, dep.id, 'error', { error });
   }
 
   private mergedHooks(config: ServerConfig, dep: DeploymentConfig): HookConfig[] {

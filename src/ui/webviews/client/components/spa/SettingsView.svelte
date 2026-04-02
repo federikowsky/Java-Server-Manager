@@ -16,9 +16,10 @@
   let defaultHttpPort = $state(8080);
   let defaultDebugPort = $state(5005);
   let defaultJavaHome = $state('');
+  let showStatusInSidebar = $state(true);
 
   /** Last values applied from host sync — reset restores these (spec §25.4). */
-  let baseline = $state({ http: 8080, debug: 5005, java: '' });
+  let baseline = $state({ http: 8080, debug: 5005, java: '', sidebar: true });
 
   let settingsFingerprint = $state('');
   let saving = $state(false);
@@ -70,17 +71,20 @@
     defaultHttpPort = state.settings.defaultHttpPort;
     defaultDebugPort = state.settings.defaultDebugPort;
     defaultJavaHome = state.settings.defaultJavaHome;
+    showStatusInSidebar = state.settings.showStatusInSidebar;
     baseline = {
       http: state.settings.defaultHttpPort,
       debug: state.settings.defaultDebugPort,
       java: state.settings.defaultJavaHome,
+      sidebar: state.settings.showStatusInSidebar,
     };
   });
 
   let dirty = $derived(
     defaultHttpPort !== baseline.http
     || defaultDebugPort !== baseline.debug
-    || defaultJavaHome !== baseline.java,
+    || defaultJavaHome !== baseline.java
+    || showStatusInSidebar !== baseline.sidebar,
   );
 
   let workspaceRows = $derived([
@@ -121,6 +125,7 @@
           defaultHttpPort,
           defaultDebugPort,
           defaultJavaHome,
+          showStatusInSidebar,
         },
       ],
     });
@@ -138,6 +143,7 @@
     defaultHttpPort = baseline.http;
     defaultDebugPort = baseline.debug;
     defaultJavaHome = baseline.java;
+    showStatusInSidebar = baseline.sidebar;
     saveError = '';
     saveMessage = '';
   }
@@ -221,6 +227,20 @@
             min="1"
             max="65535"
           />
+        </div>
+
+        <div class="field-block">
+          <label class="toggle-row" for="set-sidebar-status">
+            <input
+              id="set-sidebar-status"
+              type="checkbox"
+              bind:checked={showStatusInSidebar}
+            />
+            <div class="toggle-copy">
+              <span class="field-label">Show status in the sidebar tree</span>
+              <p class="field-help">Include the current runtime state in the server description row.</p>
+            </div>
+          </label>
         </div>
       </div>
     </SectionBlock>
@@ -324,6 +344,18 @@
   .path-row .field-input {
     flex: 1;
     min-width: 0;
+  }
+
+  .toggle-row {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--jsm-space-sm);
+  }
+
+  .toggle-copy {
+    display: flex;
+    flex-direction: column;
+    gap: var(--jsm-space-2xs);
   }
 
   .field-input {

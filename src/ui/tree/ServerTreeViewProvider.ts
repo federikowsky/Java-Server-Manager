@@ -105,7 +105,7 @@ export class ServerNode extends vscode.TreeItem {
   private static buildTooltip(record: WorkspaceServerRecord, state: ServerState): vscode.MarkdownString {
     const { config } = record;
     const md = new vscode.MarkdownString();
-    md.isTrusted = true;
+    md.isTrusted = false;
     md.appendMarkdown(`**${config.name}** (${config.type})\n\n`);
     md.appendMarkdown(`- **Workspace:** ${record.workspaceFolderName}\n`);
     md.appendMarkdown(`- **State:** ${state}\n`);
@@ -167,7 +167,7 @@ export class DeploymentNode extends vscode.TreeItem {
 
   private static buildTooltip(dep: DeploymentConfig, state: DeploymentState, health?: HealthReport): vscode.MarkdownString {
     const md = new vscode.MarkdownString();
-    md.isTrusted = true;
+    md.isTrusted = false;
     md.appendMarkdown(`**${dep.deployName}**\n\n`);
     md.appendMarkdown(`- **Type:** ${dep.type}\n`);
     md.appendMarkdown(`- **State:** ${state}\n`);

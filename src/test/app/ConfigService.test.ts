@@ -458,6 +458,17 @@ describe('ConfigService', () => {
       const result = await service.removeDeployment('nope', 'dep-1');
       expect(result.ok).toBe(false);
     });
+
+    it('rejects unknown deployment without saving or emitting DeploymentRemoved', async () => {
+      const srv = makeServer();
+      repo._seed(srv);
+
+      const result = await service.removeDeployment('srv-1', 'dep-missing');
+
+      expect(result.ok).toBe(false);
+      expect(repo.save).not.toHaveBeenCalled();
+      expect(bus.emit).not.toHaveBeenCalledWith('DeploymentRemoved', expect.anything());
+    });
   });
 
   /* ── checkForExternalChanges ─────────────────────────────────────────── */

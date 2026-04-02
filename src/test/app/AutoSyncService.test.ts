@@ -2,8 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { AutoSyncService, type FileWatcherFactory } from '@app/sync/AutoSyncService';
 import { EventBus } from '@core/events/EventBus';
 import type { Logger } from '@core/types/logger';
-import type { ServerConfig, DeploymentConfig } from '@core/types/domain';
+import type { ServerConfig } from '@core/types/domain';
 import type { FileChange } from '@core/types/events';
+import { AUTOSYNC_COOLDOWN_MS } from '../../constants';
 
 function mockLogger(): Logger {
   return { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
@@ -51,17 +52,22 @@ describe('AutoSyncService', () => {
   let watcherFactory: FileWatcherFactory;
   let onSyncRequest: ReturnType<typeof vi.fn>;
   let service: AutoSyncService;
-  let capturedOnChange: ((change: FileChange) => void) | undefined;
+  let registrations: Array<{
+    spec: unknown;
+    onChange: (change: FileChange) => void;
+    dispose: ReturnType<typeof vi.fn>;
+  }>;
 
   beforeEach(() => {
     vi.useFakeTimers();
     bus = new EventBus(mockLogger());
-    capturedOnChange = undefined;
+    registrations = [];
 
     watcherFactory = {
-      watch: vi.fn((_spec: unknown, onChange: (change: FileChange) => void) => {
-        capturedOnChange = onChange;
-        return { dispose: vi.fn() };
+      watch: vi.fn((spec: unknown, onChange: (change: FileChange) => void) => {
+        const dispose = vi.fn();
+        registrations.push({ spec, onChange, dispose });
+        return { dispose };
       }),
     };
 
@@ -83,7 +89,7 @@ describe('AutoSyncService', () => {
   it('creates a watcher when enabled', () => {
     service.enable(makeConfig());
     expect(watcherFactory.watch).toHaveBeenCalledOnce();
-    expect(capturedOnChange).toBeDefined();
+    expect(registrations[0]?.onChange).toBeDefined();
   });
 
   it('does not create watcher when autosync is disabled', () => {
@@ -119,20 +125,17 @@ describe('AutoSyncService', () => {
     expect(watcherFactory.watch).not.toHaveBeenCalled();
   });
 
-  it('debounces file changes and fires sync request', async () => {
+  it('debounces file changes and fires sync request', () => {
     service.enable(makeConfig());
 
-    const change: FileChange = {
+    registrations[0].onChange({
       type: 'change',
       path: '/src/app/Main.java',
       relativePath: 'Main.java',
       sizeBytes: 100,
-    };
-
-    capturedOnChange!(change);
+    });
     expect(onSyncRequest).not.toHaveBeenCalled();
 
-    // Advance past debounce (400ms)
     vi.advanceTimersByTime(450);
 
     expect(onSyncRequest).toHaveBeenCalledOnce();
@@ -145,18 +148,20 @@ describe('AutoSyncService', () => {
     service.enable(makeConfig());
     service.suspend('s1');
 
-    const change: FileChange = {
+    registrations[0].onChange({
       type: 'change',
       path: '/src/app/Main.java',
       relativePath: 'Main.java',
-    };
-
-    capturedOnChange!(change);
+    });
     vi.advanceTimersByTime(500);
     expect(onSyncRequest).not.toHaveBeenCalled();
 
     service.resume('s1');
-    capturedOnChange!(change);
+    registrations[0].onChange({
+      type: 'change',
+      path: '/src/app/Main.java',
+      relativePath: 'Main.java',
+    });
     vi.advanceTimersByTime(500);
     expect(onSyncRequest).toHaveBeenCalledOnce();
   });
@@ -165,13 +170,11 @@ describe('AutoSyncService', () => {
     service.enable(makeConfig());
     expect(service.isInCooldown('s1', 'd1')).toBe(false);
 
-    // Record 2 failures within the window
     service.recordFailure('s1', 'd1');
     service.recordFailure('s1', 'd1');
     expect(service.isInCooldown('s1', 'd1')).toBe(true);
 
-    // Changes during cooldown are ignored
-    capturedOnChange!({
+    registrations[0].onChange({
       type: 'change',
       path: '/src/app/Main.java',
       relativePath: 'Main.java',
@@ -180,24 +183,53 @@ describe('AutoSyncService', () => {
     expect(onSyncRequest).not.toHaveBeenCalled();
   });
 
+  it('flushes accumulated cooldown changes once the cooldown expires', async () => {
+    service.enable(makeConfig());
+    service.recordFailure('s1', 'd1');
+    service.recordFailure('s1', 'd1');
+
+    registrations[0].onChange({
+      type: 'change',
+      path: '/src/app/One.java',
+      relativePath: 'One.java',
+      sizeBytes: 10,
+    });
+    registrations[0].onChange({
+      type: 'change',
+      path: '/src/app/Two.java',
+      relativePath: 'Two.java',
+      sizeBytes: 20,
+    });
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(onSyncRequest).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(AUTOSYNC_COOLDOWN_MS);
+    expect(onSyncRequest).toHaveBeenCalledTimes(1);
+    expect(onSyncRequest).toHaveBeenCalledWith('s1', 'd1', expect.objectContaining({
+      totalFiles: 2,
+      totalBytes: 30,
+    }));
+  });
+
   it('disable removes watchers', () => {
     const config = makeConfig();
     service.enable(config);
     expect(watcherFactory.watch).toHaveBeenCalledOnce();
 
     service.disable('s1');
-    // Re-enabling should create a new watcher
     service.enable(config);
     expect(watcherFactory.watch).toHaveBeenCalledTimes(2);
   });
 
-  it('rebindWatchers disables then enables (fresh watch registration)', () => {
+  it('rebindWatchers keeps the existing watcher when the effective watch spec is unchanged', () => {
     const config = makeConfig();
     service.enable(config);
     expect(watcherFactory.watch).toHaveBeenCalledOnce();
 
     service.rebindWatchers('s1', config);
-    expect(watcherFactory.watch).toHaveBeenCalledTimes(2);
+    expect(watcherFactory.watch).toHaveBeenCalledTimes(1);
+    expect(registrations[0].dispose).not.toHaveBeenCalled();
   });
 
   it('rebindWatchers clears suspend so sync works after stop-style suspend+disable', () => {
@@ -209,13 +241,12 @@ describe('AutoSyncService', () => {
     service.rebindWatchers('s1', config);
     expect(watcherFactory.watch).toHaveBeenCalledTimes(2);
 
-    const change: FileChange = {
+    registrations[1].onChange({
       type: 'change',
       path: '/src/app/Main.java',
       relativePath: 'Main.java',
       sizeBytes: 10,
-    };
-    capturedOnChange!(change);
+    });
     vi.advanceTimersByTime(500);
     expect(onSyncRequest).toHaveBeenCalledOnce();
   });
@@ -227,14 +258,167 @@ describe('AutoSyncService', () => {
     service.purgeServerWatchState('s1');
 
     service.enable(config);
-    const change: FileChange = {
+    registrations[1].onChange({
       type: 'change',
       path: '/src/app/Main.java',
       relativePath: 'Main.java',
       sizeBytes: 10,
-    };
-    capturedOnChange!(change);
+    });
     vi.advanceTimersByTime(500);
     expect(onSyncRequest).toHaveBeenCalledOnce();
+  });
+
+  it('uses the per-server debounce value from config', () => {
+    const fast = makeConfig({ id: 's1', autosync: { ...makeConfig().autosync, debounceMs: 100 } });
+    const slow = makeConfig({ id: 's2', autosync: { ...makeConfig().autosync, debounceMs: 1000 } });
+
+    service.enable(fast, 's1');
+    service.enable(slow, 's2');
+
+    registrations[0].onChange({
+      type: 'change',
+      path: '/src/app/Fast.java',
+      relativePath: 'Fast.java',
+      sizeBytes: 1,
+    });
+    registrations[1].onChange({
+      type: 'change',
+      path: '/src/app/Slow.java',
+      relativePath: 'Slow.java',
+      sizeBytes: 1,
+    });
+
+    vi.advanceTimersByTime(150);
+    expect(onSyncRequest).toHaveBeenCalledTimes(1);
+    expect(onSyncRequest).toHaveBeenLastCalledWith('s1', 'd1', expect.anything());
+
+    vi.advanceTimersByTime(900);
+    expect(onSyncRequest).toHaveBeenCalledTimes(2);
+    expect(onSyncRequest).toHaveBeenLastCalledWith('s2', 'd1', expect.anything());
+  });
+
+  it('uses the per-server maxBatchFiles threshold', () => {
+    service.enable(makeConfig({
+      autosync: { ...makeConfig().autosync, maxBatchFiles: 1 },
+    }));
+
+    registrations[0].onChange({
+      type: 'change',
+      path: '/src/app/One.java',
+      relativePath: 'One.java',
+      sizeBytes: 10,
+    });
+    registrations[0].onChange({
+      type: 'change',
+      path: '/src/app/Two.java',
+      relativePath: 'Two.java',
+      sizeBytes: 10,
+    });
+
+    vi.runOnlyPendingTimers();
+    expect(onSyncRequest).toHaveBeenCalledOnce();
+    expect(onSyncRequest).toHaveBeenCalledWith('s1', 'd1', expect.objectContaining({
+      totalFiles: 2,
+    }));
+  });
+
+  it('uses the per-server maxBatchBytes threshold', () => {
+    service.enable(makeConfig({
+      autosync: { ...makeConfig().autosync, maxBatchBytes: 15 },
+    }));
+
+    registrations[0].onChange({
+      type: 'change',
+      path: '/src/app/One.java',
+      relativePath: 'One.java',
+      sizeBytes: 10,
+    });
+    registrations[0].onChange({
+      type: 'change',
+      path: '/src/app/Two.java',
+      relativePath: 'Two.java',
+      sizeBytes: 10,
+    });
+
+    vi.runOnlyPendingTimers();
+    expect(onSyncRequest).toHaveBeenCalledOnce();
+    expect(onSyncRequest).toHaveBeenCalledWith('s1', 'd1', expect.objectContaining({
+      totalBytes: 20,
+    }));
+  });
+
+  it('rebuilds watchers when the effective watch spec changes', () => {
+    const config = makeConfig();
+    service.enable(config);
+
+    const updated = makeConfig({
+      deployments: [{
+        ...config.deployments[0],
+        sourcePath: '/src/renamed-app',
+      }],
+    });
+
+    service.rebindWatchers('s1', updated);
+
+    expect(watcherFactory.watch).toHaveBeenCalledTimes(2);
+    expect(registrations[0].dispose).toHaveBeenCalledOnce();
+  });
+
+  it('suppresses repeated WAR sync dispatches inside stormBackoffMs', () => {
+    const config = makeConfig({
+      deployments: [{
+        ...makeConfig().deployments[0],
+        type: 'war',
+        sourcePath: '/build/app.war',
+      }],
+      autosync: { ...makeConfig().autosync, stormBackoffMs: 2000 },
+    });
+
+    service.enable(config);
+
+    registrations[0].onChange({
+      type: 'change',
+      path: '/build/app.war',
+      relativePath: 'app.war',
+      sizeBytes: 10,
+    });
+    vi.advanceTimersByTime(450);
+    expect(onSyncRequest).toHaveBeenCalledTimes(1);
+
+    registrations[0].onChange({
+      type: 'change',
+      path: '/build/app.war',
+      relativePath: 'app.war',
+      sizeBytes: 10,
+    });
+    vi.advanceTimersByTime(450);
+    expect(onSyncRequest).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(1600);
+    expect(onSyncRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps exploded deployments on normal debounce behavior after a recent dispatch', () => {
+    service.enable(makeConfig({
+      autosync: { ...makeConfig().autosync, stormBackoffMs: 2000 },
+    }));
+
+    registrations[0].onChange({
+      type: 'change',
+      path: '/src/app/One.java',
+      relativePath: 'One.java',
+      sizeBytes: 10,
+    });
+    vi.advanceTimersByTime(450);
+    expect(onSyncRequest).toHaveBeenCalledTimes(1);
+
+    registrations[0].onChange({
+      type: 'change',
+      path: '/src/app/Two.java',
+      relativePath: 'Two.java',
+      sizeBytes: 10,
+    });
+    vi.advanceTimersByTime(450);
+    expect(onSyncRequest).toHaveBeenCalledTimes(2);
   });
 });

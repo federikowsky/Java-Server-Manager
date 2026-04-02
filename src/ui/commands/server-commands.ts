@@ -90,6 +90,24 @@ async function openConfigFile(targetPath: string): Promise<void> {
   await vscode.window.showTextDocument(document, { preview: false });
 }
 
+async function revealFolderSafely(targetPath: string): Promise<Result<void, JsmError>> {
+  try {
+    await revealFolder(targetPath);
+    return ok(undefined);
+  } catch (e) {
+    return err(JsmError.fromUnknown(e, ErrorCode.InvalidConfig));
+  }
+}
+
+async function openConfigFileSafely(targetPath: string): Promise<Result<void, JsmError>> {
+  try {
+    await openConfigFile(targetPath);
+    return ok(undefined);
+  } catch (e) {
+    return err(JsmError.fromUnknown(e, ErrorCode.InvalidConfig));
+  }
+}
+
 async function resolveConfigSources(
   pluginRegistry: PluginRegistry,
   config: ServerConfig,
@@ -140,6 +158,13 @@ function serverConfigNotFoundError(): JsmError {
   return new JsmError({
     code: ErrorCode.InvalidConfig,
     message: 'Server configuration not found.',
+  });
+}
+
+function serverSelectionRequiredError(actionLabel: string): JsmError {
+  return new JsmError({
+    code: ErrorCode.InvalidConfig,
+    message: `${actionLabel} requires a server selected in the Java Server Manager view.`,
   });
 }
 
@@ -255,6 +280,18 @@ export function registerServerCommands(
     return config;
   };
 
+  const requireServerCommandArg = (
+    arg: unknown,
+    actionLabel: string,
+  ): ServerCommandArg | undefined => {
+    if (isServerNode(arg)) {
+      return arg as ServerCommandArg;
+    }
+
+    showErr(serverSelectionRequiredError(actionLabel));
+    return undefined;
+  };
+
   const runQueueAction = async (
     context: ServerCommandContext,
     title: string,
@@ -287,14 +324,16 @@ export function registerServerCommands(
   const runServerQueueCommand = async (
     arg: unknown,
     options: {
+      actionLabel: string;
       title: (context: ServerCommandContext) => string;
       action: ServerQueueAction;
       prepareDeployments?: boolean;
       onSuccess?: (context: ServerCommandContext) => void;
     },
   ): Promise<void> => {
-    if (!isServerNode(arg)) return;
-    const context = createContext(arg as ServerCommandArg);
+    const resolvedArg = requireServerCommandArg(arg, options.actionLabel);
+    if (!resolvedArg) return;
+    const context = createContext(resolvedArg);
     if (options.prepareDeployments && !await prepareDeploymentsIfNeeded(context)) {
       return;
     }
@@ -389,70 +428,81 @@ export function registerServerCommands(
     }],
 
     ['jsm.server.startRun', async (arg: unknown) => runServerQueueCommand(arg, {
+      actionLabel: 'Starting a server',
       title: context => `Starting ${context.label}...`,
       action: context => lifecycle.start(context.serverKey, 'run'),
       prepareDeployments: true,
     })],
 
     ['jsm.server.startDebug', async (arg: unknown) => runServerQueueCommand(arg, {
+      actionLabel: 'Starting a server in debug mode',
       title: context => `Starting ${context.label} (debug)...`,
       action: context => lifecycle.start(context.serverKey, 'debug'),
       prepareDeployments: true,
     })],
 
     ['jsm.server.stop', async (arg: unknown) => runServerQueueCommand(arg, {
+      actionLabel: 'Stopping a server',
       title: context => `Stopping ${context.label}...`,
       action: context => lifecycle.stop(context.serverKey),
     })],
 
     ['jsm.server.restartRun', async (arg: unknown) => runServerQueueCommand(arg, {
+      actionLabel: 'Restarting a server',
       title: context => `Restarting ${context.label}...`,
       action: context => lifecycle.restart(context.serverKey, 'run'),
     })],
 
     ['jsm.server.restartDebug', async (arg: unknown) => runServerQueueCommand(arg, {
+      actionLabel: 'Restarting a server in debug mode',
       title: context => `Restarting ${context.label} (debug)...`,
       action: context => lifecycle.restart(context.serverKey, 'debug'),
     })],
 
     ['jsm.server.attachDebug', async (arg: unknown) => {
-      if (!isServerNode(arg)) return;
-      const context = createContext(arg as ServerCommandArg);
+      const resolvedArg = requireServerCommandArg(arg, 'Attaching the debugger');
+      if (!resolvedArg) return;
+      const context = createContext(resolvedArg);
       const result = await lifecycle.attachDebug(context.serverKey);
       if (!result.ok) showErr(result.error);
       else showSuccess('Debugger attached.');
     }],
 
     ['jsm.server.detachDebug', async (arg: unknown) => {
-      if (!isServerNode(arg)) return;
-      const context = createContext(arg as ServerCommandArg);
+      const resolvedArg = requireServerCommandArg(arg, 'Detaching the debugger');
+      if (!resolvedArg) return;
+      const context = createContext(resolvedArg);
       const result = await lifecycle.detachDebug(context.serverKey);
       if (!result.ok) showErr(result.error);
       else showSuccess('Debugger detached.');
     }],
 
     ['jsm.server.cancelOperation', (arg: unknown) => {
-      if (!isServerNode(arg)) return;
-      lifecycle.cancel(createContext(arg as ServerCommandArg).serverKey);
+      const resolvedArg = requireServerCommandArg(arg, 'Cancelling an operation');
+      if (!resolvedArg) return;
+      lifecycle.cancel(createContext(resolvedArg).serverKey);
     }],
 
     ['jsm.server.showLogs', (arg: unknown) => {
-      if (!isServerNode(arg)) return;
-      const context = createContext(arg as ServerCommandArg);
+      const resolvedArg = requireServerCommandArg(arg, 'Opening server logs');
+      if (!resolvedArg) return;
+      const context = createContext(resolvedArg);
       logChannel.showLogs(context.serverKey, context.label);
     }],
 
     ['jsm.server.edit', (arg: unknown) => {
-      if (!isServerNode(arg)) return;
+      const resolvedArg = requireServerCommandArg(arg, 'Editing a server');
+      if (!resolvedArg) return;
       openDashboardTarget({
         type: 'server',
-        id: arg.serverId,
+        id: resolvedArg.serverId,
         globalTab: 'home',
       });
     }],
 
     ['jsm.server.duplicate', async (arg: unknown) => {
-      if (!isServerNode(arg)) return;
+      const resolvedArg = requireServerCommandArg(arg, 'Duplicating a server');
+      if (!resolvedArg) return;
 
       if (!workspaceRegistry) {
         showErr(new JsmError({
@@ -462,12 +512,12 @@ export function registerServerCommands(
         return;
       }
 
-      const entry = getWorkspaceEntry(arg.workspaceFolderUri);
+      const entry = getWorkspaceEntry(resolvedArg.workspaceFolderUri);
       if (!entry) {
         return;
       }
 
-      const context = createContext(arg as ServerCommandArg);
+      const context = createContext(resolvedArg);
       const sourceConfig = requireContextConfig(context, { allowInlineConfig: true });
       if (!sourceConfig) {
         return;
@@ -483,8 +533,9 @@ export function registerServerCommands(
     }],
 
     ['jsm.server.remove', async (arg: unknown) => {
-      if (!isServerNode(arg)) return;
-      const context = createContext(arg as ServerCommandArg);
+      const resolvedArg = requireServerCommandArg(arg, 'Removing a server');
+      if (!resolvedArg) return;
+      const context = createContext(resolvedArg);
       const answer = await vscode.window.showWarningMessage(
         `Remove server "${context.label}"? This cannot be undone.`,
         { modal: true },
@@ -502,8 +553,9 @@ export function registerServerCommands(
     }],
 
     ['jsm.server.openFolder', async (arg: unknown) => {
-      if (!isServerNode(arg)) return;
-      const context = createContext(arg as ServerCommandArg);
+      const resolvedArg = requireServerCommandArg(arg, 'Opening a server folder');
+      if (!resolvedArg) return;
+      const context = createContext(resolvedArg);
       const config = requireContextConfig(context, { allowInlineConfig: true });
       if (!config) {
         return;
@@ -519,13 +571,19 @@ export function registerServerCommands(
       }
 
       if (await exists(configuredPath)) {
-        await revealFolder(configuredPath);
+        const revealResult = await revealFolderSafely(configuredPath);
+        if (!revealResult.ok) {
+          showErr(revealResult.error);
+        }
         return;
       }
 
       const fallbackPath = path.dirname(configuredPath);
       if (fallbackPath && fallbackPath !== configuredPath && await exists(fallbackPath)) {
-        await revealFolder(fallbackPath);
+        const revealResult = await revealFolderSafely(fallbackPath);
+        if (!revealResult.ok) {
+          showErr(revealResult.error);
+        }
         return;
       }
 
@@ -537,8 +595,9 @@ export function registerServerCommands(
     }],
 
     ['jsm.server.openConfig', async (arg: unknown) => {
-      if (!isServerNode(arg)) return;
-      const context = createContext(arg as ServerCommandArg);
+      const resolvedArg = requireServerCommandArg(arg, 'Opening server configuration');
+      if (!resolvedArg) return;
+      const context = createContext(resolvedArg);
       const config = requireContextConfig(context, { allowInlineConfig: true });
       if (!config) {
         return;
@@ -565,12 +624,16 @@ export function registerServerCommands(
         return;
       }
 
-      await openConfigFile(picked.path);
+      const openResult = await openConfigFileSafely(picked.path);
+      if (!openResult.ok) {
+        showErr(openResult.error);
+      }
     }],
 
     ['jsm.server.redeployAll', async (arg: unknown) => {
-      if (!isServerNode(arg)) return;
-      const context = createContext(arg as ServerCommandArg);
+      const resolvedArg = requireServerCommandArg(arg, 'Redeploying all applications');
+      if (!resolvedArg) return;
+      const context = createContext(resolvedArg);
       const config = requireContextConfig(context, { allowInlineConfig: true });
       if (!config || config.deployments.length === 0) return;
       const completed = await runQueueAction(
@@ -668,13 +731,25 @@ export function registerServerCommands(
         return;
       }
       let imported = 0;
+      let importError: JsmError | undefined;
       for (const serverConfig of serverConfigs) {
         const result = await entry.provisioningService.duplicateServer(serverConfig, { keepName: true });
         if (!result.ok) {
-          showErr(result.error);
+          importError = result.error;
           break;
         }
         imported += 1;
+      }
+      if (importError) {
+        if (imported > 0) {
+          void vscode.window.showWarningMessage(
+            `JSM: Imported ${imported} server(s) into workspace "${scope.name}" before import stopped: ${importError.message}`,
+          );
+          treeProvider.requestRefresh();
+          return;
+        }
+        showErr(importError);
+        return;
       }
       if (imported > 0) {
         showSuccess(`Imported ${imported} server(s) into workspace "${scope.name}".`);

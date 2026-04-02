@@ -302,6 +302,10 @@ export class TomcatPlugin implements IServerPlugin {
     config: ServerConfig,
   ): Promise<Result<void, JsmError>> {
     try {
+      const pluginConfig = config.pluginConfig as TomcatPluginConfig | undefined;
+      const ssl = pluginConfig?.ssl;
+      const disableAjp = pluginConfig?.disableAjp ?? true;
+
       for (const dir of INSTANCE_SEED_DIRS) {
         const src = path.join(homePath, dir);
         const dest = path.join(instancePath, dir);
@@ -317,7 +321,6 @@ export class TomcatPlugin implements IServerPlugin {
       const serverXmlDest = path.join(instancePath, 'conf', 'server.xml');
       if (this.serverXmlTemplatePath && await exists(this.serverXmlTemplatePath)) {
         const serverXml = await fs.readFile(this.serverXmlTemplatePath, 'utf-8');
-        const ssl = (config.pluginConfig as TomcatPluginConfig | undefined)?.ssl;
 
         // Copy keystore/truststore files if SSL enabled
         if (ssl?.enabled) {
@@ -335,9 +338,14 @@ export class TomcatPlugin implements IServerPlugin {
         }
 
         // Patch server.xml via service (SSL connector injection/removal)
-        const patchedXml = this.serverXmlService.patchSsl(serverXml, ssl);
+        const ajpPatchedXml = this.serverXmlService.patchAjp(serverXml, disableAjp);
+        const patchedXml = this.serverXmlService.patchSsl(ajpPatchedXml, ssl);
         await fs.writeFile(serverXmlDest, patchedXml, 'utf-8');
         this.logger.info('TomcatPlugin: applied server.xml template (ports via JVM args)');
+      } else if (disableAjp && await exists(serverXmlDest)) {
+        const serverXml = await fs.readFile(serverXmlDest, 'utf-8');
+        const patchedXml = this.serverXmlService.patchAjp(serverXml, true);
+        await fs.writeFile(serverXmlDest, patchedXml, 'utf-8');
       }
 
       this.logger.info(`TomcatPlugin: initialized instance at ${instancePath}`);
@@ -346,7 +354,11 @@ export class TomcatPlugin implements IServerPlugin {
       return err(new JsmError({
         code: ErrorCode.DeployFailed,
         message: `Failed to initialize instance path: ${instancePath}`,
-        details: cause instanceof Error ? cause.message : String(cause),
+        details: cause instanceof JsmError
+          ? cause.message
+          : cause instanceof Error
+            ? cause.message
+            : String(cause),
         suggestedFix: ['Check permissions on instance path', 'Verify CATALINA_HOME structure'],
         cause,
       }));
@@ -1090,7 +1102,7 @@ export class TomcatPlugin implements IServerPlugin {
 
   private async reserveShutdownPort(ctx: OperationContext, config: ServerConfig): Promise<number> {
     let shutdownPort = this.configuredShutdownPort(config);
-    const free = await this.portScanner.findFreePort(DEFAULT_SHUTDOWN_PORT);
+    const free = await this.portScanner.findFreePort(shutdownPort);
     if (free !== null) {
       shutdownPort = free;
       await this.keyValueStore.set(SHUTDOWN_PORT_KEY_PREFIX + ctx.serverId, free);

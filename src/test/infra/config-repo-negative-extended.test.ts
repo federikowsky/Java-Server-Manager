@@ -58,4 +58,42 @@ describe('ConfigRepo negative paths (extended)', () => {
     }
     expect(repo.getAll()).toEqual([]);
   });
+
+  it('treats a deleted config file as dirty when content was previously loaded', async () => {
+    const configPath = path.join(tmpDir, '.vscode', 'jsm.servers.json');
+    await fs.writeFile(configPath, JSON.stringify({
+      servers: [
+        {
+          id: 'srv-1',
+          name: 'A',
+          type: 'tomcat',
+          runtime: { id: 'rt-1', homePath: '/opt/tomcat' },
+          instancePath: '/tmp/inst',
+          javaHome: '/usr/lib/jvm/java-17',
+          host: '127.0.0.1',
+          ports: { http: 8080, debug: 5005 },
+          run: { env: {}, vmArgs: [] },
+          debug: { enabled: true, bind: '127.0.0.1', attachDelayMs: 1000 },
+          deployments: [],
+          autosync: {
+            enabled: true,
+            debounceMs: 400,
+            maxBatchFiles: 200,
+            maxBatchBytes: 20_000_000,
+            stormBackoffMs: 2000,
+            ignoreGlobs: [],
+          },
+          hooks: [],
+        },
+      ],
+    }), 'utf-8');
+
+    const repo = new ConfigRepo(tmpDir, mockLogger());
+    const loadResult = await repo.load();
+    expect(loadResult.ok).toBe(true);
+
+    await fs.rm(configPath, { force: true });
+
+    expect(await repo.isDirty()).toBe(true);
+  });
 });

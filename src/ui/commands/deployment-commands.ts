@@ -48,6 +48,7 @@ type DeploymentDraftCommandArg = {
 type DeploymentResolutionArg = {
   workspaceFolderUri: string;
   serverId: string;
+  serverKey: string;
   deploymentId: string;
   deploymentConfig?: DeploymentConfig;
 };
@@ -65,6 +66,20 @@ type ResolvedDeploymentContext = {
   server: ServerConfig;
   deployment: DeploymentConfig;
 };
+
+function deploymentSelectionRequiredError(actionLabel: string): JsmError {
+  return new JsmError({
+    code: ErrorCode.InvalidConfig,
+    message: `${actionLabel} requires a deployment selected in the Java Server Manager view.`,
+  });
+}
+
+function serverSelectionRequiredError(actionLabel: string): JsmError {
+  return new JsmError({
+    code: ErrorCode.InvalidConfig,
+    message: `${actionLabel} requires a server selected in the Java Server Manager view.`,
+  });
+}
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -227,9 +242,37 @@ export function registerDeploymentCommands(
   ): ResolvedDeploymentContext | undefined => {
     const { server, deployment } = resolveDeployment(arg, options);
     if (!server || !deployment) {
+      showErr(new JsmError({
+        code: ErrorCode.InvalidConfig,
+        message: 'Deployment not found.',
+      }));
       return undefined;
     }
     return { server, deployment };
+  };
+
+  const requireDeploymentArg = (
+    arg: unknown,
+    actionLabel: string,
+  ): DeploymentResolutionArg | undefined => {
+    if (isDeploymentNode(arg)) {
+      return arg;
+    }
+
+    showErr(deploymentSelectionRequiredError(actionLabel));
+    return undefined;
+  };
+
+  const requireServerArg = (
+    arg: unknown,
+    actionLabel: string,
+  ): { serverId: string; workspaceFolderUri: string } | undefined => {
+    if (isServerNode(arg)) {
+      return arg;
+    }
+
+    showErr(serverSelectionRequiredError(actionLabel));
+    return undefined;
   };
 
   const openDeploymentDashboard = (
@@ -296,48 +339,52 @@ export function registerDeploymentCommands(
         return persistAddedDeployment(spaArg);
       }
 
-      if (!isServerNode(arg)) return;
-      openDeploymentDashboard(arg, 'create');
+      const resolvedArg = requireServerArg(arg, 'Adding a deployment');
+      if (!resolvedArg) return;
+      openDeploymentDashboard(resolvedArg, 'create');
       return undefined;
     }],
 
     // §8.2 — jsm.deployment.redeploy
     ['jsm.deployment.redeploy', async (arg: unknown) => {
-      if (!isDeploymentNode(arg)) return;
-      const context = requireDeploymentContext(arg);
+      const resolvedArg = requireDeploymentArg(arg, 'Redeploying a deployment');
+      if (!resolvedArg) return;
+      const context = requireDeploymentContext(resolvedArg);
       if (!context) return;
       await runQueuedDeploymentAction(
-        arg.serverKey,
+        resolvedArg.serverKey,
         `Redeploying ${context.deployment.deployName}...`,
-        () => lifecycle.enqueueDeployFull(arg.serverKey, arg.deploymentId),
+        () => lifecycle.enqueueDeployFull(resolvedArg.serverKey, resolvedArg.deploymentId),
         `Redeploy completed for "${context.deployment.deployName}".`,
       );
     }],
 
     // §8.2 — jsm.deployment.undeploy
     ['jsm.deployment.undeploy', async (arg: unknown) => {
-      if (!isDeploymentNode(arg)) return;
-      const context = requireDeploymentContext(arg);
+      const resolvedArg = requireDeploymentArg(arg, 'Undeploying a deployment');
+      if (!resolvedArg) return;
+      const context = requireDeploymentContext(resolvedArg);
       if (!context) return;
       await runQueuedDeploymentAction(
-        arg.serverKey,
+        resolvedArg.serverKey,
         `Undeploying ${context.deployment.deployName}...`,
-        () => lifecycle.enqueueUndeploy(arg.serverKey, arg.deploymentId),
+        () => lifecycle.enqueueUndeploy(resolvedArg.serverKey, resolvedArg.deploymentId),
         `Undeployed "${context.deployment.deployName}".`,
       );
     }],
 
     // §8.2 — jsm.deployment.toggleAutosync
     ['jsm.deployment.toggleAutosync', async (arg: unknown) => {
-      if (!isDeploymentNode(arg)) return;
-      const context = requireDeploymentContext(arg);
+      const resolvedArg = requireDeploymentArg(arg, 'Toggling AutoSync');
+      if (!resolvedArg) return;
+      const context = requireDeploymentContext(resolvedArg);
       if (!context) return;
 
       const newMode = nextSyncMode(context.deployment.syncMode);
       const updatedDep = { ...context.deployment, syncMode: newMode };
-      const updatedServer = replaceDeployment(context.server, arg.deploymentId, updatedDep);
+      const updatedServer = replaceDeployment(context.server, resolvedArg.deploymentId, updatedDep);
 
-      const result = await updateServerConfig(arg.workspaceFolderUri, arg.serverId, updatedServer);
+      const result = await updateServerConfig(resolvedArg.workspaceFolderUri, resolvedArg.serverId, updatedServer);
       if (!result) return;
       if (!result.ok) { showErr(result.error); return; }
 
@@ -355,20 +402,18 @@ export function registerDeploymentCommands(
         return persistEditedDeployment(spaArg);
       }
 
-      if (!isDeploymentNode(arg)) return;
-      openDeploymentDashboard(arg, 'edit');
+      const resolvedArg = requireDeploymentArg(arg, 'Editing a deployment');
+      if (!resolvedArg) return;
+      openDeploymentDashboard(resolvedArg, 'edit');
       return undefined;
     }],
 
     // §8.2 — jsm.deployment.remove
     ['jsm.deployment.remove', async (arg: unknown) => {
-      if (!isDeploymentNode(arg)) return;
-      const context = requireDeploymentContext(arg, { allowInlineDeployment: true });
+      const resolvedArg = requireDeploymentArg(arg, 'Removing a deployment');
+      if (!resolvedArg) return;
+      const context = requireDeploymentContext(resolvedArg, { allowInlineDeployment: true });
       if (!context) {
-        showErr(new JsmError({
-          code: ErrorCode.InvalidConfig,
-          message: 'Deployment not found.',
-        }));
         return;
       }
       const answer = await vscode.window.showWarningMessage(
@@ -380,10 +425,10 @@ export function registerDeploymentCommands(
 
       const result = workspaceRegistry
         ? await workspaceRegistry.removeDeployment({
-          workspaceFolderUri: arg.workspaceFolderUri,
-          serverId: arg.serverId,
-        }, arg.deploymentId)
-        : await configService?.removeDeployment(arg.serverId, arg.deploymentId);
+          workspaceFolderUri: resolvedArg.workspaceFolderUri,
+          serverId: resolvedArg.serverId,
+        }, resolvedArg.deploymentId)
+        : await configService?.removeDeployment(resolvedArg.serverId, resolvedArg.deploymentId);
       if (!result) return;
       if (!result.ok) { showErr(result.error); return; }
       showSuccess(`Deployment "${context.deployment.deployName}" removed.`);
@@ -392,8 +437,10 @@ export function registerDeploymentCommands(
 
     // Reveal deployment source in OS explorer / VS Code explorer (spec §17.3 download/export slot).
     ['jsm.deployment.revealSource', async (arg: unknown) => {
-      if (!isDeploymentNode(arg)) return;
-      const context = requireDeploymentContext(arg, { allowInlineDeployment: true });
+      const resolvedArg = requireDeploymentArg(arg, 'Revealing deployment source');
+      if (!resolvedArg) return;
+      const context = requireDeploymentContext(resolvedArg, { allowInlineDeployment: true });
+      if (!context) return;
       const raw = context?.deployment.sourcePath.trim() ?? '';
       if (!raw) {
         void vscode.window.showWarningMessage('JSM: No source path to reveal.');
@@ -409,14 +456,15 @@ export function registerDeploymentCommands(
 
     // §8.2 — jsm.deployment.openLogs (deferred-v1.1)
     ['jsm.deployment.openLogs', async (arg: unknown) => {
-      if (!isDeploymentNode(arg)) return;
+      const resolvedArg = requireDeploymentArg(arg, 'Opening deployment logs');
+      if (!resolvedArg) return;
 
-      const { server } = resolveDeployment(arg);
+      const { server } = resolveDeployment(resolvedArg);
       if (!server) {
         showErr(new JsmError({
           code: ErrorCode.InvalidConfig,
           message: `Server not found for deployment.`,
-          details: `workspaceFolderUri=${arg.workspaceFolderUri}, serverId=${arg.serverId}`,
+          details: `workspaceFolderUri=${resolvedArg.workspaceFolderUri}, serverId=${resolvedArg.serverId}`,
         }));
         return;
       }

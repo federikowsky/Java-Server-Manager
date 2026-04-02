@@ -68,6 +68,7 @@ interface ServerEntry {
   runtime: ServerRuntime;
   queue: OperationQueue;
   activeCancellation?: CancellationTokenSource;
+  unregistering?: boolean;
 }
 
 type ServerEntryGuard = (entry: ServerEntry) => Result<void, JsmError>;
@@ -103,6 +104,14 @@ export class ServerLifecycle {
 
   /** Unregister a server from lifecycle management. */
   unregister(serverId: ServerId): void {
+    const entry = this.servers.get(serverId);
+    if (!entry) {
+      return;
+    }
+
+    entry.unregistering = true;
+    entry.activeCancellation?.cancel();
+    entry.queue.clear();
     this.servers.delete(serverId);
   }
 
@@ -454,15 +463,20 @@ export class ServerLifecycle {
       }
     } catch (cause) {
       const error = cause instanceof JsmError ? cause : JsmError.fromUnknown(cause);
+      const detachedDuringStart = server.unregistering === true;
       if (requiresFailedStartCleanup) {
-        await this.cleanupAfterFailedStart(server, plugin);
+        if (detachedDuringStart) {
+          await this.cleanupAfterDetachedStart(server);
+        } else {
+          await this.cleanupAfterFailedStart(server, plugin);
+        }
       }
-      if (runtime.state === 'starting') {
+      if (!detachedDuringStart && runtime.state === 'starting') {
         runtime.transition('error', { error });
-      } else if (runtime.state === 'running') {
+      } else if (!detachedDuringStart && runtime.state === 'running') {
         runtime.transition('error', { error });
       }
-      if (!(error.code === ErrorCode.Cancelled && runtime.state === 'stopped')) {
+      if (!detachedDuringStart && !(error.code === ErrorCode.Cancelled && runtime.state === 'stopped')) {
         await this.runServerOnErrorHooks(server, ctx, hookEvent, error);
       }
       throw error;
@@ -501,6 +515,24 @@ export class ServerLifecycle {
       await this.deps.debugAttacher.detach(server.serverKey);
     } catch (cause) {
       this.deps.logger.warn(`ServerLifecycle: failed to detach debugger after start failure for '${config.name}'`, cause);
+    }
+
+    runtime.setDebugAttached(false);
+  }
+
+  private async cleanupAfterDetachedStart(server: ServerEntry): Promise<void> {
+    const { config, runtime } = server;
+
+    try {
+      await this.deps.pidManager.clearPid(server.serverKey);
+    } catch (cause) {
+      this.deps.logger.warn(`ServerLifecycle: failed to clear PID after detached start cancellation for '${config.name}'`, cause);
+    }
+
+    try {
+      await this.deps.debugAttacher.detach(server.serverKey);
+    } catch (cause) {
+      this.deps.logger.warn(`ServerLifecycle: failed to detach debugger after detached start cancellation for '${config.name}'`, cause);
     }
 
     runtime.setDebugAttached(false);

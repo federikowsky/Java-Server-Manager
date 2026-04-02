@@ -124,8 +124,13 @@ export class ConfigRepo {
    * Returns true if the file changed since last load/save.
    */
   async isDirty(): Promise<boolean> {
+    const fileExists = await exists(this.configPath);
+    if (!fileExists) {
+      return this.lastKnownContent !== '';
+    }
+
     const readResult = await readFileSafe(this.configPath);
-    if (!readResult.ok) return false;
+    if (!readResult.ok) return true;
     return readResult.value !== this.lastKnownContent;
   }
 

@@ -428,23 +428,35 @@ describe('Deployment Commands', () => {
     ];
 
     for (const cmd of depCommands) {
-      it(`${cmd} should silently return with undefined arg`, () => {
+      it(`${cmd} should show a selection error with undefined arg`, () => {
         expect(() => invoke(cmd, undefined)).not.toThrow();
+        expect(mockShowErrorMessage).toHaveBeenCalledWith(
+          expect.stringContaining('requires a deployment selected'),
+        );
       });
 
-      it(`${cmd} should silently return with plain object (not DeploymentNode)`, () => {
+      it(`${cmd} should show a selection error with plain object (not DeploymentNode)`, () => {
         expect(() => invoke(cmd, { deploymentId: 'fake' })).not.toThrow();
+        expect(mockShowErrorMessage).toHaveBeenCalledWith(
+          expect.stringContaining('requires a deployment selected'),
+        );
       });
 
-      it(`${cmd} should silently return with ServerNode arg`, () => {
+      it(`${cmd} should show a selection error with ServerNode arg`, () => {
         const serverNode = createServerNode();
         expect(() => invoke(cmd, serverNode)).not.toThrow();
+        expect(mockShowErrorMessage).toHaveBeenCalledWith(
+          expect.stringContaining('requires a deployment selected'),
+        );
       });
     }
 
-    it('jsm.deployment.add should silently return with DeploymentNode (needs ServerNode)', () => {
+    it('jsm.deployment.add should show a selection error with DeploymentNode (needs ServerNode)', () => {
       const depNode = createDeploymentNode();
       expect(() => invoke('jsm.deployment.add', depNode)).not.toThrow();
+      expect(mockShowErrorMessage).toHaveBeenCalledWith(
+        expect.stringContaining('requires a server selected'),
+      );
       expect(mockExecuteCommand).not.toHaveBeenCalled();
     });
   });
@@ -452,14 +464,17 @@ describe('Deployment Commands', () => {
   /* ── Negative Path ───────────────────────────────────────────────────── */
 
   describe('Negative Path', () => {
-    it('redeploy should silently return when server not found', async () => {
+    it('redeploy should show an error when server not found', async () => {
       deps.configService.getServer.mockReturnValue(undefined);
       const node = createDeploymentNode();
       await invoke('jsm.deployment.redeploy', node);
       expect(deps.lifecycle.enqueueDeployFull).not.toHaveBeenCalled();
+      expect(mockShowErrorMessage).toHaveBeenCalledWith(
+        expect.stringContaining('Deployment not found'),
+      );
     });
 
-    it('redeploy should silently return when deployment not found in server', async () => {
+    it('redeploy should show an error when deployment not found in server', async () => {
       const server = makeServer();
       server.deployments = []; // No deployments
       deps.configService.getServer.mockReturnValue(server);
@@ -467,6 +482,9 @@ describe('Deployment Commands', () => {
       const node = createDeploymentNode();
       await invoke('jsm.deployment.redeploy', node);
       expect(deps.lifecycle.enqueueDeployFull).not.toHaveBeenCalled();
+      expect(mockShowErrorMessage).toHaveBeenCalledWith(
+        expect.stringContaining('Deployment not found'),
+      );
     });
 
     it('redeploy should show error when queued deploy fails', async () => {
@@ -527,14 +545,17 @@ describe('Deployment Commands', () => {
       expect(deps.configService.removeDeployment).toHaveBeenCalledWith('srv-1', dep.id);
     });
 
-    it('toggleAutosync should silently return when server not found', async () => {
+    it('toggleAutosync should show an error when server not found', async () => {
       deps.configService.getServer.mockReturnValue(undefined);
       const node = createDeploymentNode();
       await invoke('jsm.deployment.toggleAutosync', node);
       expect(deps.configService.updateServer).not.toHaveBeenCalled();
+      expect(mockShowErrorMessage).toHaveBeenCalledWith(
+        expect.stringContaining('Deployment not found'),
+      );
     });
 
-    it('toggleAutosync should silently return when deployment not found in server', async () => {
+    it('toggleAutosync should show an error when deployment not found in server', async () => {
       const server = makeServer();
       server.deployments = []; // Empty
       deps.configService.getServer.mockReturnValue(server);
@@ -542,6 +563,9 @@ describe('Deployment Commands', () => {
       const node = createDeploymentNode();
       await invoke('jsm.deployment.toggleAutosync', node);
       expect(deps.configService.updateServer).not.toHaveBeenCalled();
+      expect(mockShowErrorMessage).toHaveBeenCalledWith(
+        expect.stringContaining('Deployment not found'),
+      );
     });
   });
 
@@ -556,10 +580,12 @@ describe('Deployment Commands', () => {
     });
 
     describe('jsm.deployment.openLogs', () => {
-      it('should do nothing when arg is not a DeploymentNode', async () => {
+      it('should show a selection error when arg is not a DeploymentNode', async () => {
         await invoke('jsm.deployment.openLogs', undefined);
         expect(mockShowInfoMessage).not.toHaveBeenCalledWith(expect.stringContaining('v1.1'));
-        expect(mockShowErrorMessage).not.toHaveBeenCalled();
+        expect(mockShowErrorMessage).toHaveBeenCalledWith(
+          expect.stringContaining('requires a deployment selected'),
+        );
       });
 
       it('should show information message when no file log sources are available', async () => {

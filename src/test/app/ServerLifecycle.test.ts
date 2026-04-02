@@ -1141,6 +1141,57 @@ describe('ServerLifecycle', () => {
       lifecycle.unregister('srv-1');
       expect(lifecycle.getRuntime('srv-1')).toBeUndefined();
     });
+
+    it('clears pending queue work before removing the server', () => {
+      const queue = mockQueue();
+      lifecycle.register('srv-1', makeServer(), queue as never);
+
+      lifecycle.unregister('srv-1');
+
+      expect(queue.clear).toHaveBeenCalledOnce();
+      expect(lifecycle.getRuntime('srv-1')).toBeUndefined();
+    });
+
+    it('is a no-op for an unknown server key', () => {
+      expect(() => lifecycle.unregister('missing')).not.toThrow();
+    });
+
+    it('cancels an active start during unregister without invoking plugin stop cleanup', async () => {
+      const queue = mockQueue();
+      const start = vi.fn(async () => ok({
+        pid: 123,
+        httpUrl: 'http://127.0.0.1:8080',
+        hints: [],
+      }));
+      const stop = vi.fn(async () => ok(undefined));
+
+      pluginRegistry.get.mockReturnValue({
+        start,
+        stop,
+        getStatus: vi.fn(),
+        detect: vi.fn(),
+      });
+      pidManager.writePid.mockImplementation(async () => {
+        lifecycle.unregister('srv-1');
+      });
+
+      lifecycle.register('srv-1', makeServer(), queue as never);
+      const executor = queue.setExecutor.mock.calls[0][0] as (entry: {
+        kind: string;
+        meta?: Record<string, unknown>;
+      }) => Promise<void>;
+
+      await expect(executor({
+        kind: 'LifecycleStart',
+        meta: { mode: 'run' },
+      })).rejects.toMatchObject({
+        code: ErrorCode.Cancelled,
+      });
+
+      expect(queue.clear).toHaveBeenCalledOnce();
+      expect(stop).not.toHaveBeenCalled();
+      expect(lifecycle.getRuntime('srv-1')).toBeUndefined();
+    });
   });
 
   describe('deploy queue execution', () => {
@@ -1316,6 +1367,7 @@ describe('ServerLifecycle', () => {
 
     it('records DeploySync failure when sync returns an error result', async () => {
       const onDeploySyncFailure = vi.fn();
+      const appendLine = vi.fn();
       const queue = mockQueue();
       const config = {
         ...makeServer(),
@@ -1336,6 +1388,7 @@ describe('ServerLifecycle', () => {
         logger: mockLogger(),
         hookRunner: hookRunner as never,
         deployService: deployService as never,
+        getOutputSink: () => ({ append: vi.fn(), appendLine, clear: vi.fn() }),
         onDeploySyncFailure,
       });
 
@@ -1358,6 +1411,7 @@ describe('ServerLifecycle', () => {
       })).rejects.toBe(syncError);
 
       expect(onDeploySyncFailure).toHaveBeenCalledWith('srv-1', 'dep-1');
+      expect(appendLine).toHaveBeenCalledWith("Deploy sync failed for 'myapp': sync failed");
       expect(bus.emit).toHaveBeenCalledWith('OperationFailed', expect.objectContaining({
         serverId: 'srv-1',
         kind: 'DeploySync',
@@ -1367,6 +1421,7 @@ describe('ServerLifecycle', () => {
 
     it('records DeploySync failure and emits OperationFailed when sync throws', async () => {
       const onDeploySyncFailure = vi.fn();
+      const appendLine = vi.fn();
       const queue = mockQueue();
       const config = {
         ...makeServer(),
@@ -1384,6 +1439,7 @@ describe('ServerLifecycle', () => {
         logger: mockLogger(),
         hookRunner: hookRunner as never,
         deployService: deployService as never,
+        getOutputSink: () => ({ append: vi.fn(), appendLine, clear: vi.fn() }),
         onDeploySyncFailure,
       });
 
@@ -1408,6 +1464,7 @@ describe('ServerLifecycle', () => {
       });
 
       expect(onDeploySyncFailure).toHaveBeenCalledWith('srv-1', 'dep-1');
+      expect(appendLine).toHaveBeenCalledWith("Deploy sync failed for 'myapp': sync crash");
       expect(bus.emit).toHaveBeenCalledWith('OperationFailed', expect.objectContaining({
         serverId: 'srv-1',
         kind: 'DeploySync',
@@ -1417,18 +1474,65 @@ describe('ServerLifecycle', () => {
       }));
     });
 
-    it('treats missing DeploySync batch metadata as a completed no-op', async () => {
+    it('fails DeploySync when targetDeploymentId is missing', async () => {
       const { executor } = registerWithDeployment();
 
-      await executor({
+      await expect(executor({
         kind: 'DeploySync',
-        targetDeploymentId: 'dep-1',
+        meta: {
+          fileChangeBatch: {
+            changes: [{ path: 'index.jsp', type: 'changed' }],
+            totalBytes: 12,
+          },
+        },
+      })).rejects.toMatchObject({
+        code: ErrorCode.InvalidConfig,
+        message: 'DeploySync requires targetDeploymentId',
       });
 
       expect(deployService.sync).not.toHaveBeenCalled();
-      expect(bus.emit).toHaveBeenCalledWith('OperationCompleted', expect.objectContaining({
+      expect(bus.emit).toHaveBeenCalledWith('OperationFailed', expect.objectContaining({
         serverId: 'srv-1',
         kind: 'DeploySync',
+        error: expect.objectContaining({
+          code: ErrorCode.InvalidConfig,
+          message: 'DeploySync requires targetDeploymentId',
+        }),
+      }));
+    });
+
+    it('fails DeploySync when fileChangeBatch metadata is missing', async () => {
+      const appendLine = vi.fn();
+      lifecycle = new ServerLifecycle({
+        pluginRegistry: pluginRegistry as never,
+        bus: bus as never,
+        pidManager: pidManager as never,
+        portScanner: portScanner as never,
+        debugAttacher: debugAttacher as never,
+        logger: mockLogger(),
+        hookRunner: hookRunner as never,
+        deployService: deployService as never,
+        getOutputSink: () => ({ append: vi.fn(), appendLine, clear: vi.fn() }),
+      });
+      const { executor } = registerWithDeployment();
+
+      await expect(executor({
+        kind: 'DeploySync',
+        targetDeploymentId: 'dep-1',
+      })).rejects.toMatchObject({
+        code: ErrorCode.InvalidConfig,
+        message: 'DeploySync requires fileChangeBatch metadata',
+      });
+
+      expect(deployService.sync).not.toHaveBeenCalled();
+      expect(appendLine).not.toHaveBeenCalled();
+      expect(bus.emit).toHaveBeenCalledWith('OperationFailed', expect.objectContaining({
+        serverId: 'srv-1',
+        kind: 'DeploySync',
+        error: expect.objectContaining({
+          code: ErrorCode.InvalidConfig,
+          message: 'DeploySync requires fileChangeBatch metadata',
+        }),
       }));
     });
 

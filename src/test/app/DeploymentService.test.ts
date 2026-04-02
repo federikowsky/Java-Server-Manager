@@ -220,6 +220,33 @@ describe('DeploymentService', () => {
     expect(service.getDeploymentState('s1', 'd1')).toBe('error');
   });
 
+  it('redeployAll rethrows a deployment failure instead of completing silently', async () => {
+    const config = { ...makeConfig(), deployments: [makeDep()] };
+    const deployError = new JsmError({ code: ErrorCode.DeployFailed, message: 'deploy failed' });
+    (mockPlugin.planDeploy as ReturnType<typeof vi.fn>).mockResolvedValue(err(deployError));
+
+    await expect(
+      service.redeployAll(makeCtx('s1', 'd1', 'RedeployAll'), config),
+    ).rejects.toBe(deployError);
+    expect(service.getDeploymentState('s1', 'd1')).toBe('error');
+  });
+
+  it('redeployAll recovers a stale deploying state before redeploying', async () => {
+    const config = { ...makeConfig(), deployments: [makeDep()] };
+    (service as any).states.set('s1::d1', {
+      serverId: 's1',
+      deploymentId: 'd1',
+      state: 'deploying',
+    });
+
+    await expect(
+      service.redeployAll(makeCtx('s1', 'd1', 'RedeployAll'), config),
+    ).resolves.toBeUndefined();
+
+    expect(mockPlugin.deployFull).toHaveBeenCalledOnce();
+    expect(service.getDeploymentState('s1', 'd1')).toBe('synced');
+  });
+
   it('cancels fullRedeploy after pre-hooks and before plugin execution', async () => {
     const config = {
       ...makeConfig(),

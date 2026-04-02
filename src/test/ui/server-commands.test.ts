@@ -3,6 +3,7 @@ import type { DeploymentConfig, ServerConfig } from '@core/types/domain';
 import { ok, err } from '@core/result';
 import { JsmError } from '@core/errors/JsmError';
 import { ErrorCode } from '@core/errors/codes';
+import * as path from 'path';
 
 const mockShowErrorMessage = vi.fn();
 const mockShowInfoMessage = vi.fn();
@@ -13,6 +14,7 @@ const mockShowOpenDialog = vi.fn();
 const mockShowTextDocument = vi.fn();
 const mockWriteFile = vi.fn();
 const mockReadFile = vi.fn();
+const mockAccess = vi.fn();
 const mockWithProgress = vi.fn(async (_options: unknown, task: (progress: { report: ReturnType<typeof vi.fn> }, token: { isCancellationRequested: boolean; onCancellationRequested: (listener: () => void) => { dispose: ReturnType<typeof vi.fn> } }) => unknown) =>
   task(
     { report: vi.fn() },
@@ -26,6 +28,7 @@ const mockWithProgress = vi.fn(async (_options: unknown, task: (progress: { repo
 vi.mock('fs/promises', () => ({
   writeFile: (...args: unknown[]) => mockWriteFile(...args),
   readFile: (...args: unknown[]) => mockReadFile(...args),
+  access: (...args: unknown[]) => mockAccess(...args),
 }));
 const mockOpenTextDocument = vi.fn(async (uri: { fsPath: string; path: string }) => ({ uri }));
 const mockExecuteCommand = vi.fn();
@@ -193,6 +196,7 @@ describe('Server Commands', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     Object.keys(registeredHandlers).forEach(key => delete registeredHandlers[key]);
+    mockAccess.mockResolvedValue(undefined);
     deps = mockDeps();
     registerServerCommands(deps as any);
   });
@@ -300,6 +304,9 @@ describe('Server Commands', () => {
     it('does nothing when arg is not a server context', () => {
       invoke('jsm.server.showLogs', undefined);
       expect(deps.logChannel.showLogs).not.toHaveBeenCalled();
+      expect(mockShowErrorMessage).toHaveBeenCalledWith(
+        expect.stringContaining('requires a server selected'),
+      );
     });
   });
 
@@ -377,6 +384,15 @@ describe('Server Commands', () => {
       expect(deps.lifecycle.getAndClearQueueDrainFailure).toHaveBeenCalledWith(serverKey);
       expect(mockShowErrorMessage).toHaveBeenCalledWith(
         expect.stringContaining('start failed'),
+      );
+    });
+
+    it('jsm.server.startRun reports a missing server selection instead of silently no-oping', async () => {
+      await invoke('jsm.server.startRun', undefined);
+
+      expect(deps.lifecycle.start).not.toHaveBeenCalled();
+      expect(mockShowErrorMessage).toHaveBeenCalledWith(
+        expect.stringContaining('requires a server selected'),
       );
     });
   });
@@ -683,6 +699,71 @@ describe('Server Commands', () => {
       expect(mockDuplicate).toHaveBeenCalledWith(server, { keepName: true });
       expect(mockShowInfoMessage).toHaveBeenCalledWith(expect.stringContaining('Imported 1 server(s)'));
       expect(deps.treeProvider.requestRefresh).toHaveBeenCalled();
+    });
+
+    it('shows a partial-success warning when import stops after some servers were duplicated', async () => {
+      const first = makeServer('srv-1', 'Server One');
+      const second = makeServer('srv-2', 'Server Two');
+      mockShowOpenDialog.mockResolvedValue([{ fsPath: '/f.json' }]);
+      mockReadFile.mockResolvedValue(JSON.stringify({ servers: [first, second] }));
+      deps.schemaValidator.validate.mockReturnValue(ok(undefined));
+      mockShowQuickPick.mockResolvedValue({ scope: { uri: 'file:///ws', name: 'ws', fsPath: '/ws' } });
+      const mockDuplicate = vi.fn()
+        .mockResolvedValueOnce(ok({ ...first, id: 'dup-1', instancePath: '/new-1' }))
+        .mockResolvedValueOnce(err(new JsmError({ code: ErrorCode.InvalidConfig, message: 'Second import failed' })));
+      deps.workspaceRegistry.getEntry.mockReturnValue({ provisioningService: { duplicateServer: mockDuplicate } });
+
+      await invoke('jsm.server.import');
+
+      expect(mockShowWarningMessage).toHaveBeenCalledWith(
+        expect.stringContaining('Imported 1 server(s)'),
+      );
+      expect(mockShowWarningMessage).toHaveBeenCalledWith(
+        expect.stringContaining('Second import failed'),
+      );
+      expect(mockShowInfoMessage).not.toHaveBeenCalledWith(expect.stringContaining('Imported 1 server(s)'));
+      expect(deps.treeProvider.requestRefresh).toHaveBeenCalled();
+    });
+  });
+
+  describe('file opening boundaries', () => {
+    it('jsm.server.openConfig shows a command-side error when opening the selected file fails', async () => {
+      deps.pluginRegistry.get.mockReturnValue({
+        getConfigSources: vi.fn(async () => ok([
+          {
+            id: 'instance-server-xml',
+            title: 'server.xml',
+            kind: 'file',
+            path: '/tmp/inst/conf/server.xml',
+            description: 'Instance config',
+          },
+        ])),
+      });
+      mockOpenTextDocument.mockRejectedValue(new Error('open failed'));
+
+      await invoke('jsm.server.openConfig', createServerNode());
+
+      expect(mockShowErrorMessage).toHaveBeenCalledWith(
+        expect.stringContaining('open failed'),
+      );
+    });
+
+    it('jsm.server.openFolder shows a command-side error when revealFileInOS fails', async () => {
+      const server = {
+        ...makeServer(),
+        instancePath: path.dirname(process.cwd()),
+      };
+      mockExecuteCommand.mockRejectedValue(new Error('reveal failed'));
+
+      await invoke('jsm.server.openFolder', createServerNodeWithWorkspace('file:///ws', server));
+
+      expect(mockExecuteCommand).toHaveBeenCalledWith(
+        'revealFileInOS',
+        expect.objectContaining({ fsPath: path.dirname(process.cwd()) }),
+      );
+      expect(mockShowErrorMessage).toHaveBeenCalledWith(
+        expect.stringContaining('reveal failed'),
+      );
     });
   });
 });

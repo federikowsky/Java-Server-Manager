@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { ErrorCode } from '@core/errors/codes';
 import { TomcatServerXmlService } from '@plugins/tomcat/TomcatServerXmlService';
 import type { SslConfig, Logger } from '@core/types';
 
@@ -210,5 +211,44 @@ describe('TomcatServerXmlService — patchSsl', () => {
     const result = service.patchSsl(TEMPLATE, sslConfig());
 
     expect(result).toContain('protocol="org.apache.coyote.http11.Http11NioProtocol"');
+  });
+});
+
+describe('TomcatServerXmlService — patchAjp', () => {
+  const service = new TomcatServerXmlService(noopLogger());
+
+  it('removes AJP connectors when disableAjp is true', () => {
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<Server port="8005" shutdown="SHUTDOWN">
+  <Service name="Catalina">
+    <Connector port="8080" protocol="HTTP/1.1" />
+    <Connector port="8009" protocol="AJP/1.3" />
+  </Service>
+</Server>`;
+
+    const result = service.patchAjp(xml, true);
+
+    expect(result).toContain('HTTP/1.1');
+    expect(result).not.toContain('AJP/1.3');
+  });
+
+  it('returns original XML when disableAjp is false', () => {
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<Server port="8005" shutdown="SHUTDOWN">
+  <Service name="Catalina">
+    <Connector port="8009" protocol="AJP/1.3" />
+  </Service>
+</Server>`;
+
+    expect(service.patchAjp(xml, false)).toBe(xml);
+  });
+
+  it('fails explicitly when disableAjp is true and Catalina service is missing', () => {
+    const xml = '<?xml version="1.0"?><Server><Service name="Other"><Engine/></Service></Server>';
+
+    expect(() => service.patchAjp(xml, true)).toThrowError(expect.objectContaining({
+      code: ErrorCode.InvalidConfig,
+      message: expect.stringContaining('<Service name="Catalina"> not found'),
+    }));
   });
 });

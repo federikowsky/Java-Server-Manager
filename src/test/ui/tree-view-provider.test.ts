@@ -199,6 +199,19 @@ describe('ServerTreeViewProvider', () => {
       const [serverNode] = provider.getChildren();
       expect(provider.getTreeItem(serverNode as any)).toBe(serverNode);
     });
+
+    it('builds untrusted markdown tooltips for server and deployment nodes', () => {
+      const dep = makeDep('d1', 'myapp');
+      const server = makeServer('s1', 'Tomcat', [dep]);
+      ds = mockDataSource([server]);
+      provider = new ServerTreeViewProvider(ds);
+
+      const [serverNode] = provider.getChildren() as InstanceType<typeof ServerNode>[];
+      const [deploymentNode] = provider.getChildren(serverNode as any) as InstanceType<typeof DeploymentNode>[];
+
+      expect((serverNode.tooltip as { isTrusted?: boolean }).isTrusted).toBe(false);
+      expect((deploymentNode.tooltip as { isTrusted?: boolean }).isTrusted).toBe(false);
+    });
   });
 
   /* ── Edge Cases: Server States ───────────────────────────────────────── */

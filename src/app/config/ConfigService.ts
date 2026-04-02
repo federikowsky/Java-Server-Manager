@@ -211,6 +211,13 @@ export class ConfigService {
       }));
     }
 
+    if (!server.deployments.some(d => d.id === deploymentId)) {
+      return err(new JsmError({
+        code: ErrorCode.InvalidConfig,
+        message: `Deployment '${deploymentId}' not found on server '${serverId}'`,
+      }));
+    }
+
     const updated: ServerConfig = {
       ...server,
       deployments: server.deployments.filter(d => d.id !== deploymentId),

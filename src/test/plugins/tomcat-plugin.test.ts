@@ -542,6 +542,70 @@ describe('TomcatPlugin — initializeInstancePath', () => {
     expect(xml).toContain('AJP');
   });
 
+  it('removes AJP when no template and disableAjp is true', async () => {
+    const homePath = path.join(tmpDir, 'tomcat-home');
+    await createFakeTomcatHome(homePath);
+    const instancePath = path.join(tmpDir, 'instance');
+    const config = fakeConfig(homePath, instancePath, {
+      pluginConfig: { type: 'tomcat', shutdownPort: 8005, disableAjp: true },
+    });
+
+    await plugin.initializeInstancePath(homePath, instancePath, config);
+    const xml = await fs.readFile(path.join(instancePath, 'conf', 'server.xml'), 'utf-8');
+
+    expect(xml).not.toContain('AJP');
+  });
+
+  it('removes AJP from template server.xml when disableAjp is true', async () => {
+    const homePath = path.join(tmpDir, 'tomcat-home');
+    await createFakeTomcatHome(homePath);
+    const instancePath = path.join(tmpDir, 'instance');
+    const templatePath = path.join(tmpDir, 'server.xml.template');
+    await fs.writeFile(
+      templatePath,
+      `<?xml version="1.0" encoding="UTF-8"?>
+<Server port="\${shutdown.port}" shutdown="\${shutdown.command}">
+  <Service name="Catalina">
+    <Connector port="\${http.port}" protocol="HTTP/1.1" />
+    <Connector port="8009" protocol="AJP/1.3" />
+    <Engine name="Catalina" defaultHost="localhost">
+      <Host name="localhost" appBase="webapps" />
+    </Engine>
+  </Service>
+</Server>`,
+      'utf-8',
+    );
+    plugin = new TomcatPlugin(noopLogger(), {
+      serverXmlTemplatePath: templatePath,
+      keyValueStore: mockKeyValueStore(),
+    });
+
+    await plugin.initializeInstancePath(homePath, instancePath, fakeConfig(homePath, instancePath));
+    const xml = await fs.readFile(path.join(instancePath, 'conf', 'server.xml'), 'utf-8');
+
+    expect(xml).toContain('${http.port}');
+    expect(xml).not.toContain('AJP');
+  });
+
+  it('fails initializeInstancePath when disableAjp is true and Catalina service is missing', async () => {
+    const homePath = path.join(tmpDir, 'tomcat-home');
+    await createFakeTomcatHome(homePath);
+    await fs.writeFile(
+      path.join(homePath, 'conf', 'server.xml'),
+      '<?xml version="1.0" encoding="UTF-8"?><Server><Service name="Other"><Engine/></Service></Server>',
+      'utf-8',
+    );
+    const instancePath = path.join(tmpDir, 'instance');
+
+    const result = await plugin.initializeInstancePath(homePath, instancePath, fakeConfig(homePath, instancePath));
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('DeployFailed');
+      expect(result.error.details).toContain('<Service name="Catalina"> not found');
+    }
+  });
+
   it('stages the startup listener jar when template has listener', async () => {
     const homePath = path.join(tmpDir, 'tomcat-home');
     await createFakeTomcatHome(homePath);
@@ -816,6 +880,30 @@ describe('TomcatPlugin — runtime lifecycle', () => {
 
     expect(result.ok).toBe(true);
     expect(store.set).toHaveBeenCalledWith('jsm.tomcat.shutdownPort.srv-1', 8111);
+    child.emitExit(0);
+  });
+
+  it('starts scanning from the configured shutdown port instead of the default port', async () => {
+    const homePath = path.join(tmpDir, 'tomcat-home');
+    await createFakeTomcatHome(homePath);
+    const child = createFakeChildProcess(4323);
+    const store = spyKeyValueStore();
+    plugin = new TomcatPlugin(noopLogger(), { keyValueStore: store.store });
+
+    const findFreePortSpy = vi.spyOn(plugin['portScanner'], 'findFreePort').mockResolvedValue(9010);
+    vi.spyOn(plugin['spawner'], 'spawn').mockImplementation((opts) => {
+      expect(opts.env?.['CATALINA_OPTS']).toContain('-Dshutdown.port=9010');
+      return child;
+    });
+
+    const config = fakeConfig(homePath, path.join(tmpDir, 'instance'), {
+      pluginConfig: { type: 'tomcat', shutdownPort: 9010, disableAjp: true },
+    });
+    const result = await plugin.start(dummyCtx(), config, 'run');
+
+    expect(result.ok).toBe(true);
+    expect(findFreePortSpy).toHaveBeenCalledWith(9010);
+    expect(store.set).toHaveBeenCalledWith('jsm.tomcat.shutdownPort.srv-1', 9010);
     child.emitExit(0);
   });
 

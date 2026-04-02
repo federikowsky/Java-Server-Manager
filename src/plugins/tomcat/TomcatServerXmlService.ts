@@ -1,5 +1,7 @@
 import { XMLBuilder, XMLParser } from 'fast-xml-parser';
 import type { SslConfig, Logger } from '@core/types';
+import { JsmError } from '@core/errors/JsmError';
+import { ErrorCode } from '@core/errors/codes';
 import { DEFAULT_TRUSTSTORE_TYPE, DEFAULT_SSL_PROTOCOLS, DEFAULT_SSL_CIPHERS } from '../../constants';
 
 /** Parsed XML node in fast-xml-parser preserveOrder format. */
@@ -164,6 +166,31 @@ export class TomcatServerXmlService {
       const connector = this.buildSslConnector(ssl);
       this.insertBefore(service, (node) => 'Engine' in node, connector);
     }
+
+    return this.build(doc);
+  }
+
+  /** Remove AJP connectors when disabled. */
+  patchAjp(serverXml: string, disableAjp: boolean): string {
+    if (!disableAjp) {
+      return serverXml;
+    }
+
+    const doc = this.parse(serverXml);
+    const service = this.findService(doc);
+    if (!service) {
+      throw new JsmError({
+        code: ErrorCode.InvalidConfig,
+        message: 'TomcatServerXmlService: <Service name="Catalina"> not found while disableAjp is enabled',
+      });
+    }
+
+    this.removeChildren(service, (node) => {
+      if (!('Connector' in node)) return false;
+      const attrs = node[':@'] as Record<string, unknown> | undefined;
+      const protocol = String(attrs?.['@_protocol'] ?? '');
+      return protocol.toUpperCase().startsWith('AJP/');
+    });
 
     return this.build(doc);
   }

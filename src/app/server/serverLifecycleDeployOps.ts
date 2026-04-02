@@ -39,6 +39,14 @@ interface TargetedDeploymentOperationContext {
   ctx: OperationContext;
 }
 
+function appendDeploySyncFailure(
+  ctx: OperationContext,
+  deployName: string,
+  error: JsmError,
+): void {
+  ctx.output.appendLine(`Deploy sync failed for '${deployName}': ${error.message}`);
+}
+
 function resolveRunningConfig(
   deps: Pick<ServerLifecycleDeployDeps, 'resolveServerConfig'>,
   server: ServerLifecycleDeployEntry,
@@ -160,6 +168,18 @@ function resolveDeploySyncBatch(entry: QueueEntry): FileChangeBatch | undefined 
     : undefined;
 }
 
+function requireDeploySyncBatch(entry: QueueEntry): FileChangeBatch {
+  const batch = resolveDeploySyncBatch(entry);
+  if (batch) {
+    return batch;
+  }
+
+  throw new JsmError({
+    code: ErrorCode.InvalidConfig,
+    message: 'DeploySync requires fileChangeBatch metadata',
+  });
+}
+
 export async function runDeployFullOperation(
   deps: ServerLifecycleDeployDeps,
   server: ServerLifecycleDeployEntry,
@@ -231,17 +251,8 @@ export async function runDeploySyncOperation(
   operationId: OperationContext['operationId'],
   cancel: OperationContext['cancel'],
 ): Promise<void> {
-  const deploymentId = entry.targetDeploymentId;
-  if (!deploymentId) {
-    deps.logger.warn('ServerLifecycle: DeploySync missing targetDeploymentId');
-    return;
-  }
-
-  const batch = resolveDeploySyncBatch(entry);
-  if (!batch) {
-    deps.logger.warn('ServerLifecycle: DeploySync missing fileChangeBatch meta');
-    return;
-  }
+  const deploymentId = requireTargetDeploymentId(entry, 'DeploySync');
+  const batch = requireDeploySyncBatch(entry);
 
   let context: TargetedDeploymentOperationContext;
   try {
@@ -269,11 +280,14 @@ export async function runDeploySyncOperation(
       batch,
     );
   } catch (cause) {
+    const error = cause instanceof JsmError ? cause : JsmError.fromUnknown(cause);
+    appendDeploySyncFailure(context.ctx, context.deployment.deployName, error);
     deps.onDeploySyncFailure?.(server.serverKey, deploymentId);
-    throw cause;
+    throw error;
   }
 
   if (!result.ok) {
+    appendDeploySyncFailure(context.ctx, context.deployment.deployName, result.error);
     deps.onDeploySyncFailure?.(server.serverKey, deploymentId);
     throw result.error;
   }

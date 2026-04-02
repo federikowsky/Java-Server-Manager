@@ -663,6 +663,94 @@ describe('TomcatPlugin — runtime lifecycle', () => {
     expect(spawnSpy).not.toHaveBeenCalled();
   });
 
+  it('falls back to non-monitor startup when the listener jar exists but server.xml does not wire StartupLifecycleListener', async () => {
+    const homePath = path.join(tmpDir, 'tomcat-home');
+    const instancePath = path.join(tmpDir, 'instance');
+    const listenerJarPath = path.join(tmpDir, 'listener.jar');
+    await createFakeTomcatHome(homePath);
+    await fs.mkdir(path.join(instancePath, 'conf'), { recursive: true });
+    await fs.copyFile(path.join(homePath, 'conf', 'server.xml'), path.join(instancePath, 'conf', 'server.xml'));
+    await fs.writeFile(listenerJarPath, 'listener-jar');
+
+    const child = createFakeChildProcess(4320);
+    const store = spyKeyValueStore();
+    plugin = new TomcatPlugin(noopLogger(), {
+      keyValueStore: store.store,
+      startupListenerJarPath: listenerJarPath,
+    });
+
+    vi.spyOn(plugin['portScanner'], 'findFreePort').mockResolvedValue(8123);
+    const monitorCreateSpy = vi.spyOn(TomcatStartupMonitor, 'create');
+    const spawnSpy = vi.spyOn(plugin['spawner'], 'spawn').mockImplementation((opts) => {
+      expect(opts.env?.['CATALINA_OPTS'] ?? '').not.toContain('-Djsm.startup.callback.url=');
+      return child;
+    });
+
+    const result = await plugin.start(dummyCtx(), fakeConfig(homePath, instancePath), 'run');
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.startupMonitor).toBeUndefined();
+    }
+    expect(monitorCreateSpy).not.toHaveBeenCalled();
+    expect(spawnSpy).toHaveBeenCalledTimes(1);
+    child.emitExit(0);
+  });
+
+  it('returns the startup monitor when StartupLifecycleListener is wired in server.xml', async () => {
+    const homePath = path.join(tmpDir, 'tomcat-home');
+    const instancePath = path.join(tmpDir, 'instance');
+    const listenerJarPath = path.join(tmpDir, 'listener.jar');
+    await createFakeTomcatHome(homePath);
+    await fs.mkdir(path.join(instancePath, 'conf'), { recursive: true });
+    await fs.writeFile(
+      path.join(instancePath, 'conf', 'server.xml'),
+      `<?xml version="1.0" encoding="UTF-8"?>
+<Server port="8005" shutdown="SHUTDOWN">
+  <Listener className="com.githubcopilot.jsm.tomcat.StartupLifecycleListener" />
+  <Service name="Catalina">
+    <Connector port="8080" protocol="HTTP/1.1" />
+  </Service>
+</Server>`,
+    );
+    await fs.writeFile(listenerJarPath, 'listener-jar');
+
+    const child = createFakeChildProcess(4325);
+    const store = spyKeyValueStore();
+    plugin = new TomcatPlugin(noopLogger(), {
+      keyValueStore: store.store,
+      startupListenerJarPath: listenerJarPath,
+    });
+
+    vi.spyOn(plugin['portScanner'], 'findFreePort').mockResolvedValue(8124);
+    const startupMonitor = {
+      callbackUrl: 'http://127.0.0.1:3001/callback',
+      token: 'token-1',
+      startupId: 'startup-1',
+      bindProcess: vi.fn(),
+      waitForOutcome: vi.fn(),
+      dispose: vi.fn(async () => {}),
+    } as unknown as TomcatStartupMonitor;
+    const monitorCreateSpy = vi.spyOn(TomcatStartupMonitor, 'create').mockResolvedValue(startupMonitor);
+    const spawnSpy = vi.spyOn(plugin['spawner'], 'spawn').mockImplementation((opts) => {
+      expect(opts.env?.['JAVA_OPTS']).toContain('-Djsm.startup.callback.url=http://127.0.0.1:3001/callback');
+      expect(opts.env?.['JAVA_OPTS']).toContain('-Djsm.startup.callback.token=token-1');
+      expect(opts.env?.['JAVA_OPTS']).toContain('-Djsm.startup.callback.startupId=startup-1');
+      return child;
+    });
+
+    const result = await plugin.start(dummyCtx(), fakeConfig(homePath, instancePath), 'run');
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.startupMonitor).toBe(startupMonitor);
+    }
+    expect(monitorCreateSpy).toHaveBeenCalledOnce();
+    expect(spawnSpy).toHaveBeenCalledTimes(1);
+    expect((startupMonitor as { bindProcess: ReturnType<typeof vi.fn> }).bindProcess).toHaveBeenCalledWith(child);
+    child.emitExit(0);
+  });
+
   it('shapes debug start env and JPDA args without changing startup behavior', async () => {
     const homePath = path.join(tmpDir, 'tomcat-home');
     await createFakeTomcatHome(homePath);

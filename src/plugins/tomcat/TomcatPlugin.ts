@@ -57,6 +57,7 @@ const INSTANCE_SEED_DIRS = ['conf'] as const;
 /** Directories created empty on instancePath initialization. */
 const INSTANCE_EMPTY_DIRS = ['logs', 'temp', 'work', 'webapps'] as const;
 const TOMCAT_STARTUP_LISTENER_FILENAME = 'jsm-tomcat-startup-listener.jar';
+const TOMCAT_STARTUP_LISTENER_CLASS = 'com.githubcopilot.jsm.tomcat.StartupLifecycleListener';
 const DEFAULT_SHUTDOWN_PORT = 8005;
 const DEFAULT_SHUTDOWN_COMMAND = 'SHUTDOWN';
 const SHUTDOWN_PORT_KEY_PREFIX = 'jsm.tomcat.shutdownPort.';
@@ -1128,6 +1129,21 @@ export class TomcatPlugin implements IServerPlugin {
       return ok(undefined);
     }
 
+    if (!(await exists(this.startupListenerJarPath))) {
+      return err(new JsmError({
+        code: ErrorCode.SourceNotFound,
+        message: `Tomcat startup listener asset not found: ${this.startupListenerJarPath}`,
+      }));
+    }
+
+    const listenerConfiguredResult = await this.isStartupListenerConfigured(config);
+    if (!listenerConfiguredResult.ok) {
+      return listenerConfiguredResult;
+    }
+    if (!listenerConfiguredResult.value) {
+      return ok(undefined);
+    }
+
     const prepareResult = await this.prepareStartupListener(config);
     if (!prepareResult.ok) {
       return prepareResult;
@@ -1143,6 +1159,32 @@ export class TomcatPlugin implements IServerPlugin {
       return err(new JsmError({
         code: ErrorCode.Unknown,
         message: `Failed to initialize Tomcat startup callback for ${config.name}`,
+        details: cause instanceof Error ? cause.message : String(cause),
+        cause,
+      }));
+    }
+  }
+
+  private async isStartupListenerConfigured(
+    config: ServerConfig,
+  ): Promise<Result<boolean, JsmError>> {
+    const serverXmlPath = path.join(config.instancePath, 'conf', 'server.xml');
+
+    if (!(await exists(serverXmlPath))) {
+      return err(new JsmError({
+        code: ErrorCode.InvalidConfig,
+        message: `Tomcat instance server.xml not found at ${serverXmlPath}`,
+        suggestedFix: ['Initialize the Tomcat instance path before starting the server'],
+      }));
+    }
+
+    try {
+      const serverXml = await fs.readFile(serverXmlPath, 'utf-8');
+      return ok(serverXml.includes(TOMCAT_STARTUP_LISTENER_CLASS));
+    } catch (cause) {
+      return err(new JsmError({
+        code: ErrorCode.ConfigReadFailed,
+        message: `Failed to inspect Tomcat instance server.xml for ${config.name}`,
         details: cause instanceof Error ? cause.message : String(cause),
         cause,
       }));

@@ -38,4 +38,24 @@ describe('ConfigRepo negative paths (extended)', () => {
       expect(result.error.message).toContain('parse');
     }
   });
+
+  it('rejects duplicate server ids before mutating the live cache', async () => {
+    const configPath = path.join(tmpDir, '.vscode', 'jsm.servers.json');
+    await fs.writeFile(configPath, JSON.stringify({
+      servers: [
+        { id: 'srv-1', name: 'A' },
+        { id: 'srv-1', name: 'B' },
+      ],
+    }), 'utf-8');
+
+    const repo = new ConfigRepo(tmpDir, mockLogger());
+    const result = await repo.load();
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCode.InvalidConfig);
+      expect(result.error.message).toContain("Duplicate server id 'srv-1'");
+    }
+    expect(repo.getAll()).toEqual([]);
+  });
 });

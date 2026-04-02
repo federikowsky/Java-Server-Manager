@@ -358,6 +358,27 @@ describe('Server Commands', () => {
         expect.stringContaining('prep failed'),
       );
     });
+
+    it('jsm.server.startRun surfaces queue drain failure after waiting for the queued lifecycle op', async () => {
+      const srv = makeServer('srv-1', 'Tom');
+      deps.workspaceRegistry.getServer.mockReturnValue(srv);
+      deps.lifecycle.getAndClearQueueDrainFailure.mockReturnValue(
+        new JsmError({ code: ErrorCode.ProcessSpawnFailed, message: 'start failed' }),
+      );
+
+      await invoke('jsm.server.startRun', {
+        serverId: 'srv-1',
+        workspaceFolderUri: 'file:///ws',
+      });
+
+      const serverKey = makeWorkspaceServerKey('file:///ws', 'srv-1');
+      expect(deps.lifecycle.start).toHaveBeenCalledWith(serverKey, 'run');
+      expect(deps.lifecycle.waitUntilQueueIdle).toHaveBeenCalledWith(serverKey);
+      expect(deps.lifecycle.getAndClearQueueDrainFailure).toHaveBeenCalledWith(serverKey);
+      expect(mockShowErrorMessage).toHaveBeenCalledWith(
+        expect.stringContaining('start failed'),
+      );
+    });
   });
 
   describe('dashboard entry points', () => {

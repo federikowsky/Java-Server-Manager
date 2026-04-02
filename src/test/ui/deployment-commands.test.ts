@@ -481,6 +481,8 @@ describe('Deployment Commands', () => {
       const node = createDeploymentNode('srv-1', dep);
       await invoke('jsm.deployment.redeploy', node);
 
+      expect(deps.lifecycle.waitUntilQueueIdle).toHaveBeenCalledWith('srv-1');
+      expect(deps.lifecycle.getAndClearQueueDrainFailure).toHaveBeenCalledWith('srv-1');
       expect(mockShowErrorMessage).toHaveBeenCalledWith(
         expect.stringContaining('Deploy error'),
       );

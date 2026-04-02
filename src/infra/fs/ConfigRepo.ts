@@ -12,6 +12,11 @@ interface WorkspaceConfig {
   servers: ServerConfig[];
 }
 
+export interface ParsedWorkspaceConfig {
+  content: string;
+  servers: ServerConfig[];
+}
+
 /**
  * Config file repository for `.vscode/jsm.servers.json`.
  * - In-memory Map cache
@@ -34,13 +39,11 @@ export class ConfigRepo {
     return this.configPath;
   }
 
-  /** Load config from disk. Returns all servers. */
-  async load(): Promise<Result<ServerConfig[], JsmError>> {
+  /** Read and parse workspace config without mutating the live cache. */
+  async readWorkspace(): Promise<Result<ParsedWorkspaceConfig, JsmError>> {
     const fileExists = await exists(this.configPath);
     if (!fileExists) {
-      this.cache.clear();
-      this.lastKnownContent = '';
-      return ok([]);
+      return ok({ content: '', servers: [] });
     }
 
     const readResult = await readFileSafe(this.configPath);
@@ -48,13 +51,23 @@ export class ConfigRepo {
 
     try {
       const parsed: WorkspaceConfig = JSON.parse(readResult.value);
-      this.cache.clear();
-      for (const server of parsed.servers ?? []) {
-        this.cache.set(server.id, server);
+      const servers = parsed.servers ?? [];
+      const seen = new Set<string>();
+
+      for (const server of servers) {
+        if (seen.has(server.id)) {
+          return err(new JsmError({
+            code: ErrorCode.InvalidConfig,
+            message: `Duplicate server id '${server.id}' in workspace config`,
+          }));
+        }
+        seen.add(server.id);
       }
-      this.lastKnownContent = readResult.value;
-      this.logger.debug(`ConfigRepo: loaded ${this.cache.size} servers`);
-      return ok([...this.cache.values()]);
+
+      return ok({
+        content: readResult.value,
+        servers,
+      });
     } catch (cause) {
       return err(new JsmError({
         code: ErrorCode.ConfigReadFailed,
@@ -63,6 +76,25 @@ export class ConfigRepo {
         cause,
       }));
     }
+  }
+
+  /** Replace the in-memory cache from an already-validated workspace snapshot. */
+  replaceAll(servers: readonly ServerConfig[], content: string): void {
+    this.cache.clear();
+    for (const server of servers) {
+      this.cache.set(server.id, server);
+    }
+    this.lastKnownContent = content;
+    this.logger.debug(`ConfigRepo: loaded ${this.cache.size} servers`);
+  }
+
+  /** Load config from disk. Returns all servers. */
+  async load(): Promise<Result<ServerConfig[], JsmError>> {
+    const parsedResult = await this.readWorkspace();
+    if (!parsedResult.ok) return parsedResult;
+
+    this.replaceAll(parsedResult.value.servers, parsedResult.value.content);
+    return ok(this.getAll());
   }
 
   /** Get a server config by ID from cache. Call `load()` first. */

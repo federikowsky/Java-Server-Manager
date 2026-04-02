@@ -371,6 +371,7 @@ export class ServerLifecycle {
         kind,
         error,
       });
+      throw error;
     } finally {
       if (server.activeCancellation === cancellation) {
         server.activeCancellation = undefined;
@@ -397,6 +398,7 @@ export class ServerLifecycle {
     const { config, runtime } = server;
     const plugin = this.getPlugin(config);
     const timeoutMs = this.getStartTimeoutMs(config, mode);
+    let requiresFailedStartCleanup = false;
 
     const ctx = makeCtx(
       server.serverKey,
@@ -422,6 +424,7 @@ export class ServerLifecycle {
 
       const { pid, startupMonitor } = startResult.value;
       await this.deps.pidManager.writePid(server.serverKey, pid);
+      requiresFailedStartCleanup = true;
       throwIfCancelled(ctx.cancel, `Start operation for '${config.name}' was cancelled while waiting for readiness.`);
 
       const ready = await this.waitForStartReadiness(config, timeoutMs, ctx, startupMonitor);
@@ -444,13 +447,19 @@ export class ServerLifecycle {
 
       await this.runPostStartVerification(server, plugin, ctx);
       await this.attachDebuggerAfterStart(server, mode, ctx);
+      requiresFailedStartCleanup = false;
 
       if (hookEvent) {
         await this.runServerHooks(server, ctx, 'post', hookEvent);
       }
     } catch (cause) {
       const error = cause instanceof JsmError ? cause : JsmError.fromUnknown(cause);
+      if (requiresFailedStartCleanup) {
+        await this.cleanupAfterFailedStart(server, plugin);
+      }
       if (runtime.state === 'starting') {
+        runtime.transition('error', { error });
+      } else if (runtime.state === 'running') {
         runtime.transition('error', { error });
       }
       if (!(error.code === ErrorCode.Cancelled && runtime.state === 'stopped')) {
@@ -458,6 +467,43 @@ export class ServerLifecycle {
       }
       throw error;
     }
+  }
+
+  private async cleanupAfterFailedStart(
+    server: ServerEntry,
+    plugin: IServerPlugin,
+  ): Promise<void> {
+    const { config, runtime } = server;
+    const cleanupCtx = makeCtx(
+      server.serverKey,
+      'LifecycleStop',
+      config.timeouts?.stopMs ?? 20_000,
+      createCancellationTokenSource().token,
+      this.deps.getOutputSink?.(server.serverKey, config.name),
+    );
+
+    try {
+      const stopResult = await plugin.stop(cleanupCtx, config);
+      if (!stopResult.ok) {
+        this.deps.logger.warn(`ServerLifecycle: failed-start cleanup stop error for '${config.name}'`, stopResult.error);
+      }
+    } catch (cause) {
+      this.deps.logger.warn(`ServerLifecycle: failed-start cleanup threw for '${config.name}'`, cause);
+    }
+
+    try {
+      await this.deps.pidManager.clearPid(server.serverKey);
+    } catch (cause) {
+      this.deps.logger.warn(`ServerLifecycle: failed to clear PID after start failure for '${config.name}'`, cause);
+    }
+
+    try {
+      await this.deps.debugAttacher.detach(server.serverKey);
+    } catch (cause) {
+      this.deps.logger.warn(`ServerLifecycle: failed to detach debugger after start failure for '${config.name}'`, cause);
+    }
+
+    runtime.setDebugAttached(false);
   }
 
   private async waitForStartReadiness(

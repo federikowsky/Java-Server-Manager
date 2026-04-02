@@ -52,10 +52,14 @@ export class ConfigService {
    * Returns all loaded server configs.
    */
   async loadWorkspace(): Promise<Result<ServerConfig[], JsmError>> {
-    const loadResult = await this.repo.load();
+    const loadResult = await this.repo.readWorkspace();
     if (!loadResult.ok) return loadResult;
 
-    const servers = loadResult.value;
+    const validateResult = this.validateLoadedServers(loadResult.value.servers);
+    if (!validateResult.ok) return validateResult;
+
+    this.repo.replaceAll(loadResult.value.servers, loadResult.value.content);
+    const servers = this.repo.getAll();
     this.logger.info(`ConfigService: loaded ${servers.length} servers`);
     return ok(servers);
   }
@@ -226,10 +230,31 @@ export class ConfigService {
 
   /** Reload config from disk (after external change). */
   async reload(): Promise<Result<ServerConfig[], JsmError>> {
-    const result = await this.repo.load();
-    if (result.ok) {
-      this.bus.emit('ConfigChanged', { source: 'external', workspaceFolderUri: this.workspaceFolderUri });
+    const loadResult = await this.repo.readWorkspace();
+    if (!loadResult.ok) return loadResult;
+
+    const validateResult = this.validateLoadedServers(loadResult.value.servers);
+    if (!validateResult.ok) return validateResult;
+
+    this.repo.replaceAll(loadResult.value.servers, loadResult.value.content);
+    const servers = this.repo.getAll();
+    this.bus.emit('ConfigChanged', { source: 'external', workspaceFolderUri: this.workspaceFolderUri });
+    return ok(servers);
+  }
+
+  private validateLoadedServers(servers: readonly ServerConfig[]): Result<void, JsmError> {
+    for (const server of servers) {
+      const securityResult = validateSecurityPolicy(server);
+      if (!securityResult.ok) {
+        return securityResult;
+      }
+
+      const schemaResult = this.validator.validate(server, 'server-config');
+      if (!schemaResult.ok) {
+        return schemaResult;
+      }
     }
-    return result;
+
+    return ok(undefined);
   }
 }

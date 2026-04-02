@@ -29,13 +29,14 @@ import { DeploymentService } from '@app/deployment';
 import { AutoSyncService } from '@app/sync';
 import { TemplateService } from '@app/templates';
 import { HookRunner } from '@app/hooks';
-import type { HookExecutor } from '@app/hooks';
+import type { HookExecutor, HookExecutionRequest } from '@app/hooks';
 import { OutputSinkAdapter, MementoAdapter, DebugAdapter, FileWatcherAdapter } from '@ui/adapters';
 import { ServerLogChannel } from '@ui/channels';
 import { ServerTreeViewProvider } from '@ui/tree';
 import { DashboardPanel } from '@ui/webviews/panels/DashboardPanel';
 import { registerServerCommands, registerDeploymentCommands } from '@ui/commands';
 import {
+  HOOK_PHASE_BUDGET_MS,
   MAIN_OUTPUT_CHANNEL,
   VIEW_ID,
   WORKSPACE_CONFIG_DIR,
@@ -163,16 +164,22 @@ function createHookExecutor(params: {
           return taskResult;
         }
 
+        const waitBudgetMs = resolveHookTaskWaitBudgetMs(request);
+        if (waitBudgetMs <= 0) {
+          return err(new JsmError({
+            code: ErrorCode.Timeout,
+            message: `VS Code task '${taskName}' timed out before it could start within the parent operation budget`,
+          }));
+        }
+
         request.parent.output.appendLine(`Starting VS Code task hook '${taskName}'`);
         const taskExecution = await vscode.tasks.executeTask(taskResult.value);
-        const exitCode = await new Promise<number | undefined>((resolve) => {
-          const d = vscode.tasks.onDidEndTaskProcess((ev) => {
-            if (ev.execution === taskExecution) {
-              d.dispose();
-              resolve(ev.exitCode);
-            }
-          });
-        });
+        const exitCodeResult = await waitForTaskProcessExit(taskExecution, taskName, waitBudgetMs);
+        if (!exitCodeResult.ok) {
+          return exitCodeResult;
+        }
+
+        const exitCode = exitCodeResult.value;
 
         if (exitCode !== undefined && exitCode !== 0) {
           return err(new JsmError({
@@ -190,6 +197,63 @@ function createHookExecutor(params: {
       }
     },
   };
+}
+
+function resolveHookTaskWaitBudgetMs(request: HookExecutionRequest): number {
+  const requestedTimeoutMs = request.hook.timeoutMs ?? 60_000;
+  const remainingParentBudgetMs = Math.max(
+    0,
+    request.parent.timeoutMs - (Date.now() - request.parent.startedAt),
+  );
+
+  return Math.max(0, Math.min(
+    requestedTimeoutMs,
+    remainingParentBudgetMs,
+    HOOK_PHASE_BUDGET_MS,
+  ));
+}
+
+function waitForTaskProcessExit(
+  taskExecution: vscode.TaskExecution,
+  taskName: string,
+  timeoutMs: number,
+): Promise<Result<number | undefined, JsmError>> {
+  return new Promise(resolve => {
+    let settled = false;
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    let subscription: vscode.Disposable | undefined;
+
+    const settle = (result: Result<number | undefined, JsmError>) => {
+      if (settled) return;
+      settled = true;
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
+      subscription?.dispose();
+      resolve(result);
+    };
+
+    try {
+      subscription = vscode.tasks.onDidEndTaskProcess((event) => {
+        if (event.execution === taskExecution) {
+          settle(ok(event.exitCode));
+        }
+      });
+    } catch (cause) {
+      settle(err(new JsmError({
+        code: ErrorCode.HookFailed,
+        message: `VS Code task hook failed: ${String(cause)}`,
+      })));
+      return;
+    }
+
+    timeoutHandle = setTimeout(() => {
+      settle(err(new JsmError({
+        code: ErrorCode.Timeout,
+        message: `VS Code task '${taskName}' timed out after ${timeoutMs}ms`,
+      })));
+    }, timeoutMs);
+  });
 }
 
 function buildWorkspaceServiceEntry(params: WorkspaceEntryFactoryParams): WorkspaceServiceEntry {

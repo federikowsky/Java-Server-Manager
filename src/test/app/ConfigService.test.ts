@@ -54,10 +54,18 @@ function makeDeployment(id = 'dep-1'): DeploymentConfig {
 
 function mockRepo() {
   const cache = new Map<string, ServerConfig>();
+  const snapshot = () => [...cache.values()];
   return {
-    load: vi.fn(async () => ok([...cache.values()])),
+    load: vi.fn(async () => ok(snapshot())),
+    readWorkspace: vi.fn(async () => ok({ content: JSON.stringify({ servers: snapshot() }), servers: snapshot() })),
+    replaceAll: vi.fn((servers: readonly ServerConfig[]) => {
+      cache.clear();
+      for (const server of servers) {
+        cache.set(server.id, server);
+      }
+    }),
     get: vi.fn((id: string) => cache.get(id)),
-    getAll: vi.fn(() => [...cache.values()]),
+    getAll: vi.fn(() => snapshot()),
     save: vi.fn(async (cfg: ServerConfig) => { cache.set(cfg.id, cfg); return ok(undefined); }),
     delete: vi.fn(async (id: string) => { cache.delete(id); return ok(undefined); }),
     isDirty: vi.fn(async () => false),
@@ -111,19 +119,68 @@ describe('ConfigService', () => {
   describe('loadWorkspace', () => {
     it('returns loaded server configs', async () => {
       const srv = makeServer();
-      repo.load.mockResolvedValue(ok([srv]));
+      repo.readWorkspace.mockResolvedValue(ok({
+        content: JSON.stringify({ servers: [srv] }),
+        servers: [srv],
+      }));
 
       const result = await service.loadWorkspace();
       expect(result.ok).toBe(true);
       if (result.ok) expect(result.value).toEqual([srv]);
+      expect(repo.replaceAll).toHaveBeenCalledWith([srv], expect.any(String));
     });
 
     it('propagates repo failure', async () => {
       const error = new JsmError({ code: ErrorCode.ConfigReadFailed, message: 'disk error' });
-      repo.load.mockResolvedValue(err(error));
+      repo.readWorkspace.mockResolvedValue(err(error));
 
       const result = await service.loadWorkspace();
       expect(result.ok).toBe(false);
+    });
+
+    it('propagates duplicate-id rejection from the repo parse step before cache commit', async () => {
+      const duplicateError = new JsmError({
+        code: ErrorCode.InvalidConfig,
+        message: "Duplicate server id 'srv-1' in workspace config",
+      });
+      repo.readWorkspace.mockResolvedValue(err(duplicateError));
+
+      const result = await service.loadWorkspace();
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error).toBe(duplicateError);
+      expect(repo.replaceAll).not.toHaveBeenCalled();
+    });
+
+    it('rejects schema-invalid server document', async () => {
+      const srv = makeServer();
+      const validationError = new JsmError({ code: ErrorCode.ValidationFailed, message: 'bad schema' });
+      repo.readWorkspace.mockResolvedValue(ok({
+        content: JSON.stringify({ servers: [srv] }),
+        servers: [srv],
+      }));
+      validator.validate.mockReturnValue(err(validationError));
+
+      const result = await service.loadWorkspace();
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error).toBe(validationError);
+      expect(repo.replaceAll).not.toHaveBeenCalled();
+    });
+
+    it('rejects security-policy-violating server config', async () => {
+      const srv = makeServer();
+      srv.run.vmArgs = ['-javaagent:/evil.jar'];
+      repo.readWorkspace.mockResolvedValue(ok({
+        content: JSON.stringify({ servers: [srv] }),
+        servers: [srv],
+      }));
+
+      const result = await service.loadWorkspace();
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe(ErrorCode.SecurityPolicyViolation);
+      expect(repo.replaceAll).not.toHaveBeenCalled();
     });
   });
 
@@ -420,7 +477,10 @@ describe('ConfigService', () => {
 
   describe('reload', () => {
     it('reloads and emits ConfigChanged', async () => {
-      repo.load.mockResolvedValue(ok([]));
+      repo.readWorkspace.mockResolvedValue(ok({
+        content: JSON.stringify({ servers: [] }),
+        servers: [],
+      }));
       const result = await service.reload();
 
       expect(result.ok).toBe(true);
@@ -431,11 +491,51 @@ describe('ConfigService', () => {
     });
 
     it('does not emit when reload fails', async () => {
-      repo.load.mockResolvedValue(err(new JsmError({ code: ErrorCode.ConfigReadFailed, message: 'fail' })));
+      repo.readWorkspace.mockResolvedValue(err(new JsmError({
+        code: ErrorCode.ConfigReadFailed,
+        message: 'fail',
+      })));
       const result = await service.reload();
 
       expect(result.ok).toBe(false);
       expect(bus.emit).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('reload', () => {
+    it('reloads valid config, commits cache, and emits ConfigChanged', async () => {
+      const srv = makeServer();
+      repo.readWorkspace.mockResolvedValue(ok({
+        content: JSON.stringify({ servers: [srv] }),
+        servers: [srv],
+      }));
+
+      const result = await service.reload();
+
+      expect(result.ok).toBe(true);
+      expect(repo.replaceAll).toHaveBeenCalledWith([srv], expect.any(String));
+      expect(bus.emit).toHaveBeenCalledWith('ConfigChanged', {
+        source: 'external',
+        workspaceFolderUri: 'file:///ws',
+      });
+    });
+
+    it('does not emit ConfigChanged on invalid external config', async () => {
+      const srv = makeServer();
+      repo.readWorkspace.mockResolvedValue(ok({
+        content: JSON.stringify({ servers: [srv] }),
+        servers: [srv],
+      }));
+      validator.validate.mockReturnValue(err(new JsmError({
+        code: ErrorCode.ValidationFailed,
+        message: 'bad external config',
+      })));
+
+      const result = await service.reload();
+
+      expect(result.ok).toBe(false);
+      expect(repo.replaceAll).not.toHaveBeenCalled();
+      expect(bus.emit).not.toHaveBeenCalledWith('ConfigChanged', expect.anything());
     });
   });
 });

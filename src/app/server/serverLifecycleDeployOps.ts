@@ -260,18 +260,21 @@ export async function runDeploySyncOperation(
     throw error;
   }
 
+  let result: Result<void, JsmError>;
   try {
-    const result = await deps.deployService.sync(
+    result = await deps.deployService.sync(
       context.ctx,
       context.config,
       context.deployment,
       batch,
     );
-    if (!result.ok) {
-      deps.onDeploySyncFailure?.(server.serverKey, deploymentId);
-    }
   } catch (cause) {
     deps.onDeploySyncFailure?.(server.serverKey, deploymentId);
     throw cause;
+  }
+
+  if (!result.ok) {
+    deps.onDeploySyncFailure?.(server.serverKey, deploymentId);
+    throw result.error;
   }
 }

@@ -357,6 +357,11 @@
           "type": "string",
           "default": "",
           "description": "Default JAVA_HOME path for new servers."
+        },
+        "jsm.ui.showStatusInSidebar": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show server runtime status badges in the JSM sidebar tree."
         }
       }
     }

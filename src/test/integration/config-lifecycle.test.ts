@@ -78,7 +78,13 @@ describe('Config → Repo → EventBus integration', () => {
     // Register a permissive schema so validate() always passes
     validator.addSchema('server-config', { type: 'object' });
 
-    service = new ConfigService({ repo, validator, bus, logger });
+    service = new ConfigService({
+      repo,
+      validator,
+      bus,
+      logger,
+      workspaceFolderUri: 'file:///ws',
+    });
 
     events.length = 0;
     const trackEvents: EventKey[] = [
@@ -170,6 +176,23 @@ describe('Config → Repo → EventBus integration', () => {
 
     const dirty = await service.checkForExternalChanges();
     expect(dirty).toBe(true);
+  });
+
+  it('reload keeps prior cache untouched when external config becomes invalid', async () => {
+    await service.addServer(makeServer());
+
+    const configPath = path.join(tmpDir, '.vscode', 'jsm.servers.json');
+    const content = JSON.parse(await fs.readFile(configPath, 'utf-8'));
+    content.servers[0].run.vmArgs = ['-javaagent:/evil.jar'];
+    await fs.writeFile(configPath, JSON.stringify(content, null, 2));
+
+    events.length = 0;
+    const result = await service.reload();
+
+    expect(result.ok).toBe(false);
+    expect(service.getAllServers()).toHaveLength(1);
+    expect(service.getServer('srv-1')?.name).toBe('My Tomcat');
+    expect(events.some(e => e.event === 'ConfigChanged')).toBe(false);
   });
 });
 

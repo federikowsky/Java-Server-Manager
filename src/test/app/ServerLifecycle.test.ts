@@ -7,6 +7,7 @@ import { JsmError } from '@core/errors/JsmError';
 import { ErrorCode } from '@core/errors/codes';
 import type { HookConfig } from '@core/types/domain';
 import type { StartupMonitor } from '@plugins/interfaces/IServerPlugin';
+import { OperationQueue } from '@core/ops/OperationQueue';
 
 /* ── helpers ─────────────────────────────────────────────────────────────── */
 
@@ -321,7 +322,9 @@ describe('ServerLifecycle', () => {
       portScanner.probe.mockResolvedValue(false);
 
       const executor = queue.setExecutor.mock.calls[0][0] as (entry: { kind: string; meta?: Record<string, unknown> }) => Promise<void>;
-      await executor({ kind: 'LifecycleStart', meta: { mode: 'run' } });
+      await expect(executor({ kind: 'LifecycleStart', meta: { mode: 'run' } })).rejects.toMatchObject({
+        code: ErrorCode.Timeout,
+      });
 
       expect(runtime.state).toBe('error');
       expect(bus.emit).toHaveBeenCalledWith('OperationFailed', expect.objectContaining({
@@ -330,6 +333,43 @@ describe('ServerLifecycle', () => {
         error: expect.objectContaining({ code: ErrorCode.Timeout }),
       }));
       expect(startupMonitor.dispose).toHaveBeenCalledOnce();
+    });
+
+    it('clears persisted PID and performs best-effort cleanup when readiness times out after spawn', async () => {
+      const queue = mockQueue();
+      const runtime = lifecycle.register('srv-1', {
+        ...makeServer(),
+        timeouts: { startRunMs: 1, stopMs: 20_000 },
+      } as ServerConfig, queue as never);
+      const startupMonitor: StartupMonitor = {
+        waitForOutcome: vi.fn(async () => ({ state: 'started' })),
+        dispose: vi.fn(async () => {}),
+      };
+      const pluginStop = vi.fn(async () => ok(undefined));
+
+      pluginRegistry.get.mockReturnValue({
+        start: vi.fn(async () => ok({
+          pid: 123,
+          httpUrl: 'http://127.0.0.1:8080',
+          hints: [],
+          startupMonitor,
+        })),
+        stop: pluginStop,
+        getStatus: vi.fn(),
+        detect: vi.fn(),
+      });
+      portScanner.probe.mockResolvedValue(false);
+
+      const executor = queue.setExecutor.mock.calls[0][0] as (entry: { kind: string; meta?: Record<string, unknown> }) => Promise<void>;
+      await expect(executor({ kind: 'LifecycleStart', meta: { mode: 'run' } })).rejects.toMatchObject({
+        code: ErrorCode.Timeout,
+      });
+
+      expect(pidManager.writePid).toHaveBeenCalledWith('srv-1', 123);
+      expect(pluginStop).toHaveBeenCalledOnce();
+      expect(pidManager.clearPid).toHaveBeenCalledWith('srv-1');
+      expect(debugAttacher.detach).toHaveBeenCalledWith('srv-1');
+      expect(runtime.state).toBe('error');
     });
 
     it('transitions to error when startupMonitor reports failure', async () => {
@@ -357,7 +397,7 @@ describe('ServerLifecycle', () => {
       });
 
       const executor = queue.setExecutor.mock.calls[0][0] as (entry: { kind: string; meta?: Record<string, unknown> }) => Promise<void>;
-      await executor({ kind: 'LifecycleStart', meta: { mode: 'run' } });
+      await expect(executor({ kind: 'LifecycleStart', meta: { mode: 'run' } })).rejects.toBe(startupError);
 
       expect(runtime.state).toBe('error');
       expect(bus.emit).toHaveBeenCalledWith('OperationFailed', expect.objectContaining({
@@ -371,6 +411,7 @@ describe('ServerLifecycle', () => {
     it('cancels an active start operation instead of only clearing queued work', async () => {
       const queue = mockQueue();
       const runtime = lifecycle.register('srv-1', makeServer(), queue as never);
+      const pluginStop = vi.fn(async () => ok(undefined));
       const pluginStart = vi.fn(async () => ok({
         pid: 123,
         httpUrl: 'http://127.0.0.1:8080',
@@ -379,7 +420,7 @@ describe('ServerLifecycle', () => {
 
       pluginRegistry.get.mockReturnValue({
         start: pluginStart,
-        stop: vi.fn(),
+        stop: pluginStop,
         getStatus: vi.fn(),
         detect: vi.fn(),
       });
@@ -393,9 +434,12 @@ describe('ServerLifecycle', () => {
       });
 
       lifecycle.cancel('srv-1');
-      await running;
+      await expect(running).rejects.toMatchObject({ code: ErrorCode.Cancelled });
 
       expect(queue.clear).toHaveBeenCalledOnce();
+      expect(pluginStop).toHaveBeenCalledOnce();
+      expect(pidManager.clearPid).toHaveBeenCalledWith('srv-1');
+      expect(debugAttacher.detach).toHaveBeenCalledWith('srv-1');
       expect(runtime.state).toBe('error');
       expect(bus.emit).toHaveBeenCalledWith('OperationFailed', expect.objectContaining({
         serverId: 'srv-1',
@@ -411,6 +455,7 @@ describe('ServerLifecycle', () => {
         code: ErrorCode.ValidationFailed,
         message: 'plugin health failed',
       });
+      const pluginStop = vi.fn(async () => ok(undefined));
 
       pluginRegistry.get.mockReturnValue({
         start: vi.fn(async () => ok({
@@ -418,7 +463,7 @@ describe('ServerLifecycle', () => {
           httpUrl: 'http://127.0.0.1:8080',
           hints: [],
         })),
-        stop: vi.fn(),
+        stop: pluginStop,
         getStatus: vi.fn(),
         detect: vi.fn(),
         healthCheck: vi.fn(async () => err(healthError)),
@@ -426,15 +471,60 @@ describe('ServerLifecycle', () => {
       portScanner.probe.mockResolvedValue(true);
 
       const executor = queue.setExecutor.mock.calls[0][0] as (entry: { kind: string; meta?: Record<string, unknown> }) => Promise<void>;
-      await executor({ kind: 'LifecycleStart', meta: { mode: 'run' } });
+      await expect(executor({ kind: 'LifecycleStart', meta: { mode: 'run' } })).rejects.toBe(healthError);
 
       expect(runtime.state).toBe('error');
       expect(deployService.runHealthChecksForServer).not.toHaveBeenCalled();
+      expect(pluginStop).toHaveBeenCalledOnce();
+      expect(pidManager.clearPid).toHaveBeenCalledWith('srv-1');
+      expect(debugAttacher.detach).toHaveBeenCalledWith('srv-1');
       expect(bus.emit).toHaveBeenCalledWith('OperationFailed', expect.objectContaining({
         serverId: 'srv-1',
         kind: 'LifecycleStart',
         error: healthError,
       }));
+    });
+
+    it('does not fire lifecycle.stop hooks during failed-start cleanup', async () => {
+      const queue = mockQueue();
+      const healthError = new JsmError({
+        code: ErrorCode.ValidationFailed,
+        message: 'plugin health failed',
+      });
+      const config = {
+        ...makeServer(),
+        hooks: [
+          makeHook('lifecycle.start'),
+          { ...makeHook('lifecycle.start'), id: 'hook-start-on-error', phase: 'onError' },
+          { ...makeHook('lifecycle.stop'), id: 'hook-stop-pre' },
+          { ...makeHook('lifecycle.stop'), id: 'hook-stop-post', phase: 'post' },
+          { ...makeHook('lifecycle.stop'), id: 'hook-stop-on-error', phase: 'onError' },
+        ],
+      };
+      const pluginStop = vi.fn(async () => ok(undefined));
+
+      lifecycle.register('srv-1', config, queue as never);
+      pluginRegistry.get.mockReturnValue({
+        start: vi.fn(async () => ok({
+          pid: 123,
+          httpUrl: 'http://127.0.0.1:8080',
+          hints: [],
+        })),
+        stop: pluginStop,
+        getStatus: vi.fn(),
+        detect: vi.fn(),
+        healthCheck: vi.fn(async () => err(healthError)),
+      });
+      portScanner.probe.mockResolvedValue(true);
+
+      const executor = queue.setExecutor.mock.calls[0][0] as (entry: { kind: string; meta?: Record<string, unknown> }) => Promise<void>;
+      await expect(executor({ kind: 'LifecycleStart', meta: { mode: 'run' } })).rejects.toBe(healthError);
+
+      expect(pluginStop).toHaveBeenCalledOnce();
+      expect(hookRunner.runHooks.mock.calls.map(([call]) => `${call.phase}:${call.event}`)).toEqual([
+        'pre:lifecycle.start',
+        'onError:lifecycle.start',
+      ]);
     });
 
     it('transitions to error when plugin health check reports unhealthy', async () => {
@@ -455,7 +545,10 @@ describe('ServerLifecycle', () => {
       portScanner.probe.mockResolvedValue(true);
 
       const executor = queue.setExecutor.mock.calls[0][0] as (entry: { kind: string; meta?: Record<string, unknown> }) => Promise<void>;
-      await executor({ kind: 'LifecycleStart', meta: { mode: 'run' } });
+      await expect(executor({ kind: 'LifecycleStart', meta: { mode: 'run' } })).rejects.toMatchObject({
+        code: ErrorCode.ValidationFailed,
+        message: 'Health check failed: server not responding',
+      });
 
       expect(runtime.state).toBe('error');
       expect(deployService.runHealthChecksForServer).not.toHaveBeenCalled();
@@ -526,7 +619,7 @@ describe('ServerLifecycle', () => {
       });
 
       lifecycle.cancel('srv-1');
-      await running;
+      await expect(running).rejects.toMatchObject({ code: ErrorCode.Cancelled });
 
       expect(debugAttacher.attach).not.toHaveBeenCalled();
       expect(runtime.state).toBe('error');
@@ -641,7 +734,7 @@ describe('ServerLifecycle', () => {
 
       lifecycle.cancel('srv-1');
       releaseRestartPreHook?.();
-      await running;
+      await expect(running).rejects.toMatchObject({ code: ErrorCode.Cancelled });
 
       expect(queue.clear).toHaveBeenCalledOnce();
       expect(pluginStop).not.toHaveBeenCalled();
@@ -685,7 +778,7 @@ describe('ServerLifecycle', () => {
       runtime.forceState('running', { pid: 321 });
       const executor = queue.setExecutor.mock.calls[0][0] as (entry: { kind: string; meta?: Record<string, unknown> }) => Promise<void>;
 
-      await executor({ kind: 'LifecycleRestart', meta: { mode: 'run' } });
+      await expect(executor({ kind: 'LifecycleRestart', meta: { mode: 'run' } })).rejects.toBe(startError);
 
       expect(runtime.state).toBe('error');
       expect(pluginStop).toHaveBeenCalledOnce();
@@ -784,7 +877,7 @@ describe('ServerLifecycle', () => {
       });
 
       lifecycle.cancel('srv-1');
-      await running;
+      await expect(running).rejects.toMatchObject({ code: ErrorCode.Cancelled });
 
       expect(queue.clear).toHaveBeenCalledOnce();
       expect(pidManager.clearPid).not.toHaveBeenCalled();
@@ -854,6 +947,43 @@ describe('ServerLifecycle', () => {
       expect(debugAttacher.detach.mock.invocationCallOrder[0]).toBeLessThan(
         transitionSpy.mock.invocationCallOrder[stoppedTransitionIndex],
       );
+    });
+
+    it('records executor failures as queue drain failures while still emitting OperationFailed once', async () => {
+      const queue = new OperationQueue('srv-1', mockLogger());
+      const startError = new JsmError({
+        code: ErrorCode.ProcessSpawnFailed,
+        message: 'queue start failed',
+      });
+
+      pluginRegistry.get.mockReturnValue({
+        start: vi.fn(async () => err(startError)),
+        stop: vi.fn(),
+        getStatus: vi.fn(),
+        detect: vi.fn(),
+      });
+
+      lifecycle.register('srv-1', makeServer(), queue as never);
+
+      const startedBefore = bus.emit.mock.calls.filter(([event]) => event === 'OperationStarted').length;
+      const failedBefore = bus.emit.mock.calls.filter(([event]) => event === 'OperationFailed').length;
+      const completedBefore = bus.emit.mock.calls.filter(([event]) => event === 'OperationCompleted').length;
+
+      const queued = lifecycle.start('srv-1', 'run');
+      expect(queued.ok).toBe(true);
+
+      await lifecycle.waitUntilQueueIdle('srv-1');
+
+      expect(lifecycle.getAndClearQueueDrainFailure('srv-1')).toBe(startError);
+      expect(lifecycle.getAndClearQueueDrainFailure('srv-1')).toBeUndefined();
+
+      const startedAfter = bus.emit.mock.calls.filter(([event]) => event === 'OperationStarted').length;
+      const failedAfter = bus.emit.mock.calls.filter(([event]) => event === 'OperationFailed').length;
+      const completedAfter = bus.emit.mock.calls.filter(([event]) => event === 'OperationCompleted').length;
+
+      expect(startedAfter - startedBefore).toBe(1);
+      expect(failedAfter - failedBefore).toBe(1);
+      expect(completedAfter - completedBefore).toBe(0);
     });
   });
 
@@ -1064,7 +1194,10 @@ describe('ServerLifecycle', () => {
     it('fails DeployFull when targetDeploymentId is missing', async () => {
       const { executor } = registerWithDeployment();
 
-      await executor({ kind: 'DeployFull' });
+      await expect(executor({ kind: 'DeployFull' })).rejects.toMatchObject({
+        code: ErrorCode.InvalidConfig,
+        message: 'DeployFull requires targetDeploymentId',
+      });
 
       expect(bus.emit).toHaveBeenCalledWith('OperationFailed', expect.objectContaining({
         serverId: 'srv-1',
@@ -1188,9 +1321,10 @@ describe('ServerLifecycle', () => {
         ...makeServer(),
         deployments: [makeDeploymentConfig()],
       };
+      const syncError = new JsmError({ code: ErrorCode.DeployFailed, message: 'sync failed' });
 
       deployService.sync.mockResolvedValue(
-        err(new JsmError({ code: ErrorCode.DeployFailed, message: 'sync failed' })),
+        err(syncError),
       );
 
       lifecycle = new ServerLifecycle({
@@ -1212,7 +1346,7 @@ describe('ServerLifecycle', () => {
         meta?: Record<string, unknown>;
       }) => Promise<void>;
 
-      await executor({
+      await expect(executor({
         kind: 'DeploySync',
         targetDeploymentId: 'dep-1',
         meta: {
@@ -1221,16 +1355,13 @@ describe('ServerLifecycle', () => {
             totalBytes: 12,
           },
         },
-      });
+      })).rejects.toBe(syncError);
 
       expect(onDeploySyncFailure).toHaveBeenCalledWith('srv-1', 'dep-1');
-      expect(bus.emit).toHaveBeenCalledWith('OperationCompleted', expect.objectContaining({
+      expect(bus.emit).toHaveBeenCalledWith('OperationFailed', expect.objectContaining({
         serverId: 'srv-1',
         kind: 'DeploySync',
-      }));
-      expect(bus.emit).not.toHaveBeenCalledWith('OperationFailed', expect.objectContaining({
-        serverId: 'srv-1',
-        kind: 'DeploySync',
+        error: syncError,
       }));
     });
 
@@ -1263,7 +1394,7 @@ describe('ServerLifecycle', () => {
         meta?: Record<string, unknown>;
       }) => Promise<void>;
 
-      await executor({
+      await expect(executor({
         kind: 'DeploySync',
         targetDeploymentId: 'dep-1',
         meta: {
@@ -1272,6 +1403,8 @@ describe('ServerLifecycle', () => {
             totalBytes: 12,
           },
         },
+      })).rejects.toMatchObject({
+        message: 'sync crash',
       });
 
       expect(onDeploySyncFailure).toHaveBeenCalledWith('srv-1', 'dep-1');
@@ -1297,6 +1430,45 @@ describe('ServerLifecycle', () => {
         serverId: 'srv-1',
         kind: 'DeploySync',
       }));
+    });
+
+    it('records queue drain failure when DeploySync returns an error result', async () => {
+      const onDeploySyncFailure = vi.fn();
+      const queue = new OperationQueue('srv-1', mockLogger());
+      const config = {
+        ...makeServer(),
+        deployments: [makeDeploymentConfig()],
+      };
+      const syncError = new JsmError({ code: ErrorCode.DeployFailed, message: 'sync failed' });
+
+      deployService.sync.mockResolvedValue(err(syncError));
+
+      lifecycle = new ServerLifecycle({
+        pluginRegistry: pluginRegistry as never,
+        bus: bus as never,
+        pidManager: pidManager as never,
+        portScanner: portScanner as never,
+        debugAttacher: debugAttacher as never,
+        logger: mockLogger(),
+        hookRunner: hookRunner as never,
+        deployService: deployService as never,
+        onDeploySyncFailure,
+      });
+
+      lifecycle.register('srv-1', config, queue as never);
+
+      const enqueued = lifecycle.enqueueDeploySync('srv-1', 'dep-1', {
+        changes: [{ path: 'index.jsp', type: 'changed' }],
+        totalFiles: 1,
+        totalBytes: 12,
+      });
+      expect(enqueued.ok).toBe(true);
+
+      await lifecycle.waitUntilQueueIdle('srv-1');
+
+      expect(onDeploySyncFailure).toHaveBeenCalledOnce();
+      expect(lifecycle.getAndClearQueueDrainFailure('srv-1')).toBe(syncError);
+      expect(lifecycle.getAndClearQueueDrainFailure('srv-1')).toBeUndefined();
     });
   });
 

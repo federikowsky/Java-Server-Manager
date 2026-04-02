@@ -331,10 +331,16 @@ describe('DashboardPanel host boundary', () => {
       defaultHttpPort: 8180,
       defaultDebugPort: 5100,
       defaultJavaHome: '/jdk',
+      showStatusInSidebar: false,
     });
 
     expect(result).toEqual({ ok: true });
     expect(mocked.configUpdate).toHaveBeenCalledTimes(4);
+    expect(mocked.configUpdate).toHaveBeenCalledWith(
+      'ui.showStatusInSidebar',
+      false,
+      1,
+    );
   });
 
   it('queues navigation until ready, then resets form state and flushes host messages', async () => {

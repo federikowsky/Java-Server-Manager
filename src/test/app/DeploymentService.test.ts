@@ -247,6 +247,22 @@ describe('DeploymentService', () => {
     expect(service.getDeploymentState('s1', 'd1')).toBe('synced');
   });
 
+  it('deployUndeployed recovers a stale deploying state instead of silently skipping it', async () => {
+    const config = { ...makeConfig(), deployments: [makeDep()] };
+    (service as any).states.set('s1::d1', {
+      serverId: 's1',
+      deploymentId: 'd1',
+      state: 'deploying',
+    });
+
+    await expect(
+      service.deployUndeployed(makeCtx('s1', 'd1', 'DeployFull'), config),
+    ).resolves.toBeUndefined();
+
+    expect(mockPlugin.deployFull).not.toHaveBeenCalled();
+    expect(service.getDeploymentState('s1', 'd1')).toBe('error');
+  });
+
   it('cancels fullRedeploy after pre-hooks and before plugin execution', async () => {
     const config = {
       ...makeConfig(),

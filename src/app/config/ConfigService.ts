@@ -15,8 +15,50 @@ import type { ConfigRepo } from '@infra/fs/ConfigRepo';
 import { requireWorkspaceTrust, validateSecurityPolicy } from '@core/policy';
 import type { TrustGate } from '@core/types/runtime';
 
+function sameStringArray(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function sameStringRecord(
+  left: Readonly<Record<string, string>> | undefined,
+  right: Readonly<Record<string, string>> | undefined,
+): boolean {
+  const leftEntries = Object.entries(left ?? {});
+  const rightEntries = Object.entries(right ?? {});
+  return leftEntries.length === rightEntries.length
+    && leftEntries.every(([key, value]) => right?.[key] === value);
+}
+
+function sameHookConfig(
+  left: DeploymentConfig['hooks'][number],
+  right: DeploymentConfig['hooks'][number],
+): boolean {
+  return left.id === right.id
+    && left.enabled === right.enabled
+    && left.phase === right.phase
+    && left.event === right.event
+    && left.kind === right.kind
+    && left.timeoutMs === right.timeoutMs
+    && left.continueOnError === right.continueOnError
+    && left.command?.mode === right.command?.mode
+    && left.command?.line === right.command?.line
+    && left.command?.cwd === right.command?.cwd
+    && sameStringRecord(left.command?.env, right.command?.env)
+    && left.vscodeTask?.taskName === right.vscodeTask?.taskName;
+}
+
 function deploymentPersistedChanged(before: DeploymentConfig, after: DeploymentConfig): boolean {
-  return JSON.stringify(before) !== JSON.stringify(after);
+  return before.id !== after.id
+    || before.type !== after.type
+    || before.sourcePath !== after.sourcePath
+    || before.deployName !== after.deployName
+    || before.syncMode !== after.syncMode
+    || before.hotReload !== after.hotReload
+    || !sameStringArray(before.ignoreGlobs, after.ignoreGlobs)
+    || before.healthCheckPath !== after.healthCheckPath
+    || before.healthCheckTimeoutMs !== after.healthCheckTimeoutMs
+    || before.hooks.length !== after.hooks.length
+    || before.hooks.some((hook, index) => !sameHookConfig(hook, after.hooks[index]));
 }
 
 /**
@@ -74,6 +116,15 @@ export class ConfigService {
     return this.repo.getAll();
   }
 
+  private validateForPersistence(config: ServerConfig): Result<void, JsmError> {
+    const securityResult = validateSecurityPolicy(config);
+    if (!securityResult.ok) {
+      return securityResult;
+    }
+
+    return this.validator.validate(config, 'server-config');
+  }
+
   /** Add a new server, validate, persist, and emit event. */
   async addServer(config: ServerConfig): Promise<Result<void, JsmError>> {
     const trustResult = requireWorkspaceTrust(this.trustGate, 'modify server inventory');
@@ -87,12 +138,7 @@ export class ConfigService {
       }));
     }
 
-    // Security policy validation (§12.9)
-    const securityResult = validateSecurityPolicy(config);
-    if (!securityResult.ok) return securityResult;
-
-    // Schema validation
-    const validResult = this.validator.validate(config, 'server-config');
+    const validResult = this.validateForPersistence(config);
     if (!validResult.ok) return validResult;
 
     const saveResult = await this.repo.save(config);
@@ -116,10 +162,7 @@ export class ConfigService {
       }));
     }
 
-    const securityResult = validateSecurityPolicy(config);
-    if (!securityResult.ok) return securityResult;
-
-    const validResult = this.validator.validate(config, 'server-config');
+    const validResult = this.validateForPersistence(config);
     if (!validResult.ok) return validResult;
 
     const saveResult = await this.repo.save(config);
@@ -185,10 +228,7 @@ export class ConfigService {
       deployments: [...server.deployments, dep],
     };
 
-    const securityResult = validateSecurityPolicy(updated);
-    if (!securityResult.ok) return securityResult;
-
-    const validResult = this.validator.validate(updated, 'server-config');
+    const validResult = this.validateForPersistence(updated);
     if (!validResult.ok) return validResult;
 
     const saveResult = await this.repo.save(updated);
@@ -251,14 +291,9 @@ export class ConfigService {
 
   private validateLoadedServers(servers: readonly ServerConfig[]): Result<void, JsmError> {
     for (const server of servers) {
-      const securityResult = validateSecurityPolicy(server);
-      if (!securityResult.ok) {
-        return securityResult;
-      }
-
-      const schemaResult = this.validator.validate(server, 'server-config');
-      if (!schemaResult.ok) {
-        return schemaResult;
+      const validationResult = this.validateForPersistence(server);
+      if (!validationResult.ok) {
+        return validationResult;
       }
     }
 

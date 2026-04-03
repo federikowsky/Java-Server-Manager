@@ -328,7 +328,7 @@ export class DeploymentService {
   ): Promise<void> {
     for (const dep of config.deployments) {
       this.ensureNotCancelled(ctx, dep, 'before redeploying the next deployment.');
-      this.recoverStaleRedeployAllState(ctx.serverId, dep);
+      this.recoverStaleDeployingState(ctx.serverId, dep, 'RedeployAll');
       const result = await this.fullRedeploy(ctx, config, dep);
       if (!result.ok) {
         throw result.error;
@@ -344,11 +344,12 @@ export class DeploymentService {
     ctx: OperationContext,
     config: ServerConfig,
   ): Promise<void> {
-    const undeployed = config.deployments.filter(
-      dep => this.getDeploymentState(ctx.serverId, dep.id) === 'undeployed',
-    );
-    for (const dep of undeployed) {
+    for (const dep of config.deployments) {
       this.ensureNotCancelled(ctx, dep, 'before deploying the next undeployed application.');
+      this.recoverStaleDeployingState(ctx.serverId, dep, 'DeployUndeployed');
+      if (this.getDeploymentState(ctx.serverId, dep.id) !== 'undeployed') {
+        continue;
+      }
       const deployCtx: OperationContext = {
         ...ctx,
         kind: 'DeployFull',
@@ -464,9 +465,10 @@ export class DeploymentService {
     );
   }
 
-  private recoverStaleRedeployAllState(
+  private recoverStaleDeployingState(
     serverId: ServerId,
     dep: DeploymentConfig,
+    operationName: 'RedeployAll' | 'DeployUndeployed',
   ): void {
     if (this.getDeploymentState(serverId, dep.id) !== 'deploying') {
       return;
@@ -474,7 +476,7 @@ export class DeploymentService {
 
     const error = new JsmError({
       code: ErrorCode.DeployFailed,
-      message: `Recovered stale deploying state for '${dep.deployName}' before RedeployAll.`,
+      message: `Recovered stale deploying state for '${dep.deployName}' before ${operationName}.`,
     });
     this.logger.warn(`DeploymentService: ${error.message}`);
     this.transitionDeploy(serverId, dep.id, 'error', { error });

@@ -109,14 +109,16 @@ export class ConfigRepo {
 
   /** Update a server config in cache and persist. */
   async save(config: ServerConfig): Promise<Result<void, JsmError>> {
-    this.cache.set(config.id, config);
-    return this.flush();
+    return this.flush((nextCache) => {
+      nextCache.set(config.id, config);
+    });
   }
 
   /** Remove a server and persist. */
   async delete(serverId: string): Promise<Result<void, JsmError>> {
-    this.cache.delete(serverId);
-    return this.flush();
+    return this.flush((nextCache) => {
+      nextCache.delete(serverId);
+    });
   }
 
   /**
@@ -135,20 +137,28 @@ export class ConfigRepo {
   }
 
   /** Serialize writes through a queue to prevent concurrent file races. */
-  private flush(): Promise<Result<void, JsmError>> {
-    return new Promise<Result<void, JsmError>>((resolve) => {
-      this.writeQueue = this.writeQueue.then(async () => {
-        const data: WorkspaceConfig = {
-          servers: [...this.cache.values()],
-        };
-        const content = JSON.stringify(data, null, 2);
-        const result = await atomicWrite(this.configPath, content);
-        if (result.ok) {
-          this.lastKnownContent = content;
-          this.logger.debug(`ConfigRepo: saved ${this.cache.size} servers`);
-        }
-        resolve(result);
-      });
-    });
+  private flush(
+    mutate: (nextCache: Map<string, ServerConfig>) => void,
+  ): Promise<Result<void, JsmError>> {
+    const write = async (): Promise<Result<void, JsmError>> => {
+      const nextCache = new Map(this.cache);
+      mutate(nextCache);
+
+      const data: WorkspaceConfig = {
+        servers: [...nextCache.values()],
+      };
+      const content = JSON.stringify(data, null, 2);
+      const result = await atomicWrite(this.configPath, content);
+      if (result.ok) {
+        this.cache = nextCache;
+        this.lastKnownContent = content;
+        this.logger.debug(`ConfigRepo: saved ${this.cache.size} servers`);
+      }
+      return result;
+    };
+
+    const pendingWrite = this.writeQueue.then(write, write);
+    this.writeQueue = pendingWrite.then(() => undefined, () => undefined);
+    return pendingWrite;
   }
 }

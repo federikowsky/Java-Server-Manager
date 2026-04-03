@@ -367,6 +367,66 @@ describe('ConfigService', () => {
       const deploymentUpdatedCalls = vi.mocked(bus.emit).mock.calls.filter(c => c[0] === 'DeploymentUpdated');
       expect(deploymentUpdatedCalls).toHaveLength(0);
     });
+
+    it('does not emit DeploymentUpdated when a deployment is recreated with equivalent persisted values', async () => {
+      const dep = {
+        ...makeDeployment(),
+        ignoreGlobs: ['**/*.tmp'],
+        healthCheckPath: '/health',
+        healthCheckTimeoutMs: 1500,
+        hooks: [{
+          id: 'hook-1',
+          enabled: true,
+          phase: 'pre' as const,
+          event: 'deploy.full' as const,
+          kind: 'command' as const,
+          timeoutMs: 60_000,
+          continueOnError: false,
+          command: {
+            mode: 'shell' as const,
+            line: 'echo ok',
+            cwd: '/tmp',
+            env: { FOO: 'bar' },
+          },
+        }],
+      };
+      repo._seed({ ...makeServer(), deployments: [dep] });
+      const updatedServer = {
+        ...makeServer(),
+        deployments: [{
+          ...dep,
+          ignoreGlobs: [...dep.ignoreGlobs],
+          hooks: dep.hooks.map(hook => ({
+            ...hook,
+            command: hook.command ? { ...hook.command, env: { ...hook.command.env } } : undefined,
+          })),
+        }],
+      };
+
+      const result = await service.updateServer(updatedServer);
+
+      expect(result.ok).toBe(true);
+      const deploymentUpdatedCalls = vi.mocked(bus.emit).mock.calls.filter(c => c[0] === 'DeploymentUpdated');
+      expect(deploymentUpdatedCalls).toHaveLength(0);
+    });
+
+    it('emits DeploymentUpdated when optional persisted deployment fields change', async () => {
+      const dep = makeDeployment();
+      repo._seed({ ...makeServer(), deployments: [dep] });
+      const updatedServer = {
+        ...makeServer(),
+        deployments: [{ ...dep, healthCheckPath: '/health', healthCheckTimeoutMs: 1500 }],
+      };
+
+      const result = await service.updateServer(updatedServer);
+
+      expect(result.ok).toBe(true);
+      expect(bus.emit).toHaveBeenCalledWith('DeploymentUpdated', {
+        serverId: 'srv-1',
+        deploymentId: 'dep-1',
+        workspaceFolderUri: 'file:///ws',
+      });
+    });
   });
 
   /* ── removeServer ────────────────────────────────────────────────────── */

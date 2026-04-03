@@ -3,8 +3,12 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
 import { ConfigRepo } from '@infra/fs/ConfigRepo';
+import * as FileUtils from '@infra/fs/FileUtils';
 import type { Logger } from '@core/types/logger';
 import type { ServerConfig } from '@core/types';
+import { err } from '@core/result';
+import { JsmError } from '@core/errors/JsmError';
+import { ErrorCode } from '@core/errors/codes';
 
 function mockLogger(): Logger {
   return { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
@@ -47,6 +51,7 @@ describe('ConfigRepo', () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
@@ -113,5 +118,31 @@ describe('ConfigRepo', () => {
       expect(r.ok).toBe(true);
     }
     expect(repo.getAll()).toHaveLength(5);
+  });
+
+  it('does not mutate the in-memory cache when save fails', async () => {
+    vi.spyOn(FileUtils, 'atomicWrite').mockResolvedValue(err(new JsmError({
+      code: ErrorCode.ConfigWriteFailed,
+      message: 'write failed',
+    })));
+
+    const result = await repo.save(minimalServer('s1', 'Server 1'));
+
+    expect(result.ok).toBe(false);
+    expect(repo.getAll()).toEqual([]);
+  });
+
+  it('does not mutate the in-memory cache when delete fails', async () => {
+    await repo.save(minimalServer('s1', 'Server 1'));
+    vi.spyOn(FileUtils, 'atomicWrite').mockResolvedValue(err(new JsmError({
+      code: ErrorCode.ConfigWriteFailed,
+      message: 'write failed',
+    })));
+
+    const result = await repo.delete('s1');
+
+    expect(result.ok).toBe(false);
+    expect(repo.getAll()).toHaveLength(1);
+    expect(repo.get('s1')?.name).toBe('Server 1');
   });
 });

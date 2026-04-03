@@ -74,14 +74,14 @@ export class AutoSyncService {
   private readonly watchers = new Map<string, WatchRegistration>();
   // Pending changes for debounce: key = serverId::deploymentId
   private readonly pendingChanges = new Map<string, FileChange[]>();
+  // Running byte totals for the pending debounce batches
+  private readonly pendingBytes = new Map<string, number>();
   // Debounce timers
   private readonly debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
   // Failure tracking per deployment
   private readonly failures = new Map<string, FailureRecord>();
   // Last dispatch timestamp per deployment for local repeated-work suppression
   private readonly lastDispatchAt = new Map<string, number>();
-  // Global watcher count
-  private watcherCount = 0;
   // Suspended servers (stopped/error state)
   private readonly suspended = new Set<ServerId>();
 
@@ -234,9 +234,9 @@ export class AutoSyncService {
     }
     this.debounceTimers.clear();
     this.pendingChanges.clear();
+    this.pendingBytes.clear();
     this.failures.clear();
     this.lastDispatchAt.clear();
-    this.watcherCount = 0;
   }
 
   // ── Internal ──────────────────────────────────────────────────────
@@ -292,6 +292,7 @@ export class AutoSyncService {
       this.debounceTimers.delete(key);
     }
     this.pendingChanges.delete(key);
+    this.pendingBytes.delete(key);
     this.lastDispatchAt.delete(key);
   }
 
@@ -300,7 +301,6 @@ export class AutoSyncService {
     if (!registration) return;
     registration.disposable.dispose();
     this.watchers.delete(key);
-    this.watcherCount--;
     this.clearPendingState(key);
   }
 
@@ -316,7 +316,7 @@ export class AutoSyncService {
     if (this.watchers.has(key)) return;
 
     // Global watcher cap (§10.4)
-    if (this.watcherCount >= WATCHER_GLOBAL_CAP) {
+    if (this.watchers.size >= WATCHER_GLOBAL_CAP) {
       this.logger.warn(
         `AutoSyncService: watcher cap reached (${WATCHER_GLOBAL_CAP}), skipping '${dep.deployName}'`,
       );
@@ -334,7 +334,6 @@ export class AutoSyncService {
       deploymentType: dep.type,
       policy,
     });
-    this.watcherCount++;
     this.logger.debug(`AutoSyncService: watching '${watchPath}' (${spec.kind}) for ${key}`);
   }
 
@@ -384,6 +383,8 @@ export class AutoSyncService {
     const pending = this.pendingChanges.get(key) ?? [];
     pending.push(change);
     this.pendingChanges.set(key, pending);
+    const totalBytes = (this.pendingBytes.get(key) ?? 0) + (change.sizeBytes ?? 0);
+    this.pendingBytes.set(key, totalBytes);
 
     const remainingCooldownMs = this.remainingCooldownMs(serverId, deploymentId);
     if (remainingCooldownMs > 0) {
@@ -392,7 +393,6 @@ export class AutoSyncService {
     }
 
     // Storm protection: check batch limits
-    const totalBytes = pending.reduce((sum, c) => sum + (c.sizeBytes ?? 0), 0);
     if (pending.length > registration.policy.maxBatchFiles || totalBytes > registration.policy.maxBatchBytes) {
       this.logger.warn(`AutoSyncService: storm detected for ${key}, flushing immediately`);
       this.scheduleFlush(serverId, deploymentId, 0);
@@ -412,9 +412,13 @@ export class AutoSyncService {
     }
 
     const changes = this.pendingChanges.get(key);
-    if (!changes || changes.length === 0) return;
+    if (!changes || changes.length === 0) {
+      this.pendingBytes.delete(key);
+      return;
+    }
     if (!registration) {
       this.pendingChanges.delete(key);
+      this.pendingBytes.delete(key);
       return;
     }
 
@@ -430,12 +434,14 @@ export class AutoSyncService {
       return;
     }
 
+    const totalBytes = this.pendingBytes.get(key) ?? 0;
     this.pendingChanges.delete(key);
+    this.pendingBytes.delete(key);
 
     const batch: FileChangeBatch = {
       changes,
       totalFiles: changes.length,
-      totalBytes: changes.reduce((sum, c) => sum + (c.sizeBytes ?? 0), 0),
+      totalBytes,
     };
 
     this.lastDispatchAt.set(key, Date.now());

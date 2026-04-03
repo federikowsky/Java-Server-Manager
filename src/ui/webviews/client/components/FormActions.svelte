@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { get } from 'svelte/store';
   import { formData, submitting as submittingStore } from '../stores';
   import { sendSubmit, sendCancel } from '../bridge';
 
@@ -32,8 +33,7 @@
 
   function handleSubmit(): void {
     submittingStore.set(true);
-    let data: Record<string, unknown> = {};
-    formData.subscribe(d => { data = { ...d }; })();
+    const data = { ...get(formData) };
     sendSubmit(data);
   }
 

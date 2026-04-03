@@ -195,6 +195,55 @@ export class TomcatServerXmlService {
     return this.build(doc);
   }
 
+  /**
+   * Patch AJP and SSL connector state in a single parse/build pass.
+   * Preserves the same semantics as patchAjp(...)->patchSsl(...).
+   */
+  patchConnectors(
+    serverXml: string,
+    options: { disableAjp: boolean; ssl: SslConfig | undefined },
+  ): string {
+    const { disableAjp, ssl } = options;
+    if (!disableAjp && !ssl) {
+      return serverXml;
+    }
+
+    const doc = this.parse(serverXml);
+    const service = this.findService(doc);
+    if (!service) {
+      if (disableAjp) {
+        throw new JsmError({
+          code: ErrorCode.InvalidConfig,
+          message: 'TomcatServerXmlService: <Service name="Catalina"> not found while disableAjp is enabled',
+        });
+      }
+      this.logger.warn('TomcatServerXmlService: <Service name="Catalina"> not found, skipping SSL patch');
+      return serverXml;
+    }
+
+    if (disableAjp) {
+      this.removeChildren(service, (node) => {
+        if (!('Connector' in node)) return false;
+        const attrs = node[':@'] as Record<string, unknown> | undefined;
+        const protocol = String(attrs?.['@_protocol'] ?? '');
+        return protocol.toUpperCase().startsWith('AJP/');
+      });
+    }
+
+    this.removeChildren(service, (node) => {
+      if (!('Connector' in node)) return false;
+      const attrs = node[':@'] as Record<string, unknown> | undefined;
+      return attrs?.['@_SSLEnabled'] === 'true' || attrs?.['@_SSLEnabled'] === true;
+    });
+
+    if (ssl?.enabled) {
+      const connector = this.buildSslConnector(ssl);
+      this.insertBefore(service, (node) => 'Engine' in node, connector);
+    }
+
+    return this.build(doc);
+  }
+
   /** Build the SSL Connector node tree. */
   private buildSslConnector(ssl: SslConfig): XmlNode {
     const keystoreExt = ssl.keystoreType === 'JKS' ? 'jks' : 'p12';

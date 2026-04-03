@@ -35,8 +35,6 @@ type ServerCommandArg = {
   serverConfig?: ServerConfig;
 };
 
-type ServerResolver = (workspaceFolderUri: string, serverId: string) => ServerConfig | undefined;
-
 type ServerCommandContext = {
   arg: ServerCommandArg;
   serverKey: ServerId;
@@ -138,13 +136,6 @@ function resolveServerKey(
     return makeWorkspaceServerKey(arg.workspaceFolderUri, arg.serverId);
   }
   return arg.serverId as ServerId;
-}
-
-function resolveServerLabel(
-  resolveServer: ServerResolver,
-  arg: ServerCommandArg,
-): string {
-  return arg.serverConfig?.name ?? resolveServer(arg.workspaceFolderUri, arg.serverId)?.name ?? arg.serverId;
 }
 
 function getContextConfig(
@@ -262,12 +253,15 @@ export function registerServerCommands(
   const resolveServer = (workspaceFolderUri: string, serverId: string) => workspaceRegistry
     ? workspaceRegistry.getServer({ workspaceFolderUri, serverId })
     : configService?.getServer(serverId);
-  const createContext = (arg: ServerCommandArg): ServerCommandContext => ({
-    arg,
-    serverKey: resolveServerKey(workspaceRegistry, arg),
-    label: resolveServerLabel(resolveServer, arg),
-    resolvedConfig: resolveServer(arg.workspaceFolderUri, arg.serverId),
-  });
+  const createContext = (arg: ServerCommandArg): ServerCommandContext => {
+    const resolvedConfig = resolveServer(arg.workspaceFolderUri, arg.serverId);
+    return {
+      arg,
+      serverKey: resolveServerKey(workspaceRegistry, arg),
+      label: arg.serverConfig?.name ?? resolvedConfig?.name ?? arg.serverId,
+      resolvedConfig,
+    };
+  };
 
   const requireContextConfig = (
     context: ServerCommandContext,

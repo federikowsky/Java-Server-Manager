@@ -347,6 +347,33 @@ describe('AutoSyncService', () => {
     }));
   });
 
+  it('clears the running pending-byte total after each flushed batch', () => {
+    service.enable(makeConfig());
+
+    registrations[0].onChange({
+      type: 'change',
+      path: '/src/app/One.java',
+      relativePath: 'One.java',
+      sizeBytes: 10,
+    });
+    vi.advanceTimersByTime(450);
+
+    registrations[0].onChange({
+      type: 'change',
+      path: '/src/app/Two.java',
+      relativePath: 'Two.java',
+      sizeBytes: 5,
+    });
+    vi.advanceTimersByTime(450);
+
+    expect(onSyncRequest).toHaveBeenNthCalledWith(1, 's1', 'd1', expect.objectContaining({
+      totalBytes: 10,
+    }));
+    expect(onSyncRequest).toHaveBeenNthCalledWith(2, 's1', 'd1', expect.objectContaining({
+      totalBytes: 5,
+    }));
+  });
+
   it('rebuilds watchers when the effective watch spec changes', () => {
     const config = makeConfig();
     service.enable(config);

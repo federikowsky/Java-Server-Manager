@@ -338,8 +338,7 @@ export class TomcatPlugin implements IServerPlugin {
         }
 
         // Patch server.xml via service (SSL connector injection/removal)
-        const ajpPatchedXml = this.serverXmlService.patchAjp(serverXml, disableAjp);
-        const patchedXml = this.serverXmlService.patchSsl(ajpPatchedXml, ssl);
+        const patchedXml = this.serverXmlService.patchConnectors(serverXml, { disableAjp, ssl });
         await fs.writeFile(serverXmlDest, patchedXml, 'utf-8');
         this.logger.info('TomcatPlugin: applied server.xml template (ports via JVM args)');
       } else if (disableAjp && await exists(serverXmlDest)) {
@@ -1027,6 +1026,7 @@ export class TomcatPlugin implements IServerPlugin {
     },
   ): Promise<Result<void, JsmError>> {
     try {
+      const ensuredDirs = new Set<string>();
       for (const change of changes.changes) {
         this.throwIfCancelled(ctx, options.cancellationMessage);
         const targetFile = path.join(targetPath, change.relativePath);
@@ -1034,7 +1034,13 @@ export class TomcatPlugin implements IServerPlugin {
         switch (change.type) {
           case 'add':
           case 'change':
-            await ensureDir(path.dirname(targetFile));
+            {
+              const targetDir = path.dirname(targetFile);
+              if (!ensuredDirs.has(targetDir)) {
+                await ensureDir(targetDir);
+                ensuredDirs.add(targetDir);
+              }
+            }
             await fs.copyFile(change.path, targetFile);
             break;
           case 'delete':

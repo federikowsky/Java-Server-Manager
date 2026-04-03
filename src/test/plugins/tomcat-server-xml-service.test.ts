@@ -252,3 +252,15 @@ describe('TomcatServerXmlService — patchAjp', () => {
     }));
   });
 });
+
+describe('TomcatServerXmlService — patchConnectors', () => {
+  const service = new TomcatServerXmlService(noopLogger());
+
+  it('matches the sequential patchAjp + patchSsl output', () => {
+    const ssl = sslConfig();
+    const sequential = service.patchSsl(service.patchAjp(TEMPLATE, true), ssl);
+    const combined = service.patchConnectors(TEMPLATE, { disableAjp: true, ssl });
+
+    expect(combined).toBe(sequential);
+  });
+});

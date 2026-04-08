@@ -136,6 +136,7 @@
       v: WEBVIEW_PROTOCOL_VERSION,
       command: 'executeCommand',
       id: 'jsm.java.detect',
+      args: ['defaultJavaHome'],
     });
   }
 

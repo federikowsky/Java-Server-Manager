@@ -59,6 +59,10 @@ export function buildTemplateFormSchema(
             name: 'runtime.homePath',
             label: 'Runtime Home',
             type: 'path',
+            browse: { kind: 'directory' },
+            actionButtons: [
+              { id: 'autodiscover', icon: 'search', title: 'Autodiscover Server Installation' },
+            ],
             helpText: 'Optional default runtime home for servers created from this template.',
           },
           {

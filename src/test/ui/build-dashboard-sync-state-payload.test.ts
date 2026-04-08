@@ -60,4 +60,27 @@ describe('buildDashboardSyncStatePayload', () => {
 
     expect(payload.settings.showStatusInSidebar).toBe(true);
   });
+
+  it('populates deploymentHealth correctly from deployService', () => {
+    const deps = makeDeps();
+    const server = {
+      serverKey: 'ws1::s1',
+      config: { deployments: [{ id: 'd1' }] },
+      workspaceFolderUri: 'ws1',
+    };
+    const healthReport = { ok: true, latencyMs: 123 };
+
+    deps.workspaceRegistry.getAllServers.mockReturnValue([server] as any);
+    deps.deployService = {
+      getDeploymentState: vi.fn(() => 'synced'),
+      getDeploymentHealth: vi.fn((_sk: string, _did: string) => healthReport),
+    } as any;
+
+    const payload = buildDashboardSyncStatePayload(deps as any);
+
+    expect(payload.deploymentHealth).toEqual({
+      'ws1::s1': { d1: healthReport },
+    });
+    expect(deps.deployService.getDeploymentHealth).toHaveBeenCalledWith('ws1::s1', 'd1');
+  });
 });

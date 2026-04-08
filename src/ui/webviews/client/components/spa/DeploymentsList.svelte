@@ -20,6 +20,7 @@
   let deployments = $derived(config?.deployments || []);
 
   let depStates = $derived(serverRecord ? (state.deploymentStates?.[serverRecord.serverKey] || {}) : {});
+  let depHealth = $derived(serverRecord ? (state.deploymentHealth?.[serverRecord.serverKey] || {}) : {});
 
   function isDeploying(depId: string): boolean {
     return depStates[depId] === 'deploying';
@@ -148,7 +149,20 @@
                   </span>
                 {/if}
               </td>
-              <td class="status-cell">{formatStatus(depStates[dep.id])}</td>
+              <td class="status-cell">
+                <div class="status-row">
+                  <span class="status-text">{formatStatus(depStates[dep.id])}</span>
+                  {#if depHealth[dep.id]}
+                    <span 
+                      class="health-tag" 
+                      class:unhealthy={!depHealth[dep.id].ok} 
+                      title={depHealth[dep.id].ok ? `Healthy${depHealth[dep.id].latencyMs !== undefined ? ` (${depHealth[dep.id].latencyMs}ms)` : ''}` : 'Unhealthy'}
+                    >
+                      <Icon name={depHealth[dep.id].ok ? 'check' : 'error'} size={12} />
+                    </span>
+                  {/if}
+                </div>
+              </td>
               <td class="actions-cell">
                 {#if isDeploying(dep.id)}
                   <span class="deploying-indicator" title="Deployment in progress" aria-live="polite">
@@ -318,6 +332,29 @@
   .status-cell {
     font-size: var(--jsm-font-size-sm);
     color: var(--jsm-color-fg);
+  }
+
+  .status-row {
+    display: flex;
+    align-items: center;
+    gap: var(--jsm-space-xs);
+  }
+
+  .health-tag {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--jsm-space-2xs);
+    border-radius: var(--jsm-radius-full);
+    color: var(--jsm-status-running);
+    background: color-mix(in srgb, var(--jsm-status-running) 10%, transparent);
+    flex-shrink: 0;
+    cursor: help;
+  }
+
+  .health-tag.unhealthy {
+    color: var(--jsm-color-error);
+    background: color-mix(in srgb, var(--jsm-color-error) 10%, transparent);
   }
 
   .actions-cell {

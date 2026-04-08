@@ -79,6 +79,30 @@
     activeEntity.set({ type: 'server', id: serverId });
   });
 
+  let lastInferredName = '';
+
+  $effect(() => {
+    if (!sourcePath.trim()) {
+      return;
+    }
+
+    // Only infer if deployName is empty OR it matches the LAST auto-derived value
+    // (meaning the user hasn't explicitly customized it to something else).
+    if (deployName.trim() && deployName !== lastInferredName) {
+      return;
+    }
+
+    const basename = sourcePath.split(/[/\\]/).pop()?.replace(/\.war$/i, '') || '';
+    if (basename) {
+      deployName = basename;
+      lastInferredName = basename;
+      // Clear errors if the inferred name is valid
+      if (errors.deployName && /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(basename)) {
+        errors.deployName = '';
+      }
+    }
+  });
+
   onDestroy(() => {
     unsubscribeSpaState();
     unsubscribeBrowse();
@@ -101,6 +125,7 @@
     formType = existingDeployment?.type || 'exploded';
     sourcePath = existingDeployment?.sourcePath || '';
     deployName = existingDeployment?.deployName || '';
+    lastInferredName = existingDeployment?.deployName || '';
     syncMode = existingDeployment?.syncMode || 'auto';
     hotReload = existingDeployment?.hotReload || false;
     healthCheckPath = existingDeployment?.healthCheckPath || '';

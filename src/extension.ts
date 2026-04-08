@@ -27,6 +27,7 @@ import { ServerLifecycle } from '@app/server';
 import { ManagedInstancePathResolver, ServerProvisioningService, ServerDiscoveryService } from '@app/server';
 import { DeploymentService } from '@app/deployment';
 import { AutoSyncService } from '@app/sync';
+import { DiagnosticsService } from '@app/diagnostics';
 import { TemplateService } from '@app/templates';
 import { HookRunner } from '@app/hooks';
 import type { HookExecutor, HookExecutionRequest } from '@app/hooks';
@@ -555,6 +556,13 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<JsmExtensi
     trustGate,
   });
 
+  const diagnosticsService = new DiagnosticsService({
+    extensionVersion: ctx.extension.packageJSON.version ?? '0.0.0',
+    getConfigs: () => workspaceServiceRegistry.getAllServers().map(r => r.config),
+    getRuntimeState: (serverId: ServerId) => lifecycle.getRuntime(serverId)?.getState(),
+    getLogBuffer: () => ringBuffer.getAll().join('\n'),
+  });
+
   const discoveryService = new ServerDiscoveryService(pluginRegistry, logger);
 
   // ── 6. UI presentation ────────────────────────────────────────────────
@@ -586,7 +594,10 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<JsmExtensi
     eventBus.on('OperationCompleted', () => {
       treeProvider.requestRefresh();
     }),
-    eventBus.on('OperationFailed', () => {
+    eventBus.on('OperationFailed', (e) => {
+      const server = workspaceServiceRegistry.getServerRecordByKey(e.serverId)?.config;
+      const name = server?.name ?? e.serverId;
+      outputChannel.appendLine(`[ERROR] ${e.kind} failed for ${name}: ${e.error.message}`);
       treeProvider.requestRefresh();
     }),
   );
@@ -626,6 +637,11 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<JsmExtensi
       pluginRegistry,
       lifecycle,
       treeProvider,
+    }),
+    vscode.commands.registerCommand('jsm.copyDiagnostics', async () => {
+      const bundle = diagnosticsService.generateBundleText();
+      await vscode.env.clipboard.writeText(bundle);
+      vscode.window.showInformationMessage('Redacted diagnostics bundle copied to clipboard.');
     }),
   );
 

@@ -139,6 +139,7 @@ export type HostToWebview =
       servers: SpaServerRecord[];
       runtimeStates: Record<string, unknown>;
       deploymentStates: Record<string, Record<string, string>>;
+      deploymentHealth: Record<string, Record<string, any>>;
       templates: Array<{ template: unknown; scope: 'global' | 'workspace' }>;
       capabilities: Record<string, unknown>;
       workspaceFolders: Array<{ uri: string; name: string }>;

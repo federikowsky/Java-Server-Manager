@@ -24,20 +24,33 @@ export function buildDashboardSyncStatePayload(deps: DashboardPanelDeps): Dashbo
   }
 
   const deploymentStates: Record<string, Record<string, string>> = {};
+  const deploymentHealth: Record<string, Record<string, any>> = {};
   if (deps.deployService) {
     for (const server of servers) {
       const serverKey = server.serverKey;
       const depMap: Record<string, string> = {};
-        const cfg = server.config as { deployments?: Array<{ id: string }> };
-        for (const dep of cfg.deployments || []) {
+      const healthMap: Record<string, any> = {};
+      const cfg = server.config as { deployments?: Array<{ id: string }> };
+      for (const dep of cfg.deployments || []) {
         try {
           depMap[dep.id] = deps.deployService.getDeploymentState(serverKey, dep.id);
         } catch {
           depMap[dep.id] = 'undeployed';
         }
+        try {
+          const report = deps.deployService.getDeploymentHealth?.(serverKey, dep.id);
+          if (report) {
+            healthMap[dep.id] = report;
+          }
+        } catch {
+          // Robustness: skip health if it fails for any reason
+        }
       }
       if (Object.keys(depMap).length > 0) {
         deploymentStates[serverKey] = depMap;
+      }
+      if (Object.keys(healthMap).length > 0) {
+        deploymentHealth[serverKey] = healthMap;
       }
     }
   }
@@ -77,6 +90,7 @@ export function buildDashboardSyncStatePayload(deps: DashboardPanelDeps): Dashbo
     servers,
     runtimeStates,
     deploymentStates,
+    deploymentHealth,
     templates,
     capabilities,
     workspaceFolders,

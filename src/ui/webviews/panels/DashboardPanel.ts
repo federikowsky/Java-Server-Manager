@@ -375,7 +375,8 @@ export class DashboardPanel implements vscode.Disposable {
     }
 
     if (msg.id === 'jsm.java.detect') {
-      await this.handleJavaDetect();
+      const [targetField] = msg.args as [string?];
+      await this.handleJavaDetect(targetField);
       return undefined;
     }
 
@@ -542,7 +543,7 @@ export class DashboardPanel implements vscode.Disposable {
     });
   }
 
-  private async handleJavaDetect(): Promise<void> {
+  private async handleJavaDetect(targetField: string = 'javaHome'): Promise<void> {
     const candidates = await collectJavaInstallationCandidates();
     if (candidates.length === 0) {
       vscode.window.showInformationMessage('No Java installations found. Set JAVA_HOME manually.');
@@ -557,7 +558,7 @@ export class DashboardPanel implements vscode.Disposable {
       this.postMessage({
         v: WEBVIEW_PROTOCOL_VERSION,
         command: 'browsed',
-        field: 'javaHome',
+        field: targetField,
         path: selection.path,
       });
     }

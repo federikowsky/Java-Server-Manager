@@ -21,7 +21,10 @@ export interface DashboardPanelDeps {
   templateService: TemplateService;
   pluginRegistry: PluginRegistry;
   discoveryService: ServerDiscoveryService;
-  deployService?: { getDeploymentState(serverId: string, deploymentId: string): string };
+  deployService?: {
+    getDeploymentState(serverId: string, deploymentId: string): string;
+    getDeploymentHealth?(serverId: string, deploymentId: string): { ok: boolean; latencyMs?: number } | undefined;
+  };
   logger: Logger;
   bus: EventBus;
   trustGate?: TrustGate;

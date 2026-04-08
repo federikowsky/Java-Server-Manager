@@ -1,4 +1,4 @@
-import type { ServerId, DeploymentId, OperationKind } from '../types';
+import type { ServerId, DeploymentId, OperationKind, FileChange, FileChangeBatch } from '../types';
 import type { Logger } from '../types/logger';
 
 /** `QueueEntry.meta` key for `DeploySync` — value is `FileChangeBatch`. */
@@ -37,6 +37,70 @@ type CoalesceAction = 'queue' | 'drop' | 'replace' | 'keep-last';
 
 function sameDeployment(a?: DeploymentId, b?: DeploymentId): boolean {
   return a !== undefined && a === b;
+}
+
+/** Kinds that may carry {@link QUEUE_META_FILE_CHANGE_BATCH} when coalesced with keep-last. */
+const BATCH_COALESCING_KINDS = new Set<OperationKind>(['DeploySync', 'DeployIncremental']);
+
+function fileChangeBatchDedupeKey(relativePath: string): string {
+  return relativePath.replace(/\\/g, '/');
+}
+
+function parseFileChangeBatch(meta: Record<string, unknown> | undefined): FileChangeBatch | undefined {
+  if (!meta) return undefined;
+  const raw = meta[QUEUE_META_FILE_CHANGE_BATCH];
+  if (!raw || typeof raw !== 'object') return undefined;
+  const changes = (raw as FileChangeBatch).changes;
+  if (!Array.isArray(changes)) return undefined;
+  return raw as FileChangeBatch;
+}
+
+/**
+ * Merge older + newer batches: same logical path (normalized slashes) keeps the newer change.
+ * Totals are recomputed from merged changes.
+ */
+function mergeTwoFileChangeBatches(
+  older: FileChangeBatch | undefined,
+  newer: FileChangeBatch | undefined,
+): FileChangeBatch {
+  const olderC = older?.changes ?? [];
+  const newerC = newer?.changes ?? [];
+  const byKey = new Map<string, FileChange>();
+  for (const ch of olderC) {
+    if (ch && typeof ch.relativePath === 'string') {
+      byKey.set(fileChangeBatchDedupeKey(ch.relativePath), ch);
+    }
+  }
+  for (const ch of newerC) {
+    if (ch && typeof ch.relativePath === 'string') {
+      byKey.set(fileChangeBatchDedupeKey(ch.relativePath), ch);
+    }
+  }
+  const changes = Array.from(byKey.values());
+  let totalBytes = 0;
+  for (const ch of changes) {
+    totalBytes += ch.sizeBytes ?? 0;
+  }
+  return { changes, totalFiles: changes.length, totalBytes };
+}
+
+/**
+ * When keep-last drops a pending DeploySync/DeployIncremental, preserve its file batch in the survivor.
+ */
+function mergeQueuedFileChangeBatchesOnKeepLast(existing: QueueEntry, incoming: QueueEntry): void {
+  if (!sameDeployment(existing.targetDeploymentId, incoming.targetDeploymentId)) {
+    return;
+  }
+  if (!BATCH_COALESCING_KINDS.has(existing.kind) || !BATCH_COALESCING_KINDS.has(incoming.kind)) {
+    return;
+  }
+  const oldBatch = parseFileChangeBatch(existing.meta);
+  const newBatch = parseFileChangeBatch(incoming.meta);
+  if (!oldBatch && !newBatch) {
+    return;
+  }
+  const merged = mergeTwoFileChangeBatches(oldBatch, newBatch);
+  incoming.meta = { ...incoming.meta, [QUEUE_META_FILE_CHANGE_BATCH]: merged };
 }
 
 /**
@@ -220,6 +284,7 @@ export class OperationQueue {
           this.pending.splice(i, 1);
           break;
         case 'keep-last':
+          mergeQueuedFileChangeBatchesOnKeepLast(this.pending[i], entry);
           this.logger.debug(`Queue[${this.serverId}]: keep-last — removing old ${this.pending[i].kind}`);
           this.pending.splice(i, 1);
           break;

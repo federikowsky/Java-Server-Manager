@@ -6,6 +6,7 @@ import {
   type Executor,
 } from '@core/ops/OperationQueue';
 import type { Logger } from '@core/types/logger';
+import type { FileChangeBatch } from '@core/types';
 
 function mockLogger(): Logger {
   return { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
@@ -139,9 +140,13 @@ describe('OperationQueue', () => {
     let resolve: (() => void) | undefined;
     const blocking = new Promise<void>(r => { resolve = r; });
     const order: string[] = [];
+    let lastDeploySyncBatch: FileChangeBatch | undefined;
 
     q.setExecutor(async (e) => {
       order.push(e.kind + (e.targetDeploymentId ? `(${e.targetDeploymentId})` : ''));
+      if (e.kind === 'DeploySync') {
+        lastDeploySyncBatch = e.meta?.[QUEUE_META_FILE_CHANGE_BATCH] as FileChangeBatch;
+      }
       if (order.length === 1) await blocking;
     });
 
@@ -173,6 +178,95 @@ describe('OperationQueue', () => {
     resolve!();
     await new Promise(r => setTimeout(r, 50));
     expect(order).toEqual(['LifecycleStart', 'DeploySync(d1)']);
+    const rels = (lastDeploySyncBatch?.changes ?? []).map(c => c.relativePath).sort();
+    expect(rels).toEqual(['a', 'b']);
+    expect(lastDeploySyncBatch?.totalFiles).toBe(2);
+  });
+
+  it('coalesced DeploySync keeps newer change when relativePath matches', async () => {
+    const q = new OperationQueue('s1', mockLogger());
+    let resolve: (() => void) | undefined;
+    const blocking = new Promise<void>(r => { resolve = r; });
+    let lastBatch: { changes: Array<{ type: string; relativePath: string }> } | undefined;
+
+    q.setExecutor(async (e) => {
+      if (e.kind === 'DeploySync') {
+        lastBatch = e.meta?.[QUEUE_META_FILE_CHANGE_BATCH] as typeof lastBatch;
+      }
+      if (e.kind === 'LifecycleStart') await blocking;
+    });
+
+    q.enqueue(entry('LifecycleStart'));
+    await new Promise(r => setTimeout(r, 10));
+    q.enqueue({
+      kind: 'DeploySync',
+      targetDeploymentId: 'd1',
+      meta: {
+        [QUEUE_META_FILE_CHANGE_BATCH]: {
+          changes: [{ type: 'change', path: '/x', relativePath: 'src/Foo.java' }],
+          totalFiles: 1,
+          totalBytes: 1,
+        },
+      },
+    });
+    q.enqueue({
+      kind: 'DeploySync',
+      targetDeploymentId: 'd1',
+      meta: {
+        [QUEUE_META_FILE_CHANGE_BATCH]: {
+          changes: [{ type: 'delete', path: '/x', relativePath: 'src/Foo.java' }],
+          totalFiles: 1,
+          totalBytes: 0,
+        },
+      },
+    });
+
+    resolve!();
+    await new Promise(r => setTimeout(r, 50));
+    expect(lastBatch?.changes).toHaveLength(1);
+    expect(lastBatch?.changes[0]?.type).toBe('delete');
+    expect(lastBatch?.changes[0]?.relativePath).toBe('src/Foo.java');
+  });
+
+  it('does not merge DeploySync batches across different deployments', async () => {
+    const q = new OperationQueue('s1', mockLogger());
+    let resolve: (() => void) | undefined;
+    const blocking = new Promise<void>(r => { resolve = r; });
+    const order: string[] = [];
+
+    q.setExecutor(async (e) => {
+      order.push(e.kind + (e.targetDeploymentId ? `(${e.targetDeploymentId})` : ''));
+      if (order.length === 1) await blocking;
+    });
+
+    q.enqueue(entry('LifecycleStart'));
+    await new Promise(r => setTimeout(r, 10));
+    q.enqueue({
+      kind: 'DeploySync',
+      targetDeploymentId: 'd1',
+      meta: {
+        [QUEUE_META_FILE_CHANGE_BATCH]: {
+          changes: [{ type: 'change', path: '/a', relativePath: 'a' }],
+          totalFiles: 1,
+          totalBytes: 1,
+        },
+      },
+    });
+    q.enqueue({
+      kind: 'DeploySync',
+      targetDeploymentId: 'd2',
+      meta: {
+        [QUEUE_META_FILE_CHANGE_BATCH]: {
+          changes: [{ type: 'change', path: '/z', relativePath: 'z' }],
+          totalFiles: 1,
+          totalBytes: 1,
+        },
+      },
+    });
+
+    resolve!();
+    await new Promise(r => setTimeout(r, 50));
+    expect(order).toEqual(['LifecycleStart', 'DeploySync(d1)', 'DeploySync(d2)']);
   });
 
   it('drops DeploySync when DeployFull is pending for same deployment', async () => {

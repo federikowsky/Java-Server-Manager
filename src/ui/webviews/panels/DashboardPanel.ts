@@ -358,13 +358,13 @@ export class DashboardPanel implements vscode.Disposable {
     msg: Extract<WebviewToHost, { command: 'executeCommand' }>,
   ): Promise<CommandExecutionResult | undefined> {
     if (msg.id === 'jsm.internal.requestServerSchema') {
-      const [mode, serverId, workspaceFolderUri] = msg.args as ['edit' | 'create', string?, string?];
+      const [mode, serverId, workspaceFolderUri] = (msg.args || []) as ['edit' | 'create', string?, string?];
       await this.handleSchemaRequest(mode, serverId, workspaceFolderUri);
       return undefined;
     }
 
     if (msg.id === 'jsm.internal.requestTemplateSchema') {
-      const [mode, templateId] = msg.args as ['edit' | 'create', string?];
+      const [mode, templateId] = (msg.args || []) as ['edit' | 'create', string?];
       await this.handleTemplateSchemaRequest(mode, templateId);
       return undefined;
     }
@@ -375,18 +375,18 @@ export class DashboardPanel implements vscode.Disposable {
     }
 
     if (msg.id === 'jsm.java.detect') {
-      const [targetField] = msg.args as [string?];
+      const [targetField] = (msg.args || []) as [string?];
       await this.handleJavaDetect(targetField);
       return undefined;
     }
 
     if (msg.id === 'jsm.template.createServer') {
-      const [templateId] = msg.args as [string?];
+      const [templateId] = (msg.args || []) as [string?];
       return this.handleTemplateCreateServer(templateId);
     }
 
     if (msg.id === 'jsm.template.delete') {
-      const [templateId] = msg.args as [string?];
+      const [templateId] = (msg.args || []) as [string?];
       return this.handleTemplateDelete(templateId);
     }
 

@@ -168,6 +168,11 @@
         "command": "jsm.server.detachDebug",
         "title": "Detach Debugger",
         "icon": "$(debug-disconnect)"
+      },
+      {
+        "command": "jsm.copyDiagnostics",
+        "title": "Copy Diagnostics Bundle",
+        "icon": "$(report)"
       }
     ],
     "menus": {
@@ -288,6 +293,11 @@
           "command": "jsm.server.showLogs",
           "when": "view == javaServerManagerView && viewItem =~ /jsm\\.server\\..*/",
           "group": "troubleshooting@2"
+        },
+        {
+          "command": "jsm.copyDiagnostics",
+          "when": "view == javaServerManagerView && viewItem =~ /jsm\\.server\\..*/",
+          "group": "troubleshooting@3"
         },
         {
           "command": "jsm.deployment.redeploy",

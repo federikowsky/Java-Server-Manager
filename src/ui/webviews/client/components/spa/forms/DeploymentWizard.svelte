@@ -1,10 +1,12 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import { formDataToDeploymentDraft } from '@core/authoring';
-  import type { ServerConfig } from '@core/types';
-  import { spaState, activeEntity, browseResult, lastCommandResult } from '../../../stores';
+  import { formDataToDeploymentDraft, getDeploymentHookEvents } from '@core/authoring';
+  import type { ServerConfig, HookConfig } from '@core/types';
+  import { spaState, activeEntity, browseResult, lastCommandResult, hooksEditorSession } from '../../../stores';
   import { postToHost } from '../../../bridge';
   import { WEBVIEW_PROTOCOL_VERSION } from '../../../../protocol';
+  import { HOOK_EVENT_OPTIONS } from '../../../../hookForm';
+  import { get } from 'svelte/store';
   import Icon from '../../Icon.svelte';
   import FormPage from '../FormPage.svelte';
   import SectionBlock from '../../ds/SectionBlock.svelte';
@@ -44,6 +46,7 @@
   let healthCheckTimeoutMs = $state<number | undefined>(undefined);
   let ignoreGlobs = $state<string[]>([]);
   let ignoreGlobDraft = $state('');
+  let hooks = $state<HookConfig[]>([]);
 
   let errors = $state<Record<string, string>>({});
   let touched = $state<Record<string, boolean>>({});
@@ -53,6 +56,21 @@
   let submitError = $state('');
   let pendingRequestId = $state('');
   let hydratedFor = $state('');
+
+  /** Plain deep clone for payloads. Svelte $state arrays are Proxies — structuredClone throws. */
+  function cloneValue<T>(value: T): T {
+    if (value === undefined) {
+      return value;
+    }
+    try {
+      if (typeof structuredClone === 'function') {
+        return structuredClone(value);
+      }
+    } catch {
+      /* fall through */
+    }
+    return JSON.parse(JSON.stringify(value)) as T;
+  }
 
   const unsubscribeBrowse = browseResult.subscribe(result => {
     if (result && result.field === 'sourcePath') {
@@ -132,6 +150,7 @@
     healthCheckTimeoutMs = existingDeployment?.healthCheckTimeoutMs;
     ignoreGlobs = existingDeployment?.ignoreGlobs ? [...existingDeployment.ignoreGlobs] : [];
     ignoreGlobDraft = '';
+    hooks = existingDeployment?.hooks ? cloneValue(existingDeployment.hooks) : [];
     errors = {};
     touched = {};
     submitState = 'idle';
@@ -205,6 +224,22 @@
     activeEntity.set({ type: 'server', id: serverId });
   }
 
+  function openHooksEditor(): void {
+    const allowed = new Set(getDeploymentHookEvents());
+    const filteredOptions = HOOK_EVENT_OPTIONS.filter(opt => allowed.has(opt.value));
+
+    hooksEditorSession.set({
+      draft: cloneValue(hooks),
+      fieldName: 'hooks',
+      commit: (next) => {
+        hooks = Array.isArray(next) ? cloneValue(next as HookConfig[]) : [];
+      },
+      returnTarget: get(activeEntity),
+      eventOptions: filteredOptions,
+    });
+    activeEntity.set({ type: 'hooks-editor' });
+  }
+
   async function handleSubmit() {
     const allErrors: Record<string, string> = {};
     if (!sourcePath.trim()) allErrors.sourcePath = 'Source path is required';
@@ -246,7 +281,7 @@
         ? healthCheckTimeoutMs
         : undefined,
       ignoreGlobs: [...ignoreGlobs],
-      hooks: [],
+      hooks: cloneValue(hooks),
     };
     const draft = formDataToDeploymentDraft(formData, { id: existingDeployment?.id });
 
@@ -464,6 +499,19 @@
           </div>
           <p class="field-help">File patterns to exclude from sync (e.g., "*.tmp", "build/**").</p>
         </div>
+
+        <div class="form-field">
+          <label class="field-label">Hooks</label>
+          <div class="hooks-summary-row">
+            <p class="hooks-summary">
+              {hooks.length === 0 ? 'No hooks configured yet' : `${hooks.length} hook(s) configured`}
+            </p>
+            <button type="button" class="btn btn-secondary btn-sm" onclick={openHooksEditor}>
+              Open Hooks Editor
+            </button>
+          </div>
+          <p class="field-help">Configure terminal commands or VS Code tasks for deployment events.</p>
+        </div>
       </div>
     </AdvancedCollapse>
     </div>
@@ -517,5 +565,18 @@
     padding: var(--jsm-space-xl);
     color: var(--jsm-color-fg-secondary);
     font-family: var(--jsm-font-family);
+  }
+
+  .hooks-summary-row {
+    display: flex;
+    align-items: center;
+    gap: var(--jsm-space-md);
+    margin-top: var(--jsm-space-xs);
+  }
+
+  .hooks-summary {
+    margin: 0;
+    font-size: var(--jsm-font-size-sm);
+    color: var(--jsm-color-fg);
   }
 </style>

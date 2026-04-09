@@ -46,6 +46,8 @@ export const spaState = writable<{
   servers: SpaServerRecord[];
   runtimeStates: Record<string, unknown>;
   deploymentStates: Record<string, Record<string, string>>; // serverKey -> deploymentId -> state
+  /** From host syncState; HTTP health probe results per deployment (when configured). */
+  deploymentHealth: Record<string, Record<string, { ok: boolean; latencyMs?: number }>>;
   templates: SpaTemplateRow[];
   capabilities: Record<string, unknown>;
   workspaceFolders: Array<{ uri: string; name: string }>;
@@ -67,6 +69,7 @@ export const spaState = writable<{
   servers: [],
   runtimeStates: {},
   deploymentStates: {},
+  deploymentHealth: {},
   templates: [],
   capabilities: {},
   workspaceFolders: [],
@@ -100,6 +103,7 @@ export const hooksEditorSession = writable<{
   fieldName: string;
   commit: (hooks: unknown[]) => void;
   returnTarget: ActiveEntity;
+  eventOptions?: Array<{ value: string; label: string }>;
 } | null>(null);
 
 /**

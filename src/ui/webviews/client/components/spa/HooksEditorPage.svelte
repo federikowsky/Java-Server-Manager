@@ -33,7 +33,10 @@
     name: 'hooks',
     label: 'Hooks',
     type: 'hooks' as const,
-    hookOptions: { taskOptions: state.hookTaskOptions || [] },
+    hookOptions: { 
+      taskOptions: state.hookTaskOptions || [],
+      events: session?.eventOptions,
+    },
   } satisfies FormFieldDef);
 
   function handleBack(): void {

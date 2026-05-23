@@ -52,7 +52,7 @@ export class ProcessSpawner {
     if (requiresCmd) {
       const quoted = [opts.exe, ...opts.args].map(arg => this.quoteCmdArg(arg)).join(' ');
       exe = 'cmd.exe';
-      args = ['/d', '/c', quoted];
+      args = ['/d', '/s', '/c', this.wrapCmdLine(quoted)];
       windowsVerbatimArguments = true;
     } else {
       exe = opts.exe;
@@ -66,7 +66,7 @@ export class ProcessSpawner {
   spawnShell(opts: SpawnShellOptions): ChildProcess {
     const isWindows = os.platform() === 'win32';
     const exe = isWindows ? (process.env.ComSpec || 'cmd.exe') : (process.env.SHELL || 'sh');
-    const args = isWindows ? ['/d', '/c', opts.line] : ['-lc', opts.line];
+    const args = isWindows ? ['/d', '/s', '/c', this.wrapCmdLine(opts.line)] : ['-lc', opts.line];
 
     return this.spawnResolved(exe, args, opts, exe, args, opts.line, isWindows);
   }
@@ -122,11 +122,18 @@ export class ProcessSpawner {
   kill(pid: number, force = false): boolean {
     try {
       if (os.platform() === 'win32') {
-        const result = spawnSync('taskkill', force ? ['/F', '/T', '/PID', String(pid)] : ['/PID', String(pid)], {
+        let result = spawnSync('taskkill', force ? ['/F', '/T', '/PID', String(pid)] : ['/PID', String(pid)], {
           shell: false,
           stdio: 'ignore',
           windowsHide: true,
         });
+        if (!force && result.status !== 0) {
+          result = spawnSync('taskkill', ['/F', '/T', '/PID', String(pid)], {
+            shell: false,
+            stdio: 'ignore',
+            windowsHide: true,
+          });
+        }
         return result.status === 0;
       } else {
         process.kill(pid, force ? 'SIGKILL' : 'SIGTERM');
@@ -174,5 +181,9 @@ export class ProcessSpawner {
       return arg;
     }
     return `"${arg.replace(/"/g, '""')}"`;
+  }
+
+  private wrapCmdLine(line: string): string {
+    return `"${line}"`;
   }
 }

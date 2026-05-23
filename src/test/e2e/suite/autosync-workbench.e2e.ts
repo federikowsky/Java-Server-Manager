@@ -10,7 +10,24 @@ import * as vscode from 'vscode';
 /** Must match `JsmExtensionE2EApi` returned by `activate()` when JSM_E2E=1 (local copy avoids compiling extension.ts in e2e project). */
 type JsmExtensionE2EApi = {
   __e2eGetDeploySyncStartedCount: () => number;
+  __e2eGetAutosyncWatcherCount: () => number;
 };
+
+async function waitFor(
+  predicate: () => boolean,
+  message: string,
+  timeoutMs = 10_000,
+  intervalMs = 100,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) {
+      return;
+    }
+    await new Promise(resolve => setTimeout(resolve, intervalMs));
+  }
+  assert.fail(message);
+}
 
 suite('E2E / autosync → DeploySync', () => {
   test('filesystem change under exploded deployment enqueues DeploySync', async () => {
@@ -24,6 +41,16 @@ suite('E2E / autosync → DeploySync', () => {
     assert.ok(
       api && typeof api.__e2eGetDeploySyncStartedCount === 'function',
       'E2E API missing — extension must run with JSM_E2E=1',
+    );
+    assert.equal(
+      typeof api.__e2eGetAutosyncWatcherCount,
+      'function',
+      'E2E autosync watcher API missing',
+    );
+
+    await waitFor(
+      () => api!.__e2eGetAutosyncWatcherCount() > 0,
+      'expected autosync watcher to be registered before filesystem change',
     );
 
     const before = api!.__e2eGetDeploySyncStartedCount();

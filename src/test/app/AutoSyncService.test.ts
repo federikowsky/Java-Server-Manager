@@ -226,9 +226,11 @@ describe('AutoSyncService', () => {
     const config = makeConfig();
     service.enable(config);
     expect(watcherFactory.watch).toHaveBeenCalledOnce();
+    expect(service.getWatcherCount('s1')).toBe(1);
 
     service.rebindWatchers('s1', config);
     expect(watcherFactory.watch).toHaveBeenCalledTimes(1);
+    expect(service.getWatcherCount('s1')).toBe(1);
     expect(registrations[0].dispose).not.toHaveBeenCalled();
   });
 

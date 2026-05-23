@@ -10,6 +10,38 @@ The format follows Keep a Changelog and this project adheres to Semantic Version
 
 - ongoing improvements toward stable readiness
 
+## [0.1.3] - 2026-05-23
+
+### Summary
+
+- Third beta (pre-release): production-readiness hardening focused on multi-root identity, Tomcat runtime tracking, diagnostics safety, extension deactivation cleanup, deterministic autosync E2E coverage, and release package hygiene.
+- Keeps the shipped scope Tomcat-first while tightening behavior that can otherwise fail in real multi-workspace sessions or leak sensitive support data.
+
+### Beta Disclaimer
+
+- this is a beta prerelease intended for validation and feedback
+- behavior and feature surface may change before the first stable release
+
+### Known Limitations
+
+- only Tomcat is supported in this release
+- some advanced workflows and hardening tasks are still in progress
+- OpenVSX publication/verification must be confirmed by the release workflow for this version before treating the dual-marketplace release as complete
+
+### Changed
+
+- **Multi-root identity**: dashboard navigation, server detail, deployment forms, recent selections, and deployment commands now preserve workspace-scoped `serverKey` data instead of relying on bare server IDs.
+- **Tomcat runtime tracking**: child process tracking, status lookups, stop cleanup, and startup listener callback metadata use the operation server key so duplicate server IDs in different workspaces remain isolated.
+- **E2E reliability**: autosync workbench coverage waits for watcher registration before mutating deployment files, avoiding race-prone false failures.
+- **Release packaging**: VSIX packaging excludes local agent/tooling files, test-only scripts, transient data, and source-root generated JavaScript artifacts.
+- **CI coverage**: CI branch filters include `master` as the repository default branch while retaining existing branch coverage.
+
+### Fixed
+
+- **Diagnostics safety**: diagnostics bundles recursively redact sensitive values in nested config, hooks, deployments, JVM args, shell command lines, environment variables, and bearer tokens while preserving non-secret support context.
+- **Extension deactivation**: plugin registry disposal is wired into extension shutdown so plugin-owned resources are cleaned up on reload/deactivation.
+- **Test source of truth**: removed tracked generated `src/*.js` artifacts that could shadow TypeScript source in local tests and mask source-of-truth behavior.
+
 ## [0.1.2] - 2026-03-27
 
 ### Summary

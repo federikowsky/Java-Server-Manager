@@ -18,6 +18,7 @@ const mockAutoSyncPurgeServerWatchState = vi.fn();
 const mockAutoSyncRebindWatchers = vi.fn();
 const mockLifecycleUpdateConfig = vi.fn();
 const mockLifecycleUnregister = vi.fn();
+const mockPluginRegistryDispose = vi.fn(async () => {});
 
 let mockLogChannelInstance: any = null;
 let mockChannelInstance: any = null;
@@ -149,6 +150,7 @@ vi.mock('@infra/pid', () => ({
 vi.mock('@plugins/registry/PluginRegistry', () => ({
   PluginRegistry: class {
     register = vi.fn();
+    dispose = mockPluginRegistryDispose;
   },
 }));
 
@@ -332,6 +334,7 @@ describe('Extension Activation', () => {
     eventHandlers.clear();
     mockConfigServiceLoadWorkspace.mockResolvedValue({ ok: true, value: [] });
     mockLifecycleReconcile.mockResolvedValue(undefined);
+    mockPluginRegistryDispose.mockResolvedValue(undefined);
 
     ctx = {
       extensionUri: { path: '/mock-ext' },
@@ -548,6 +551,31 @@ describe('Extension Activation', () => {
 });
 
 describe('Extension Deactivation', () => {
+  it('should dispose the plugin registry registered during activation', async () => {
+    workspaceFolders = [{ uri: { fsPath: '/test/workspace' } }];
+    mockPluginRegistryDispose.mockClear();
+    const deactivateCtx = {
+      extensionUri: { path: '/mock-ext' },
+      extension: { packageJSON: { version: '0.0.1-test' } },
+      globalState: {
+        get: vi.fn(),
+        update: vi.fn(),
+        keys: vi.fn(() => []),
+      },
+      workspaceState: {
+        get: vi.fn(),
+        update: vi.fn(),
+        keys: vi.fn(() => []),
+      },
+      subscriptions: [],
+    };
+
+    await activate(deactivateCtx);
+    deactivate();
+
+    expect(mockPluginRegistryDispose).toHaveBeenCalled();
+  });
+
   it('should dispose all disposables without throwing', () => {
     expect(() => deactivate()).not.toThrow();
   });

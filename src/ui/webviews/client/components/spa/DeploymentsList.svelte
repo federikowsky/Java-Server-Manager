@@ -8,15 +8,29 @@
   import DsOverflowMenu from '../ds/DsOverflowMenu.svelte';
   import type { DsOverflowMenuItem } from '../ds/DsOverflowMenu.svelte';
 
-  const { serverId }: { serverId: string } = $props();
+  interface Props {
+    serverKey?: string;
+    serverId?: string;
+    workspaceFolderUri?: string;
+  }
+
+  let { serverKey, serverId, workspaceFolderUri }: Props = $props();
 
   let state = $state($spaState);
   spaState.subscribe(s => {
     state = s;
   });
 
-  let serverRecord = $derived(state.servers.find(s => (s.config as ServerConfig).id === serverId));
+  let serverRecord = $derived(state.servers.find(s => {
+    const cfg = s.config as ServerConfig;
+    if (serverKey && s.serverKey === serverKey) return true;
+    if (workspaceFolderUri && serverId) {
+      return s.workspaceFolderUri === workspaceFolderUri && cfg.id === serverId;
+    }
+    return cfg.id === serverId || s.serverKey === serverId;
+  }));
   let config = $derived(serverRecord ? (serverRecord.config as ServerConfig) : undefined);
+  let configServerId = $derived(config?.id ?? serverId ?? serverKey ?? '');
   let deployments = $derived(config?.deployments || []);
 
   let depStates = $derived(serverRecord ? (state.deploymentStates?.[serverRecord.serverKey] || {}) : {});
@@ -44,14 +58,14 @@
 
   function handleAction(cmd: string, deployment: DeploymentConfig) {
     let workspaceFolderUri = serverRecord?.workspaceFolderUri;
-    const serverKey = serverRecord?.serverKey ?? (workspaceFolderUri ? `${workspaceFolderUri}::${serverId}` : serverId);
+    const resolvedServerKey = serverRecord?.serverKey ?? serverKey ?? (workspaceFolderUri ? `${workspaceFolderUri}::${configServerId}` : configServerId);
     if (
       (workspaceFolderUri === undefined || workspaceFolderUri === '')
-      && typeof serverKey === 'string'
-      && serverKey.includes('::')
+      && typeof resolvedServerKey === 'string'
+      && resolvedServerKey.includes('::')
     ) {
-      const i = serverKey.lastIndexOf('::');
-      workspaceFolderUri = serverKey.slice(0, i);
+      const i = resolvedServerKey.lastIndexOf('::');
+      workspaceFolderUri = resolvedServerKey.slice(0, i);
     }
     postToHost({
       v: WEBVIEW_PROTOCOL_VERSION,
@@ -59,8 +73,8 @@
       id: cmd,
       args: [
         {
-          serverId,
-          serverKey,
+          serverId: configServerId,
+          serverKey: resolvedServerKey,
           deploymentId: deployment.id,
           workspaceFolderUri,
           workspaceFolderName: serverRecord?.workspaceFolderName,
@@ -70,11 +84,24 @@
   }
 
   function handleAddDeployment() {
-    activeEntity.set({ type: 'deployment', serverId, mode: 'create' });
+    activeEntity.set({
+      type: 'deployment',
+      serverId: configServerId,
+      serverKey: serverRecord?.serverKey ?? serverKey,
+      workspaceFolderUri: serverRecord?.workspaceFolderUri ?? workspaceFolderUri,
+      mode: 'create',
+    });
   }
 
   function handleEditDeployment(deploymentId: string) {
-    activeEntity.set({ type: 'deployment', id: deploymentId, serverId, mode: 'edit' });
+    activeEntity.set({
+      type: 'deployment',
+      id: deploymentId,
+      serverId: configServerId,
+      serverKey: serverRecord?.serverKey ?? serverKey,
+      workspaceFolderUri: serverRecord?.workspaceFolderUri ?? workspaceFolderUri,
+      mode: 'edit',
+    });
   }
 
   function overflowItems(dep: DeploymentConfig): DsOverflowMenuItem[] {

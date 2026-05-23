@@ -185,23 +185,36 @@ describe('Deployment Commands', () => {
 
   describe('Happy Path', () => {
     it('jsm.deployment.add should open the dashboard deployment flow in create mode', () => {
-      const node = createServerNode();
+      const node = {
+        serverId: 'srv-1',
+        serverKey: 'file:///ws::srv-1',
+        workspaceFolderUri: 'file:///ws',
+      };
       invoke('jsm.deployment.add', node);
       expect(mockExecuteCommand).toHaveBeenCalledWith('jsm.dashboard.open', {
         type: 'deployment',
         serverId: 'srv-1',
+        serverKey: 'file:///ws::srv-1',
+        workspaceFolderUri: 'file:///ws',
         mode: 'create',
         globalTab: 'home',
       });
     });
 
     it('jsm.deployment.edit should open the dashboard deployment flow in edit mode', () => {
-      const node = createDeploymentNode();
+      const node = {
+        serverId: 'srv-1',
+        serverKey: 'file:///ws::srv-1',
+        workspaceFolderUri: 'file:///ws',
+        deploymentId: 'dep-1',
+      };
       invoke('jsm.deployment.edit', node);
       expect(mockExecuteCommand).toHaveBeenCalledWith('jsm.dashboard.open', {
         type: 'deployment',
         id: 'dep-1',
         serverId: 'srv-1',
+        serverKey: 'file:///ws::srv-1',
+        workspaceFolderUri: 'file:///ws',
         mode: 'edit',
         globalTab: 'home',
       });

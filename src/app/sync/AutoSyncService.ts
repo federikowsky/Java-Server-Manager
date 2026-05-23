@@ -223,6 +223,16 @@ export class AutoSyncService {
     return record !== undefined && Date.now() < record.cooldownUntil;
   }
 
+  /** Number of active watcher registrations, optionally scoped to one server key. */
+  getWatcherCount(serverId?: ServerId): number {
+    if (serverId === undefined) {
+      return this.watchers.size;
+    }
+
+    const prefix = `${serverId}::`;
+    return [...this.watchers.keys()].filter(key => key.startsWith(prefix)).length;
+  }
+
   /** Dispose all watchers and timers. */
   dispose(): void {
     for (const registration of this.watchers.values()) {

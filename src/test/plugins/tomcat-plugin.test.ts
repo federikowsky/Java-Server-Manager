@@ -750,7 +750,7 @@ describe('TomcatPlugin — runtime lifecycle', () => {
       return child;
     });
 
-    const result = await plugin.start(dummyCtx(), fakeConfig(homePath, instancePath), 'run');
+    const result = await plugin.start(dummyCtx('file:///workspace-a::srv-1'), fakeConfig(homePath, instancePath), 'run');
 
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -803,13 +803,16 @@ describe('TomcatPlugin — runtime lifecycle', () => {
       return child;
     });
 
-    const result = await plugin.start(dummyCtx(), fakeConfig(homePath, instancePath), 'run');
+    const result = await plugin.start(dummyCtx('file:///workspace-a::srv-1'), fakeConfig(homePath, instancePath), 'run');
 
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.value.startupMonitor).toBe(startupMonitor);
     }
     expect(monitorCreateSpy).toHaveBeenCalledOnce();
+    expect(monitorCreateSpy).toHaveBeenCalledWith(expect.objectContaining({
+      serverKey: 'file:///workspace-a::srv-1',
+    }));
     expect(spawnSpy).toHaveBeenCalledTimes(1);
     expect((startupMonitor as { bindProcess: ReturnType<typeof vi.fn> }).bindProcess).toHaveBeenCalledWith(child);
     child.emitExit(0);
@@ -880,6 +883,28 @@ describe('TomcatPlugin — runtime lifecycle', () => {
 
     expect(result.ok).toBe(true);
     expect(store.set).toHaveBeenCalledWith('jsm.tomcat.shutdownPort.srv-1', 8111);
+    child.emitExit(0);
+  });
+
+  it('tracks started child processes by workspace-scoped operation server key', async () => {
+    const homePath = path.join(tmpDir, 'tomcat-home');
+    await createFakeTomcatHome(homePath);
+    const child = createFakeChildProcess(4324);
+    const store = spyKeyValueStore();
+    plugin = new TomcatPlugin(noopLogger(), { keyValueStore: store.store });
+
+    vi.spyOn(plugin['portScanner'], 'findFreePort').mockResolvedValue(8112);
+    vi.spyOn(plugin['spawner'], 'spawn').mockReturnValue(child);
+
+    const result = await plugin.start(
+      dummyCtx('file:///workspace-a::srv-1'),
+      fakeConfig(homePath, path.join(tmpDir, 'instance')),
+      'run',
+    );
+
+    expect(result.ok).toBe(true);
+    expect(plugin['childProcesses'].has('file:///workspace-a::srv-1')).toBe(true);
+    expect(plugin['childProcesses'].has('srv-1')).toBe(false);
     child.emitExit(0);
   });
 
@@ -972,6 +997,27 @@ describe('TomcatPlugin — runtime lifecycle', () => {
       expect(result.value).toEqual({
         state: 'running',
         pid: 5101,
+        httpPort: config.ports.http,
+      });
+    }
+    plugin['childProcesses'].clear();
+  });
+
+  it('reports status from the workspace-scoped operation server key instead of the config id', async () => {
+    const config = fakeConfig(path.join(tmpDir, 'home'), path.join(tmpDir, 'instance'));
+    const child = createFakeChildProcess(5104);
+    plugin['childProcesses'].set('file:///workspace-a::srv-1', child);
+
+    vi.spyOn(process, 'kill').mockImplementation(() => true);
+    vi.spyOn(plugin['portScanner'], 'probe').mockResolvedValue(true);
+
+    const result = await plugin.getStatus(dummyCtx('file:///workspace-a::srv-1'), config);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toEqual({
+        state: 'running',
+        pid: 5104,
         httpPort: config.ports.http,
       });
     }

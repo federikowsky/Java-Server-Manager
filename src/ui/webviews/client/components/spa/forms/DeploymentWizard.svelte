@@ -15,12 +15,14 @@
   import ContextTag from '../../ds/ContextTag.svelte';
 
   interface Props {
-    serverId: string;
+    serverId?: string;
+    serverKey?: string;
+    workspaceFolderUri?: string;
     deploymentId?: string;
     mode?: 'create' | 'edit';
   }
 
-  let { serverId, deploymentId, mode = 'create' }: Props = $props();
+  let { serverId, serverKey, workspaceFolderUri, deploymentId, mode = 'create' }: Props = $props();
 
   let pageSubtitle = $derived(
     mode === 'create'
@@ -31,8 +33,16 @@
   let state = $state($spaState);
   const unsubscribeSpaState = spaState.subscribe(s => { state = s; });
 
-  let serverRecord = $derived(state.servers.find(s => (s.config as ServerConfig).id === serverId));
+  let serverRecord = $derived(state.servers.find(s => {
+    const cfg = s.config as ServerConfig;
+    if (serverKey && s.serverKey === serverKey) return true;
+    if (workspaceFolderUri && serverId) {
+      return s.workspaceFolderUri === workspaceFolderUri && cfg.id === serverId;
+    }
+    return cfg.id === serverId || s.serverKey === serverId;
+  }));
   let config = $derived(serverRecord ? (serverRecord.config as ServerConfig) : undefined);
+  let configServerId = $derived(config?.id ?? serverId ?? serverKey ?? '');
   let existingDeployment = $derived(
     deploymentId ? config?.deployments?.find(d => d.id === deploymentId) : undefined
   );
@@ -94,7 +104,13 @@
 
     submitError = '';
     spaState.update(s => ({ ...s, serverDetailResumeTab: 'deployments' }));
-    activeEntity.set({ type: 'server', id: serverId });
+    activeEntity.set({
+      type: 'server',
+      id: serverRecord?.serverKey ?? serverKey ?? configServerId,
+      serverId: configServerId,
+      serverKey: serverRecord?.serverKey ?? serverKey,
+      workspaceFolderUri: serverRecord?.workspaceFolderUri ?? workspaceFolderUri,
+    });
   });
 
   let lastInferredName = '';
@@ -134,7 +150,7 @@
   });
 
   $effect(() => {
-    const nextKey = `${mode}:${serverId}:${deploymentId ?? 'create'}:${existingDeployment?.id ?? 'pending'}`;
+    const nextKey = `${mode}:${serverRecord?.serverKey ?? serverKey ?? configServerId}:${deploymentId ?? 'create'}:${existingDeployment?.id ?? 'pending'}`;
     if (hydratedFor === nextKey) {
       return;
     }
@@ -221,7 +237,13 @@
 
   function handleBack() {
     spaState.update(s => ({ ...s, serverDetailResumeTab: 'deployments' }));
-    activeEntity.set({ type: 'server', id: serverId });
+    activeEntity.set({
+      type: 'server',
+      id: serverRecord?.serverKey ?? serverKey ?? configServerId,
+      serverId: configServerId,
+      serverKey: serverRecord?.serverKey ?? serverKey,
+      workspaceFolderUri: serverRecord?.workspaceFolderUri ?? workspaceFolderUri,
+    });
   }
 
   function openHooksEditor(): void {
@@ -296,7 +318,7 @@
       id: mode === 'create' ? 'jsm.deployment.add' : 'jsm.deployment.edit',
       requestId: pendingRequestId,
       args: [{
-        serverId,
+        serverId: configServerId,
         serverKey: serverRecord.serverKey,
         workspaceFolderUri: serverRecord.workspaceFolderUri,
         workspaceFolderName: serverRecord.workspaceFolderName,

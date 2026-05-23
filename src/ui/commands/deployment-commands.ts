@@ -8,7 +8,7 @@ import type { Result } from '@core/result';
 import { ok, err } from '@core/result';
 import { JsmError } from '@core/errors/JsmError';
 import { ErrorCode } from '@core/errors/codes';
-import type { WorkspaceServiceRegistry } from '@app/config';
+import { makeWorkspaceServerKey, type WorkspaceServiceRegistry } from '@app/config';
 import type { ServerLifecycle } from '@app/server/ServerLifecycle';
 import type { ServerTreeViewProvider } from '@ui/tree/ServerTreeViewProvider';
 import type { PluginRegistry } from '@plugins/registry/PluginRegistry';
@@ -266,7 +266,7 @@ export function registerDeploymentCommands(
   const requireServerArg = (
     arg: unknown,
     actionLabel: string,
-  ): { serverId: string; workspaceFolderUri: string } | undefined => {
+  ): { serverId: string; serverKey?: string; workspaceFolderUri: string } | undefined => {
     if (isServerNode(arg)) {
       return arg;
     }
@@ -276,12 +276,15 @@ export function registerDeploymentCommands(
   };
 
   const openDeploymentDashboard = (
-    arg: { serverId: string; deploymentId?: string },
+    arg: { serverId: string; serverKey?: string; workspaceFolderUri: string; deploymentId?: string },
     mode: 'create' | 'edit',
   ): void => {
+    const serverKey = arg.serverKey || (workspaceRegistry ? makeWorkspaceServerKey(arg.workspaceFolderUri, arg.serverId) : arg.serverId);
     void vscode.commands.executeCommand('jsm.dashboard.open', {
       type: 'deployment',
       serverId: arg.serverId,
+      serverKey,
+      workspaceFolderUri: arg.workspaceFolderUri,
       id: arg.deploymentId,
       mode,
       globalTab: 'home',

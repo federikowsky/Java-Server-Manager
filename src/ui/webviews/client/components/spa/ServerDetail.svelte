@@ -13,13 +13,27 @@
   import StatusBadge from '../ds/StatusBadge.svelte';
   import SecondaryTabs from '../ds/SecondaryTabs.svelte';
 
-  const { serverId }: { serverId: string } = $props();
+  interface Props {
+    serverKey?: string;
+    serverId?: string;
+    workspaceFolderUri?: string;
+  }
+
+  let { serverKey, serverId, workspaceFolderUri }: Props = $props();
 
   let state = $state($spaState);
   const unsubscribeSpaState = spaState.subscribe(s => { state = s; });
 
-  let serverRecord = $derived(state.servers.find(s => s.config.id === serverId));
+  let serverRecord = $derived(state.servers.find(s => {
+    const cfg = s.config as { id?: string };
+    if (serverKey && s.serverKey === serverKey) return true;
+    if (workspaceFolderUri && serverId) {
+      return s.workspaceFolderUri === workspaceFolderUri && cfg.id === serverId;
+    }
+    return cfg.id === serverId || s.serverKey === serverId;
+  }));
   let config = $derived(serverRecord?.config);
+  let configServerId = $derived(config?.id ?? serverId ?? serverKey ?? '');
   let runtimeState = $derived(serverRecord ? state.runtimeStates[serverRecord.serverKey] : undefined);
 
   let typeLabel = $derived(
@@ -38,7 +52,8 @@
     activeTab === 'config'
     && !!state.currentFormSchema
     && state.currentFormId === 'jsm.serverForm'
-    && state.currentFormTargetId === serverId
+    && state.currentFormTargetId === configServerId
+    && state.currentFormTargetWorkspaceFolderUri === serverRecord?.workspaceFolderUri
   );
 
   let activeTab = $state('overview');
@@ -59,7 +74,7 @@
       return;
     }
 
-    const nextKey = `${serverId}:${serverRecord.workspaceFolderUri ?? ''}`;
+    const nextKey = serverRecord.serverKey;
     if (!force && configRequestKey === nextKey && (configLoadState === 'loading' || configLoadState === 'ready' || isConfigFormReady)) {
       return;
     }
@@ -79,7 +94,7 @@
       v: WEBVIEW_PROTOCOL_VERSION,
       command: 'executeCommand',
       id: 'jsm.internal.requestServerSchema',
-      args: ['edit', serverId, serverRecord.workspaceFolderUri],
+      args: ['edit', configServerId, serverRecord.workspaceFolderUri],
     });
   }
 
@@ -89,7 +104,7 @@
   });
 
   $effect(() => {
-    const nextKey = serverRecord ? `${serverId}:${serverRecord.workspaceFolderUri ?? ''}` : '';
+    const nextKey = serverRecord?.serverKey ?? '';
 
     if (activeTab !== 'config') {
       clearConfigTimer();
@@ -165,7 +180,7 @@
       command: 'executeCommand',
       id: cmd,
       args: [{ 
-        serverId, 
+        serverId: configServerId,
         serverKey: serverRecord?.serverKey,
         workspaceFolderUri: serverRecord?.workspaceFolderUri,
         workspaceFolderName: serverRecord?.workspaceFolderName 
@@ -311,7 +326,11 @@
           {/if}
         </div>
       {:else if activeTab === 'deployments'}
-        <DeploymentsList serverId={serverId} />
+        <DeploymentsList
+          serverKey={serverRecord.serverKey}
+          serverId={configServerId}
+          workspaceFolderUri={serverRecord.workspaceFolderUri}
+        />
       {/if}
     </div>
   </div>

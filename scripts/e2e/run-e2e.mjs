@@ -10,6 +10,7 @@ import { runTests } from '@vscode/test-electron';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
+const vscodeExecutablePath = process.env.JSM_E2E_VSCODE_EXECUTABLE?.trim() || undefined;
 
 const SERVER_ID = '11111111-1111-4111-8111-111111111111';
 const DEPLOYMENT_ID = '22222222-2222-4222-8222-222222222222';
@@ -85,6 +86,7 @@ async function main() {
       extensionDevelopmentPath: repoRoot,
       extensionTestsPath: path.join(repoRoot, 'out', 'e2e', 'suite', 'index.js'),
       launchArgs: [tmp],
+      vscodeExecutablePath,
       extensionTestsEnv: {
         JSM_E2E: '1',
       },

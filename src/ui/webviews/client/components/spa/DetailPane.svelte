@@ -30,7 +30,11 @@
 <div class="detail-content">
   {#if currentEntity.type === 'server'}
     {#if currentEntity.id}
-      <ServerDetail serverId={currentEntity.id} />
+      <ServerDetail
+        serverKey={currentEntity.serverKey ?? currentEntity.id}
+        serverId={currentEntity.serverId}
+        workspaceFolderUri={currentEntity.workspaceFolderUri}
+      />
     {:else}
       <div class="empty-state">Error: No server ID</div>
     {/if}
@@ -42,6 +46,8 @@
     {#if currentEntity.serverId}
       <DeploymentWizard
         serverId={currentEntity.serverId}
+        serverKey={currentEntity.serverKey}
+        workspaceFolderUri={currentEntity.workspaceFolderUri}
         deploymentId={currentEntity.id}
         mode={currentEntity.mode || 'create'}
       />

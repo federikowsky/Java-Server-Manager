@@ -69,6 +69,8 @@ export interface DashboardNavigationTarget {
     | 'hooks-editor';
   id?: string;
   serverId?: string;
+  /** Runtime/workspace-scoped server identity. Required when server ids may repeat across folders. */
+  serverKey?: string;
   mode?: 'create' | 'edit';
   templateId?: string;
   globalTab?: 'home' | 'templates' | 'settings';

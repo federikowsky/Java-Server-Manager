@@ -197,7 +197,19 @@
 
     submitError = '';
     const createdServerId = typeof result.data?.serverId === 'string' ? result.data.serverId : undefined;
-    activeEntity.set(createdServerId ? { type: 'server', id: createdServerId } : { type: 'welcome' });
+    const createdServerKey = typeof result.data?.serverKey === 'string' ? result.data.serverKey : undefined;
+    const createdWorkspaceFolderUri = typeof result.data?.workspaceFolderUri === 'string'
+      ? result.data.workspaceFolderUri
+      : undefined;
+    activeEntity.set(createdServerId
+      ? {
+          type: 'server',
+          id: createdServerKey ?? createdServerId,
+          serverId: createdServerId,
+          serverKey: createdServerKey,
+          workspaceFolderUri: createdWorkspaceFolderUri,
+        }
+      : { type: 'welcome' });
   });
 
   onMount(() => {

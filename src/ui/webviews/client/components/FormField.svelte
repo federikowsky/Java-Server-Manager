@@ -88,7 +88,9 @@
     }
     activeEntity.set({
       type: 'hooks-editor',
-      serverId: ent.type === 'server' ? ent.id : undefined,
+      serverId: ent.type === 'server' ? ent.serverId ?? ent.id : undefined,
+      serverKey: ent.type === 'server' ? ent.serverKey ?? ent.id : undefined,
+      workspaceFolderUri: ent.type === 'server' ? ent.workspaceFolderUri : undefined,
     });
   }
 </script>

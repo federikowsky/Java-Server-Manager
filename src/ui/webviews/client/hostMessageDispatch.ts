@@ -130,10 +130,10 @@ export function handleHostToWebviewMessage(msg: HostToWebview): void {
       }));
       const t = msg.target;
       const recentId =
-        t.type === 'server' && t.id
-          ? t.id
-          : t.type === 'deployment' && t.serverId
-            ? t.serverId
+        t.type === 'server'
+          ? t.serverKey ?? t.id
+          : t.type === 'deployment'
+            ? t.serverKey
             : undefined;
       if (recentId) {
         homeRecentServerIds.update(list => {

@@ -6,6 +6,8 @@ node_modules/
 dist/
 out/
 coverage/
+src/**/*.js
+!src/**/*.test.js
 jsm_pids/
 .vscode-test/
 data/

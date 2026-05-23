@@ -408,13 +408,20 @@ describe('Server Commands', () => {
     });
 
     it('jsm.server.edit should open the dashboard server detail view', async () => {
-      const node = createServerNode();
+      const node = {
+        serverId: 'srv-1',
+        serverKey: 'file:///ws::srv-1',
+        workspaceFolderUri: 'file:///ws',
+      };
 
       await invoke('jsm.server.edit', node);
 
       expect(mockExecuteCommand).toHaveBeenCalledWith('jsm.dashboard.open', {
         type: 'server',
-        id: 'srv-1',
+        id: 'file:///ws::srv-1',
+        serverId: 'srv-1',
+        serverKey: 'file:///ws::srv-1',
+        workspaceFolderUri: 'file:///ws',
         globalTab: 'home',
       });
     });
@@ -476,10 +483,11 @@ describe('Server Commands', () => {
       expect(deps.treeProvider.requestRefresh).toHaveBeenCalled();
       expect(result).toEqual(expect.objectContaining({
         ok: true,
-        data: {
+        data: expect.objectContaining({
           serverId: 'srv-2',
+          serverKey: 'file:///ws::srv-2',
           workspaceFolderUri: 'file:///ws',
-        },
+        }),
       }));
     });
 

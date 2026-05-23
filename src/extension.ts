@@ -384,6 +384,7 @@ async function reconcileLoadedServers(params: ReconcileLoadedServersParams): Pro
 
 export type JsmExtensionE2EApi = {
   __e2eGetDeploySyncStartedCount: () => number;
+  __e2eGetAutosyncWatcherCount: () => number;
 };
 
 export async function activate(ctx: vscode.ExtensionContext): Promise<JsmExtensionE2EApi | void> {
@@ -441,6 +442,11 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<JsmExtensi
   // ── 3. Plugins layer ──────────────────────────────────────────────────
 
   const pluginRegistry = new PluginRegistry(logger);
+  disposables.push({
+    dispose: () => {
+      void pluginRegistry.dispose();
+    },
+  });
   pluginRegistry.register('tomcat', (l: ILogger) => new TomcatPlugin(l, {
     startupListenerJarPath: path.join(ctx.extensionUri.fsPath, 'assets', 'tomcat', 'jsm-tomcat-startup-listener.jar'),
     serverXmlTemplatePath: path.join(ctx.extensionUri.fsPath, 'assets', 'tomcat', 'server.xml.template'),
@@ -803,6 +809,7 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<JsmExtensi
   if (e2eEnabled) {
     return {
       __e2eGetDeploySyncStartedCount: () => e2eDeploySyncStarted.count,
+      __e2eGetAutosyncWatcherCount: () => autoSyncService.getWatcherCount(),
     };
   }
 }

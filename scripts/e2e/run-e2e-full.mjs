@@ -12,6 +12,7 @@ import { runTests } from '@vscode/test-electron';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
+const vscodeExecutablePath = process.env.JSM_E2E_VSCODE_EXECUTABLE?.trim() || undefined;
 
 const DEFAULT_WORKSPACE = '/Users/federicofilippi/Desktop/tamtamy/cop/reply-cop';
 
@@ -60,6 +61,7 @@ async function main() {
     extensionDevelopmentPath: repoRoot,
     extensionTestsPath: path.join(repoRoot, 'out', 'e2e', 'suite', 'index-full.js'),
     launchArgs: [workspace],
+    vscodeExecutablePath,
     extensionTestsEnv: {
       JSM_E2E: '1',
       JSM_E2E_FULL: '1',

@@ -9,6 +9,7 @@ import { ErrorCode } from '@core/errors/codes';
 import { throwIfCancelled } from '@core/ops';
 import type {
   ServerConfig,
+  ServerId,
   DeploymentConfig,
   TomcatPluginConfig,
   StartMode,
@@ -383,14 +384,14 @@ export class TomcatPlugin implements IServerPlugin {
     const shutdownPort = await this.reserveShutdownPort(ctx, config);
     this.appendCatalinaOpts(env, config, shutdownPort, config.run.vmArgs);
 
-    const startupMonitorResult = await this.createStartupMonitor(config);
+    const startupMonitorResult = await this.createStartupMonitor(ctx.serverId, config);
     if (!startupMonitorResult.ok) {
       return startupMonitorResult;
     }
     const startupMonitor = startupMonitorResult.value;
 
     const args = this.buildStartArgs(env, config, mode);
-    this.applyStartupMonitorJavaOpts(env, config, startupMonitor);
+    this.applyStartupMonitorJavaOpts(env, ctx.serverId, startupMonitor);
 
     ctx.progress.report('Starting Tomcat...');
 
@@ -412,7 +413,7 @@ export class TomcatPlugin implements IServerPlugin {
     }
 
     startupMonitor?.bindProcess(child);
-    this.trackChildProcess(config.id, child);
+    this.trackChildProcess(ctx.serverId, child);
 
     const result = this.buildStartResult(config, mode, child.pid, startupMonitor);
 
@@ -438,7 +439,7 @@ export class TomcatPlugin implements IServerPlugin {
     const exitCode = await this.invokeStopCommand(ctx, config, script, env);
 
     // Also kill the tracked child process if still running
-    this.cleanupTrackedChildProcess(config.id);
+    this.cleanupTrackedChildProcess(ctx.serverId);
 
     if (exitCode !== 0 && exitCode !== null) {
       this.logger.warn(`TomcatPlugin: stop script exited with code ${exitCode}`);
@@ -772,10 +773,10 @@ export class TomcatPlugin implements IServerPlugin {
   // ── Status ──────────────────────────────────────────────────────────
 
   async getStatus(
-    _ctx: OperationContext,
+    ctx: OperationContext,
     config: ServerConfig,
   ): Promise<Result<StatusReport, JsmError>> {
-    const tracked = this.childProcesses.get(config.id);
+    const tracked = this.childProcesses.get(ctx.serverId);
 
     // Check if we have a tracked process
     if (tracked?.pid) {
@@ -798,7 +799,7 @@ export class TomcatPlugin implements IServerPlugin {
       }
 
       // Process is gone — clean up
-      this.childProcesses.delete(config.id);
+      this.childProcesses.delete(ctx.serverId);
     }
 
     return ok({ state: 'stopped' });
@@ -1141,6 +1142,7 @@ export class TomcatPlugin implements IServerPlugin {
   }
 
   private async createStartupMonitor(
+    serverKey: ServerId,
     config: ServerConfig,
   ): Promise<Result<TomcatStartupMonitor | undefined, JsmError>> {
     if (!this.startupListenerJarPath) {
@@ -1169,7 +1171,7 @@ export class TomcatPlugin implements IServerPlugin {
 
     try {
       return ok(await TomcatStartupMonitor.create({
-        serverKey: config.id,
+        serverKey,
         serverName: config.name,
         logger: this.logger,
       }));
@@ -1227,7 +1229,7 @@ export class TomcatPlugin implements IServerPlugin {
 
   private applyStartupMonitorJavaOpts(
     env: Record<string, string>,
-    config: ServerConfig,
+    serverKey: ServerId,
     startupMonitor: TomcatStartupMonitor | undefined,
   ): void {
     if (!startupMonitor) {
@@ -1238,7 +1240,7 @@ export class TomcatPlugin implements IServerPlugin {
       `-Djsm.startup.callback.url=${startupMonitor.callbackUrl}`,
       `-Djsm.startup.callback.token=${startupMonitor.token}`,
       `-Djsm.startup.callback.startupId=${startupMonitor.startupId}`,
-      `-Djsm.startup.callback.serverKey=${config.id}`,
+      `-Djsm.startup.callback.serverKey=${serverKey}`,
     ];
     const existing = env['JAVA_OPTS'] ?? '';
     env['JAVA_OPTS'] = (existing + ' ' + callbackVmArgs.join(' ')).trim();

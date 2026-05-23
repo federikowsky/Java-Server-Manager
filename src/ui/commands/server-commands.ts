@@ -411,6 +411,7 @@ export function registerServerCommands(
           message: `Server "${result.value.name}" created.`,
           data: {
             serverId: result.value.id,
+            serverKey: makeWorkspaceServerKey(draftArg.workspaceFolderUri, result.value.id),
             workspaceFolderUri: draftArg.workspaceFolderUri,
           },
         };
@@ -487,9 +488,13 @@ export function registerServerCommands(
     ['jsm.server.edit', (arg: unknown) => {
       const resolvedArg = requireServerCommandArg(arg, 'Editing a server');
       if (!resolvedArg) return;
+      const serverKey = resolveServerKey(workspaceRegistry, resolvedArg);
       openDashboardTarget({
         type: 'server',
-        id: resolvedArg.serverId,
+        id: serverKey,
+        serverId: resolvedArg.serverId,
+        serverKey,
+        workspaceFolderUri: resolvedArg.workspaceFolderUri,
         globalTab: 'home',
       });
     }],

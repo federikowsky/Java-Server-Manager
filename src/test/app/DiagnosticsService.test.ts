@@ -75,8 +75,109 @@ describe('DiagnosticsService', () => {
     expect(env['DB_PASSWORD']).toBe('***REDACTED***');
   });
 
+  it('redacts sensitive values across nested config, hooks, and JVM args', () => {
+    const config = makeConfig({
+      run: {
+        env: { JAVA_HOME: '/opt/java', DB_PASSWORD: 'env-secret' },
+        vmArgs: [
+          '-Xmx512m',
+          '-Ddb.password=vm-secret',
+          '-Dauth.token=vm-token',
+          '-Djavax.net.ssl.keyStorePassword=vm-keystore-secret',
+        ],
+      },
+      pluginConfig: {
+        type: 'tomcat',
+        shutdownPort: 8005,
+        disableAjp: true,
+        ssl: {
+          enabled: true,
+          port: 8443,
+          keystorePath: '/secure/server.p12',
+          keystorePassword: 'keystore-secret',
+          keystoreType: 'PKCS12',
+          keyPassword: 'key-secret',
+          clientAuth: true,
+          truststorePath: '/secure/trust.p12',
+          truststorePassword: 'trust-secret',
+          truststoreType: 'PKCS12',
+        },
+      },
+      hooks: [
+        {
+          id: 'deploy-hook',
+          enabled: true,
+          phase: 'pre',
+          event: 'deploy.full',
+          kind: 'command',
+          timeoutMs: 60_000,
+          continueOnError: false,
+          command: {
+            mode: 'shell',
+            line: 'curl -H "Authorization: Bearer hook-token" https://example.test/deploy?password=hook-line-secret',
+            env: { API_TOKEN: 'hook-env-secret', PUBLIC_FLAG: 'visible' },
+          },
+        },
+      ],
+      deployments: [
+        {
+          id: 'dep-1',
+          type: 'exploded',
+          sourcePath: '/src/app',
+          deployName: 'app',
+          syncMode: 'manual',
+          hotReload: false,
+          ignoreGlobs: [],
+          hooks: [
+            {
+              id: 'dep-hook',
+              enabled: true,
+              phase: 'post',
+              event: 'deploy.full',
+              kind: 'command',
+              timeoutMs: 60_000,
+              continueOnError: false,
+              command: {
+                mode: 'shell',
+                line: 'echo secret=deployment-line-secret',
+                env: { DEPLOY_SECRET: 'deployment-env-secret' },
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const service = new DiagnosticsService({
+      extensionVersion: '1.0.0',
+      getConfigs: () => [config],
+      getRuntimeState: () => undefined,
+      getLogBuffer: () => '',
+    });
+
+    const text = service.generateBundleText();
+
+    for (const leaked of [
+      'env-secret',
+      'vm-secret',
+      'vm-token',
+      'vm-keystore-secret',
+      'keystore-secret',
+      'key-secret',
+      'trust-secret',
+      'hook-token',
+      'hook-line-secret',
+      'hook-env-secret',
+      'deployment-line-secret',
+      'deployment-env-secret',
+    ]) {
+      expect(text).not.toContain(leaked);
+    }
+    expect(text).toContain('/secure/server.p12');
+    expect(text).toContain('visible');
+  });
+
   it('redacts sensitive patterns in logs', () => {
-    const logText = 'INFO: connecting with password=s3cretValue and token=abc123';
+    const logText = 'INFO: connecting with password=s3cretValue and token=abc123 and -Djavax.net.ssl.keyStorePassword=changeit';
     const service = new DiagnosticsService({
       extensionVersion: '1.0.0',
       getConfigs: () => [],
@@ -87,6 +188,7 @@ describe('DiagnosticsService', () => {
     const bundle = service.generateBundle();
     expect(bundle.logs).not.toContain('s3cretValue');
     expect(bundle.logs).not.toContain('abc123');
+    expect(bundle.logs).not.toContain('changeit');
     expect(bundle.logs).toContain('***REDACTED***');
   });
 

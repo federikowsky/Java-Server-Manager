@@ -6,14 +6,20 @@ import type { ServerRuntimeState } from '@core/types/runtime';
 
 // ── Log Redaction (§12.6) ──────────────────────────────────────────────────
 
-/**
- * Word-boundary regex for sensitive values.
- * Matches password, secret, token, api_key, api-key, apikey, auth, credential.
- */
-const REDACT_PATTERN =
-  /\b(password|secret|token|api[_-]?key|auth|credential)\b\s*[:=]\s*\S+/gi;
+const REDACTED_VALUE = '***REDACTED***';
 
-const REDACTED_REPLACEMENT = '$1=***REDACTED***';
+/**
+ * Key names whose values must never leave the diagnostics boundary.
+ * Keep this narrower than "contains key" so non-secret paths such as
+ * keystorePath remain useful in support bundles.
+ */
+const SENSITIVE_KEY_PATTERN =
+  /password|passwd|pwd|secret|token|api[_-]?key|apikey|credential|authorization|private[_-]?key|access[_-]?key|(^|[_-])auth($|[_-])/i;
+
+const SENSITIVE_ASSIGNMENT_PATTERN =
+  /([A-Za-z0-9_.-]*(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|credential|authorization|private[_-]?key|access[_-]?key|auth)[A-Za-z0-9_.-]*)\s*([:=])\s*(?:"[^"]*"|'[^']*'|[^\s&,;]+)/gi;
+
+const BEARER_TOKEN_PATTERN = /\bBearer\s+(["']?)[^"',\s]+(["']?)/gi;
 
 // ── Diagnostics Bundle (§11.3) ─────────────────────────────────────────────
 
@@ -80,32 +86,48 @@ export class DiagnosticsService {
 
   // ── Redaction ─────────────────────────────────────────────────────
 
-  /** Redact a config object — removes env values that look sensitive. */
+  /** Redact a config object without mutating the source configuration. */
   private redactConfig(
     config: ServerConfig,
   ): DiagnosticsBundle['servers'][number]['config'] {
-    const redactedEnv: Record<string, string> = {};
-    for (const [key, value] of Object.entries(config.run.env)) {
-      redactedEnv[key] = this.isEnvKeySensitive(key) ? '***REDACTED***' : value;
-    }
-
-    return {
-      ...config,
-      run: {
-        env: redactedEnv,
-        vmArgs: config.run.vmArgs,
-      },
-    };
+    return this.redactValue(config) as DiagnosticsBundle['servers'][number]['config'];
   }
 
-  /** Check if an env key looks sensitive. */
-  private isEnvKeySensitive(key: string): boolean {
-    return REDACT_PATTERN.test(key) || (REDACT_PATTERN.lastIndex = 0, false) ||
-      /password|secret|token|key|auth|credential/i.test(key);
+  private redactValue(value: unknown, key = ''): unknown {
+    if (this.isSensitiveKey(key)) {
+      return REDACTED_VALUE;
+    }
+
+    if (typeof value === 'string') {
+      return this.redactString(value);
+    }
+
+    if (Array.isArray(value)) {
+      return value.map(item => this.redactValue(item));
+    }
+
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(
+        Object.entries(value as Record<string, unknown>).map(([entryKey, entryValue]) => [
+          entryKey,
+          this.redactValue(entryValue, entryKey),
+        ]),
+      );
+    }
+
+    return value;
+  }
+
+  private isSensitiveKey(key: string): boolean {
+    return SENSITIVE_KEY_PATTERN.test(key);
   }
 
   /** Redact sensitive patterns in arbitrary text (logs). */
   private redactString(text: string): string {
-    return text.replace(REDACT_PATTERN, REDACTED_REPLACEMENT);
+    return text
+      .replace(BEARER_TOKEN_PATTERN, (_match, openQuote: string, closeQuote: string) => (
+        `Bearer ${openQuote}${REDACTED_VALUE}${closeQuote}`
+      ))
+      .replace(SENSITIVE_ASSIGNMENT_PATTERN, `$1$2${REDACTED_VALUE}`);
   }
 }

@@ -30,9 +30,9 @@
     state = s;
   });
 
-  let recentIds = $state<string[]>([]);
+  let recentServerKeys = $state<string[]>([]);
   const unsubscribeRecent = homeRecentServerIds.subscribe(r => {
-    recentIds = r;
+    recentServerKeys = r;
   });
 
   onDestroy(() => {
@@ -45,18 +45,20 @@
   let multiRoot = $derived(state.workspaceFolders.length > 1);
 
   let recentEntries = $derived(
-    recentIds
-      .map(id => {
-        const rec = state.servers.find(s => (s.config as { id?: string }).id === id);
+    recentServerKeys
+      .map(serverKey => {
+        const rec = state.servers.find(s => s.serverKey === serverKey);
         const cfg = rec?.config as { id?: string; name?: string } | undefined;
         return cfg?.id
           ? {
-              id: cfg.id,
+              serverKey: rec.serverKey,
+              serverId: cfg.id,
+              workspaceFolderUri: rec.workspaceFolderUri,
               name: typeof cfg.name === 'string' && cfg.name.trim().length > 0 ? cfg.name : cfg.id,
             }
           : null;
       })
-      .filter((x): x is { id: string; name: string } => x !== null),
+      .filter((x): x is { serverKey: string; serverId: string; workspaceFolderUri: string; name: string } => x !== null),
   );
 
   let envRows = $derived([
@@ -69,9 +71,15 @@
     { label: 'Workspace folders', value: String(state.workspaceFolders.length) },
   ]);
 
-  function openRecent(serverId: string) {
+  function openRecent(entry: { serverKey: string; serverId: string; workspaceFolderUri: string }) {
     spaState.update(s => ({ ...s, globalTab: 'home' }));
-    activeEntity.set({ type: 'server', id: serverId });
+    activeEntity.set({
+      type: 'server',
+      id: entry.serverKey,
+      serverId: entry.serverId,
+      serverKey: entry.serverKey,
+      workspaceFolderUri: entry.workspaceFolderUri,
+    });
   }
 
   function goSettings() {
@@ -136,7 +144,7 @@
         <ul class="recent-list">
           {#each recentEntries as r}
             <li>
-              <button type="button" class="recent-btn" onclick={() => openRecent(r.id)}>
+              <button type="button" class="recent-btn" onclick={() => openRecent(r)}>
                 <Icon name="server" size={14} />
                 <span>{r.name}</span>
               </button>

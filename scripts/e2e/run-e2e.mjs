@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Builds a disposable workspace, launches VS Code test host with JSM_E2E=1, runs Mocha E2E suite.
+ * Builds a disposable workspace, launches VS Code test host with JSM_E2E=1, runs the E2E suite.
  */
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';

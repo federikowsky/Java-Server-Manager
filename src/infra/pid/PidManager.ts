@@ -1,9 +1,24 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { createHash } from 'crypto';
+import { execFileSync } from 'child_process';
+import * as os from 'os';
 import type { ServerId } from '@core/types';
 import type { Logger } from '@core/types/logger';
 import { ensureDir } from '../fs/FileUtils';
+
+export interface PidOwnershipMetadata {
+  instancePath: string;
+  runtimeHomePath: string;
+}
+
+export interface PidRecord extends PidOwnershipMetadata {
+  pid: number;
+  serverKey: string;
+  writtenAt: number;
+  processStartToken?: string;
+  processCommand?: string;
+}
 
 /**
  * PID file operations (§5.5, §9.9).
@@ -23,10 +38,21 @@ export class PidManager {
   }
 
   /** Write a PID file for a server. */
-  async writePid(serverId: ServerId, pid: number): Promise<void> {
+  async writePid(serverId: ServerId, pid: number, metadata?: PidOwnershipMetadata): Promise<void> {
     await ensureDir(this.baseDir);
     const filePath = this.pidPath(serverId);
-    await fs.writeFile(filePath, String(pid), 'utf-8');
+    const content = metadata
+      ? `${JSON.stringify({
+        pid,
+        serverKey: String(serverId),
+        instancePath: metadata.instancePath,
+        runtimeHomePath: metadata.runtimeHomePath,
+        writtenAt: Date.now(),
+        processStartToken: this.readProcessStartToken(pid),
+        processCommand: this.readProcessCommand(pid),
+      } satisfies PidRecord, null, 2)}\n`
+      : String(pid);
+    await fs.writeFile(filePath, content, 'utf-8');
     this.logger.debug(`PidManager: wrote PID ${pid} for ${serverId}`);
   }
 
@@ -34,8 +60,19 @@ export class PidManager {
   async readPid(serverId: ServerId): Promise<number | undefined> {
     try {
       const content = await fs.readFile(this.pidPath(serverId), 'utf-8');
-      const pid = parseInt(content.trim(), 10);
+      const record = this.parsePidRecord(content);
+      const pid = record?.pid ?? parseInt(content.trim(), 10);
       return Number.isFinite(pid) ? pid : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Read the full PID ownership record. Legacy numeric PID files return undefined. */
+  async readPidRecord(serverId: ServerId): Promise<PidRecord | undefined> {
+    try {
+      const content = await fs.readFile(this.pidPath(serverId), 'utf-8');
+      return this.parsePidRecord(content);
     } catch {
       return undefined;
     }
@@ -58,6 +95,95 @@ export class PidManager {
       return true;
     } catch {
       return false;
+    }
+  }
+
+  /** Check PID liveness and process-start identity to avoid trusting PID reuse. */
+  isPidRecordCurrent(record: PidRecord): boolean {
+    if (!this.isProcessAlive(record.pid) || !record.processStartToken) {
+      return false;
+    }
+
+    return this.readProcessStartToken(record.pid) === record.processStartToken;
+  }
+
+  private parsePidRecord(content: string): PidRecord | undefined {
+    const trimmed = content.trim();
+    if (!trimmed.startsWith('{')) {
+      return undefined;
+    }
+
+    try {
+      const parsed = JSON.parse(trimmed) as Partial<PidRecord>;
+      if (
+        Number.isInteger(parsed.pid)
+        && typeof parsed.pid === 'number'
+        && parsed.pid > 0
+        && typeof parsed.serverKey === 'string'
+        && typeof parsed.instancePath === 'string'
+        && typeof parsed.runtimeHomePath === 'string'
+        && typeof parsed.writtenAt === 'number'
+      ) {
+        return {
+          pid: parsed.pid,
+          serverKey: parsed.serverKey,
+          instancePath: parsed.instancePath,
+          runtimeHomePath: parsed.runtimeHomePath,
+          writtenAt: parsed.writtenAt,
+          processStartToken: typeof parsed.processStartToken === 'string' ? parsed.processStartToken : undefined,
+          processCommand: typeof parsed.processCommand === 'string' ? parsed.processCommand : undefined,
+        };
+      }
+    } catch {
+      return undefined;
+    }
+
+    return undefined;
+  }
+
+  private readProcessStartToken(pid: number): string | undefined {
+    try {
+      if (os.platform() === 'win32') {
+        return execFileSync('powershell.exe', [
+          '-NoProfile',
+          '-Command',
+          `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}").CreationDate.ToUniversalTime().ToString("o")`,
+        ], {
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+          windowsHide: true,
+        }).trim() || undefined;
+      }
+
+      return execFileSync('ps', ['-p', String(pid), '-o', 'lstart='], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim() || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private readProcessCommand(pid: number): string | undefined {
+    try {
+      if (os.platform() === 'win32') {
+        return execFileSync('powershell.exe', [
+          '-NoProfile',
+          '-Command',
+          `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}").CommandLine`,
+        ], {
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+          windowsHide: true,
+        }).trim() || undefined;
+      }
+
+      return execFileSync('ps', ['-p', String(pid), '-o', 'command='], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim() || undefined;
+    } catch {
+      return undefined;
     }
   }
 

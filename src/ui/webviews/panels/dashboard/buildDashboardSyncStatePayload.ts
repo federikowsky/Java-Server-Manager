@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import type { HostToWebview, SpaServerRecord } from '../../protocol';
 import type { DashboardPanelDeps } from './dashboardPanelTypes';
+import { redactDashboardSecrets } from './redactDashboardSecrets';
 
 export type DashboardSyncStatePayload = Omit<
   Extract<HostToWebview, { command: 'syncState' }>,
@@ -10,7 +11,7 @@ export type DashboardSyncStatePayload = Omit<
 export function buildDashboardSyncStatePayload(deps: DashboardPanelDeps): DashboardSyncStatePayload {
   const servers: SpaServerRecord[] = deps.workspaceRegistry.getAllServers().map(r => ({
     serverKey: r.serverKey,
-    config: r.config,
+    config: redactDashboardSecrets(r.config),
     workspaceFolderUri: r.workspaceFolderUri,
     workspaceFolderName: r.workspaceFolderName,
   }));

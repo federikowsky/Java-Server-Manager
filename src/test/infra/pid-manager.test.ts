@@ -28,6 +28,39 @@ describe('PidManager', () => {
     expect(pid).toBe(42);
   });
 
+  it('writes and reads PID ownership metadata', async () => {
+    await pm.writePid('s1', 42, {
+      instancePath: '/managed/s1',
+      runtimeHomePath: '/opt/tomcat',
+    });
+
+    const record = await pm.readPidRecord('s1');
+
+    expect(record).toMatchObject({
+      pid: 42,
+      serverKey: 's1',
+      instancePath: '/managed/s1',
+      runtimeHomePath: '/opt/tomcat',
+    });
+    expect(record?.writtenAt).toEqual(expect.any(Number));
+  });
+
+  it('does not consider a record current when process start token changed', async () => {
+    await pm.writePid('s1', process.pid, {
+      instancePath: '/managed/s1',
+      runtimeHomePath: '/opt/tomcat',
+    });
+    const record = await pm.readPidRecord('s1');
+    expect(record).toBeDefined();
+
+    const current = pm.isPidRecordCurrent({
+      ...record!,
+      processStartToken: 'different-start-token',
+    });
+
+    expect(current).toBe(false);
+  });
+
   it('returns undefined for missing PID', async () => {
     const pid = await pm.readPid('missing');
     expect(pid).toBeUndefined();

@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as fs from 'fs/promises';
+import * as os from 'os';
+import * as path from 'path';
 import { ok } from '@core/result';
 import { ErrorCode } from '@core/errors/codes';
 import type { Logger } from '@core/types/logger';
@@ -35,6 +38,9 @@ function makeServer(id = 'srv-1', name = 'My Tomcat'): ServerConfig {
 }
 
 describe('ServerProvisioningService', () => {
+  let tmpDir: string;
+  let managedRoot: string;
+  let managedInstancePath: string;
   let configService: {
     addServer: ReturnType<typeof vi.fn>;
     removeServer: ReturnType<typeof vi.fn>;
@@ -45,6 +51,7 @@ describe('ServerProvisioningService', () => {
   };
   let pathResolver: {
     resolve: ReturnType<typeof vi.fn>;
+    getStorageRoot: ReturnType<typeof vi.fn>;
   };
   let trustGate: {
     isTrusted: ReturnType<typeof vi.fn>;
@@ -52,6 +59,9 @@ describe('ServerProvisioningService', () => {
   let service: ServerProvisioningService;
 
   beforeEach(() => {
+    tmpDir = '';
+    managedRoot = '';
+    managedInstancePath = '';
     configService = {
       addServer: vi.fn(async () => ok(undefined)),
       removeServer: vi.fn(async () => ok(undefined)),
@@ -67,6 +77,7 @@ describe('ServerProvisioningService', () => {
     };
     pathResolver = {
       resolve: vi.fn(() => '/tmp/managed'),
+      getStorageRoot: vi.fn(() => '/tmp'),
     };
     trustGate = {
       isTrusted: vi.fn(() => true),
@@ -79,6 +90,20 @@ describe('ServerProvisioningService', () => {
       trustGate,
     });
   });
+
+  afterEach(async () => {
+    if (tmpDir) {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  async function setupManagedPaths(): Promise<void> {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'jsm-provisioning-'));
+    managedRoot = path.join(tmpDir, 'instances');
+    managedInstancePath = path.join(managedRoot, 'srv-1');
+    await fs.mkdir(managedInstancePath, { recursive: true });
+    pathResolver.getStorageRoot = vi.fn(() => managedRoot);
+  }
 
   it('blocks createServer before any provisioning side effects when workspace is untrusted', async () => {
     trustGate.isTrusted.mockReturnValue(false);
@@ -124,5 +149,59 @@ describe('ServerProvisioningService', () => {
     }
     expect(configService.getServer).not.toHaveBeenCalled();
     expect(configService.removeServer).not.toHaveBeenCalled();
+  });
+
+  it('refuses to remove config when instancePath is outside managed storage', async () => {
+    await setupManagedPaths();
+    const outsidePath = path.join(tmpDir, 'outside');
+    await fs.mkdir(outsidePath, { recursive: true });
+    configService.getServer.mockReturnValue(makeServer('srv-1', 'Unsafe'));
+    configService.getServer.mockReturnValueOnce({
+      ...makeServer('srv-1', 'Unsafe'),
+      instancePath: outsidePath,
+    });
+
+    const result = await service.removeServer('srv-1');
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCode.InvalidConfig);
+      expect(result.error.message).toContain('not a managed JSM instance path');
+    }
+    expect(configService.removeServer).not.toHaveBeenCalled();
+    await expect(fs.stat(outsidePath)).resolves.toBeDefined();
+  });
+
+  it('refuses to remove config when managed marker is missing', async () => {
+    await setupManagedPaths();
+    configService.getServer.mockReturnValue({
+      ...makeServer('srv-1', 'Unmarked'),
+      instancePath: managedInstancePath,
+    });
+
+    const result = await service.removeServer('srv-1');
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCode.InvalidConfig);
+      expect(result.error.message).toContain('managed marker');
+    }
+    expect(configService.removeServer).not.toHaveBeenCalled();
+    await expect(fs.stat(managedInstancePath)).resolves.toBeDefined();
+  });
+
+  it('removes marked managed instance before deleting config authority', async () => {
+    await setupManagedPaths();
+    await fs.writeFile(path.join(managedInstancePath, '.jsm-managed-instance'), 'srv-1\n', 'utf8');
+    configService.getServer.mockReturnValue({
+      ...makeServer('srv-1', 'Managed'),
+      instancePath: managedInstancePath,
+    });
+
+    const result = await service.removeServer('srv-1');
+
+    expect(result.ok).toBe(true);
+    expect(configService.removeServer).toHaveBeenCalledWith('srv-1');
+    await expect(fs.stat(managedInstancePath)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });

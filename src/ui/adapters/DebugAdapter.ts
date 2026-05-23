@@ -12,6 +12,7 @@ import { ErrorCode } from '@core/errors/codes';
 export class DebugAdapter implements DebugAttacher {
   /** Active debug sessions keyed by serverId. */
   private readonly sessions = new Map<ServerId, vscode.DebugSession>();
+  private readonly disposables: vscode.Disposable[] = [];
 
   /** Event fired when a debug session is attached or detached for a server. */
   private readonly _onDidChangeSession = new vscode.EventEmitter<{ serverId: ServerId; attached: boolean }>();
@@ -19,15 +20,17 @@ export class DebugAdapter implements DebugAttacher {
 
   constructor() {
     // Detect external session termination (user stops debugger from VS Code)
-    vscode.debug.onDidTerminateDebugSession(session => {
-      for (const [serverId, tracked] of this.sessions) {
-        if (tracked.id === session.id) {
-          this.sessions.delete(serverId);
-          this._onDidChangeSession.fire({ serverId, attached: false });
-          break;
+    this.disposables.push(
+      vscode.debug.onDidTerminateDebugSession(session => {
+        for (const [serverId, tracked] of this.sessions) {
+          if (tracked.id === session.id) {
+            this.sessions.delete(serverId);
+            this._onDidChangeSession.fire({ serverId, attached: false });
+            break;
+          }
         }
-      }
-    });
+      }),
+    );
   }
 
   /** Check if a debug session is currently attached for a server. */
@@ -83,5 +86,13 @@ export class DebugAdapter implements DebugAttacher {
       this.sessions.delete(serverId);
       this._onDidChangeSession.fire({ serverId, attached: false });
     }
+  }
+
+  dispose(): void {
+    for (const disposable of this.disposables.splice(0)) {
+      disposable.dispose();
+    }
+    this.sessions.clear();
+    this._onDidChangeSession.dispose();
   }
 }

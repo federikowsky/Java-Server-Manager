@@ -65,8 +65,10 @@ function mockPidManager() {
   return {
     writePid: vi.fn(async () => {}),
     readPid: vi.fn(async () => null as number | null),
+    readPidRecord: vi.fn(async () => undefined),
     clearPid: vi.fn(async () => {}),
     isProcessAlive: vi.fn(() => false),
+    isPidRecordCurrent: vi.fn(() => false),
   };
 }
 
@@ -365,7 +367,10 @@ describe('ServerLifecycle', () => {
         code: ErrorCode.Timeout,
       });
 
-      expect(pidManager.writePid).toHaveBeenCalledWith('srv-1', 123);
+      expect(pidManager.writePid).toHaveBeenCalledWith('srv-1', 123, {
+        instancePath: '/tmp/inst',
+        runtimeHomePath: '/opt/tomcat',
+      });
       expect(pluginStop).toHaveBeenCalledOnce();
       expect(pidManager.clearPid).toHaveBeenCalledWith('srv-1');
       expect(debugAttacher.detach).toHaveBeenCalledWith('srv-1');
@@ -835,7 +840,9 @@ describe('ServerLifecycle', () => {
         getStatus: vi.fn(),
         detect: vi.fn(),
       });
-      pidManager.isProcessAlive.mockReturnValue(true);
+      pidManager.isProcessAlive
+        .mockReturnValueOnce(true)
+        .mockReturnValueOnce(false);
 
       const nowValues = [0, 0, 0, 0, 0, 25, 25];
       const dateNowSpy = vi.spyOn(Date, 'now').mockImplementation(() => nowValues.shift() ?? 25);
@@ -853,6 +860,42 @@ describe('ServerLifecycle', () => {
 
       expect(logger.warn).toHaveBeenCalledWith('ServerLifecycle: force-killing My Tomcat (PID 123)');
       expect(pidManager.clearPid).toHaveBeenCalledWith('srv-1');
+      expect(runtime.state).toBe('stopped');
+    });
+
+    it('force-kills a still-running process when the timeout has already elapsed before the wait loop continues', async () => {
+      const queue = mockQueue();
+      const runtime = lifecycle.register('srv-1', {
+        ...makeServer(),
+        timeouts: { stopMs: 20 },
+      } as ServerConfig, queue as never);
+      runtime.forceState('running', { pid: 123 });
+
+      pluginRegistry.get.mockReturnValue({
+        start: vi.fn(),
+        stop: vi.fn(async () => ok(undefined)),
+        getStatus: vi.fn(),
+        detect: vi.fn(),
+      });
+      pidManager.isProcessAlive
+        .mockReturnValueOnce(true)
+        .mockReturnValueOnce(false);
+
+      const nowValues = [0, 0, 0, 25];
+      const dateNowSpy = vi.spyOn(Date, 'now').mockImplementation(() => nowValues.shift() ?? 25);
+      const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+
+      try {
+        const executor = queue.setExecutor.mock.calls[0][0] as (entry: { kind: string; meta?: Record<string, unknown> }) => Promise<void>;
+        await executor({ kind: 'LifecycleStop' });
+
+        expect(killSpy).toHaveBeenCalledWith(123, 'SIGKILL');
+      } finally {
+        dateNowSpy.mockRestore();
+        killSpy.mockRestore();
+      }
+
+      expect(logger.warn).toHaveBeenCalledWith('ServerLifecycle: force-killing My Tomcat (PID 123)');
       expect(runtime.state).toBe('stopped');
     });
 
@@ -1595,12 +1638,55 @@ describe('ServerLifecycle', () => {
       const queue = mockQueue();
       const runtime = lifecycle.register('srv-1', makeServer(), queue as never);
 
+      pidManager.readPidRecord.mockResolvedValue({
+        pid: 42,
+        serverKey: 'srv-1',
+        instancePath: '/tmp/inst',
+        runtimeHomePath: '/opt/tomcat',
+        writtenAt: Date.now(),
+        processStartToken: 'token',
+      });
+      pidManager.isProcessAlive.mockReturnValue(true);
+      pidManager.isPidRecordCurrent.mockReturnValue(true);
+
+      await lifecycle.reconcileRunningServers([{ serverKey: 'srv-1', config: makeServer() }]);
+
+      expect(runtime.state).toBe('running');
+    });
+
+    it('clears legacy numeric PID files instead of trusting PID reuse', async () => {
+      const queue = mockQueue();
+      const runtime = lifecycle.register('srv-1', makeServer(), queue as never);
+
+      pidManager.readPidRecord.mockResolvedValue(undefined);
       pidManager.readPid.mockResolvedValue(42);
       pidManager.isProcessAlive.mockReturnValue(true);
 
       await lifecycle.reconcileRunningServers([{ serverKey: 'srv-1', config: makeServer() }]);
 
-      expect(runtime.state).toBe('running');
+      expect(runtime.state).toBe('stopped');
+      expect(pidManager.clearPid).toHaveBeenCalledWith('srv-1');
+    });
+
+    it('clears PID records whose identity no longer matches the managed server', async () => {
+      const queue = mockQueue();
+      const runtime = lifecycle.register('srv-1', makeServer(), queue as never);
+
+      pidManager.readPidRecord.mockResolvedValue({
+        pid: 42,
+        serverKey: 'srv-1',
+        instancePath: '/other/instance',
+        runtimeHomePath: '/opt/tomcat',
+        writtenAt: Date.now(),
+        processStartToken: 'token',
+      });
+      pidManager.isProcessAlive.mockReturnValue(true);
+      pidManager.isPidRecordCurrent.mockReturnValue(true);
+
+      await lifecycle.reconcileRunningServers([{ serverKey: 'srv-1', config: makeServer() }]);
+
+      expect(runtime.state).toBe('stopped');
+      expect(pidManager.clearPid).toHaveBeenCalledWith('srv-1');
     });
 
     it('clears stale PID and marks stopped', async () => {

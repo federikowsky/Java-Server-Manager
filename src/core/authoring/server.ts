@@ -18,6 +18,7 @@ const DEFAULT_HTTP_PORT = 8080;
 const DEFAULT_DEBUG_PORT = 5005;
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_DEBUG_BIND = '127.0.0.1';
+export const REDACTED_SECRET_PLACEHOLDER = '[redacted]';
 
 function hasValue(data: Record<string, unknown>, key: string): boolean {
   const value = data[key];
@@ -33,6 +34,23 @@ function optionalNumber(data: Record<string, unknown>, key: string): number | un
   if (!hasValue(data, key)) return undefined;
   const parsed = Number(data[key]);
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function secretString(data: Record<string, unknown>, key: string, existing?: string): string {
+  const value = String(data[key] ?? '');
+  if (value === REDACTED_SECRET_PLACEHOLDER && existing !== undefined) {
+    return existing;
+  }
+  return value;
+}
+
+function optionalSecretString(data: Record<string, unknown>, key: string, existing?: string): string | undefined {
+  if (!hasValue(data, key)) return undefined;
+  const value = String(data[key]).trim();
+  if (value === REDACTED_SECRET_PLACEHOLDER) {
+    return existing;
+  }
+  return value;
 }
 
 function normalizeStringList(value: unknown): string[] {
@@ -77,6 +95,7 @@ function buildTomcatPluginConfigFromRecord(
   }
 
   const clientAuth = data['pluginConfig.ssl.clientAuth'] === true;
+  const existingSsl = existing?.ssl;
 
   return {
     type: 'tomcat',
@@ -86,12 +105,14 @@ function buildTomcatPluginConfigFromRecord(
       enabled: true,
       port: optionalNumber(data, 'pluginConfig.ssl.port') ?? 8443,
       keystorePath: optionalString(data, 'pluginConfig.ssl.keystorePath') ?? '',
-      keystorePassword: String(data['pluginConfig.ssl.keystorePassword'] ?? ''),
+      keystorePassword: secretString(data, 'pluginConfig.ssl.keystorePassword', existingSsl?.keystorePassword),
       keystoreType: optionalString(data, 'pluginConfig.ssl.keystoreType') === 'JKS' ? 'JKS' : 'PKCS12',
       keyAlias: optionalString(data, 'pluginConfig.ssl.keyAlias'),
       clientAuth,
       truststorePath: clientAuth ? optionalString(data, 'pluginConfig.ssl.truststorePath') : undefined,
-      truststorePassword: clientAuth ? optionalString(data, 'pluginConfig.ssl.truststorePassword') : undefined,
+      truststorePassword: clientAuth
+        ? optionalSecretString(data, 'pluginConfig.ssl.truststorePassword', existingSsl?.truststorePassword)
+        : undefined,
       truststoreType: clientAuth
         ? (optionalString(data, 'pluginConfig.ssl.truststoreType') === 'JKS' ? 'JKS' : 'PKCS12')
         : undefined,

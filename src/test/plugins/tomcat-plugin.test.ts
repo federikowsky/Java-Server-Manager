@@ -225,6 +225,33 @@ describe('TomcatPlugin — detection', () => {
   });
 });
 
+describe('TomcatPlugin — runtime environment', () => {
+  it('keeps plugin-owned environment variables authoritative over user overrides', () => {
+    const homePath = path.join(tmpDir, 'tomcat-home');
+    const instancePath = path.join(tmpDir, 'instance');
+    const javaHome = path.join(tmpDir, 'java');
+    const config = fakeConfig(homePath, instancePath, {
+      javaHome,
+      run: {
+        env: {
+          CATALINA_HOME: '/attacker/home',
+          CATALINA_BASE: '/attacker/base',
+          JAVA_HOME: '/attacker/java',
+          APP_ENV: 'local',
+        },
+        vmArgs: [],
+      },
+    });
+
+    const env = plugin['createCatalinaEnv'](config, { includeRunEnv: true });
+
+    expect(env.CATALINA_HOME).toBe(homePath);
+    expect(env.CATALINA_BASE).toBe(instancePath);
+    expect(env.JAVA_HOME).toBe(javaHome);
+    expect(env.APP_ENV).toBe('local');
+  });
+});
+
 // ── Config Validation Tests ─────────────────────────────────────────────────
 
 describe('TomcatPlugin — validateConfig', () => {
@@ -1114,6 +1141,33 @@ describe('TomcatPlugin — incremental deploy and hot reload', () => {
     await expect(fs.access(path.join(targetPath, 'delete.txt'))).rejects.toThrow();
   });
 
+  it('rejects incremental changes whose relative path escapes the deployment target', async () => {
+    const instancePath = path.join(tmpDir, 'instance');
+    const targetPath = path.join(instancePath, 'webapps', 'myapp');
+    await fs.mkdir(targetPath, { recursive: true });
+
+    const sourceRoot = path.join(tmpDir, 'changes');
+    await fs.mkdir(sourceRoot, { recursive: true });
+    const sourceFile = path.join(sourceRoot, 'escape.txt');
+    await fs.writeFile(sourceFile, 'escape-content');
+
+    const config = fakeConfig(path.join(tmpDir, 'home'), instancePath);
+    const dep = fakeDeployment('myapp');
+    const plan = incrementalPlan(instancePath, dep.deployName);
+    const changes = fileChangeBatch([
+      { type: 'add', path: sourceFile, relativePath: '../escape.txt' },
+    ]);
+
+    const result = await plugin.deployIncremental(dummyCtx(), config, dep, changes, plan);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('DeployFailed');
+      expect(result.error.message).toContain('Incremental deploy failed');
+    }
+    await expect(fs.access(path.join(instancePath, 'webapps', 'escape.txt'))).rejects.toThrow();
+  });
+
   it('hot-reloads via Manager when reload returns OK', async () => {
     const instancePath = path.join(tmpDir, 'instance');
     const targetPath = path.join(instancePath, 'webapps', 'myapp');
@@ -1223,6 +1277,29 @@ describe('TomcatPlugin — incremental deploy and hot reload', () => {
       expect(result.error.code).toBe('InvalidConfig');
       expect(result.error.message).toContain('Tomcat Manager password not configured');
     }
+  });
+
+  it('rejects Manager reload over non-loopback HTTP before sending credentials', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('OK - Reloaded', { status: 200, statusText: 'OK' }),
+    );
+    const config = fakeConfig(path.join(tmpDir, 'home'), path.join(tmpDir, 'instance'), {
+      host: '192.168.1.10',
+      run: {
+        env: { JSM_MANAGER_PASS: 'secret' },
+        vmArgs: [],
+      },
+    });
+    const dep = fakeDeployment('myapp');
+
+    const result = await plugin['callManagerReload'](config, dep);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('InvalidConfig');
+      expect(result.error.message).toContain('loopback');
+    }
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it('returns DeployFailed when touching the reload target fails', async () => {

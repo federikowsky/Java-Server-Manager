@@ -83,4 +83,43 @@ describe('buildDashboardSyncStatePayload', () => {
     });
     expect(deps.deployService.getDeploymentHealth).toHaveBeenCalledWith('ws1::s1', 'd1');
   });
+
+  it('redacts secret server config values before syncing state to the webview', () => {
+    const deps = makeDeps();
+    const config = {
+      id: 's1',
+      run: {
+        env: {
+          APP_ENV: 'local',
+          JSM_MANAGER_PASS: 'secret',
+        },
+      },
+      pluginConfig: {
+        type: 'tomcat',
+        ssl: {
+          enabled: true,
+          keystorePassword: 'changeit',
+          truststorePassword: 'trustme',
+        },
+      },
+    };
+    deps.workspaceRegistry.getAllServers.mockReturnValue([{
+      serverKey: 'ws1::s1',
+      config,
+      workspaceFolderUri: 'ws1',
+      workspaceFolderName: 'ws',
+    }] as any);
+
+    const payload = buildDashboardSyncStatePayload(deps as any);
+
+    expect((payload.servers[0].config as any).run.env).toEqual({
+      APP_ENV: 'local',
+      JSM_MANAGER_PASS: '[redacted]',
+    });
+    expect((payload.servers[0].config as any).pluginConfig.ssl).toMatchObject({
+      keystorePassword: '[redacted]',
+      truststorePassword: '[redacted]',
+    });
+    expect(config.run.env.JSM_MANAGER_PASS).toBe('secret');
+  });
 });

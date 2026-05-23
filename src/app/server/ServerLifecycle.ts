@@ -11,6 +11,8 @@ import type {
   OutputSink,
   HookEvent,
 } from '@core/types';
+import { spawnSync } from 'child_process';
+import * as os from 'os';
 import type { FileChangeBatch } from '@core/types/events';
 import type { Result } from '@core/result';
 import { ok, err } from '@core/result';
@@ -432,7 +434,10 @@ export class ServerLifecycle {
       }
 
       const { pid, startupMonitor } = startResult.value;
-      await this.deps.pidManager.writePid(server.serverKey, pid);
+      await this.deps.pidManager.writePid(server.serverKey, pid, {
+        instancePath: config.instancePath,
+        runtimeHomePath: config.runtime.homePath,
+      });
       requiresFailedStartCleanup = true;
       throwIfCancelled(ctx.cancel, `Start operation for '${config.name}' was cancelled while waiting for readiness.`);
 
@@ -691,16 +696,18 @@ export class ServerLifecycle {
       return;
     }
 
+    let forceKillAttempted = false;
+
     while (Date.now() - ctx.startedAt < timeoutMs) {
       throwIfCancelled(ctx.cancel, `Stop operation for '${config.name}' was cancelled while waiting for shutdown.`);
       if (!this.deps.pidManager.isProcessAlive(pid)) {
-        break;
+        return;
       }
 
       const decision = decideStopEscalation(Date.now() - ctx.startedAt, timeoutMs);
       if (decision === 'force-kill') {
-        this.deps.logger.warn(`ServerLifecycle: force-killing ${config.name} (PID ${pid})`);
-        try { process.kill(pid, 'SIGKILL'); } catch { /* already dead */ }
+        this.forceKillProcess(config, pid);
+        forceKillAttempted = true;
         break;
       }
 
@@ -708,6 +715,38 @@ export class ServerLifecycle {
         sleep(500),
         cancellationPromise(ctx.cancel, `Stop operation for '${config.name}' was cancelled while waiting for shutdown.`),
       ]);
+    }
+
+    if (this.deps.pidManager.isProcessAlive(pid)) {
+      if (!forceKillAttempted) {
+        this.forceKillProcess(config, pid);
+      }
+
+      if (this.deps.pidManager.isProcessAlive(pid)) {
+        throw new JsmError({
+          code: ErrorCode.Timeout,
+          message: `Server '${config.name}' did not stop within ${timeoutMs}ms and could not be force-killed.`,
+          details: `PID ${pid} is still alive.`,
+        });
+      }
+    }
+  }
+
+  private forceKillProcess(config: ServerConfig, pid: number): void {
+    this.deps.logger.warn(`ServerLifecycle: force-killing ${config.name} (PID ${pid})`);
+    try {
+      if (os.platform() === 'win32') {
+        spawnSync('taskkill', ['/F', '/T', '/PID', String(pid)], {
+          shell: false,
+          stdio: 'ignore',
+          windowsHide: true,
+        });
+        return;
+      }
+
+      process.kill(pid, 'SIGKILL');
+    } catch {
+      // Liveness is checked by the caller after the kill attempt.
     }
   }
 

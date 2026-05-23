@@ -378,7 +378,7 @@ describe('DashboardPanel host boundary', () => {
     expect((panel as any).currentFormTargetScope).toBeUndefined();
   });
 
-  it('posts command results for generic executeCommand requests', async () => {
+  it('posts command results for allowed executeCommand requests', async () => {
     const { panel } = setupPanel();
     panel.show();
     await flushPromises();
@@ -392,18 +392,62 @@ describe('DashboardPanel host boundary', () => {
     await emitWebviewMessage({
       v: WEBVIEW_PROTOCOL_VERSION,
       command: 'executeCommand',
-      id: 'jsm.server.edit',
+      id: 'jsm.server.showLogs',
       args: [{ serverId: 'srv-1' }],
       requestId: 'req-1',
     });
 
-    expect(mocked.executeCommand).toHaveBeenCalledWith('jsm.server.edit', { serverId: 'srv-1' });
+    expect(mocked.executeCommand).toHaveBeenCalledWith('jsm.server.showLogs', { serverId: 'srv-1' });
     expect(mocked.postMessage).toHaveBeenCalledWith(expect.objectContaining({
       command: 'commandResult',
       requestId: 'req-1',
       ok: true,
       message: 'completed',
       data: { serverId: 'srv-1' },
+    }));
+  });
+
+  it('rejects executeCommand ids that are not explicitly allowed by the dashboard host boundary', async () => {
+    const { panel } = setupPanel();
+    panel.show();
+    await flushPromises();
+
+    await emitWebviewMessage({
+      v: WEBVIEW_PROTOCOL_VERSION,
+      command: 'executeCommand',
+      id: 'workbench.action.openSettings',
+      args: ['security.workspace.trust.enabled'],
+      requestId: 'req-denied',
+    });
+
+    expect(mocked.executeCommand).not.toHaveBeenCalled();
+    expect(mocked.postMessage).toHaveBeenCalledWith(expect.objectContaining({
+      command: 'commandResult',
+      requestId: 'req-denied',
+      ok: false,
+      message: expect.stringContaining('not available'),
+    }));
+  });
+
+  it('rejects allowed executeCommand ids when their argument shape is invalid', async () => {
+    const { panel } = setupPanel();
+    panel.show();
+    await flushPromises();
+
+    await emitWebviewMessage({
+      v: WEBVIEW_PROTOCOL_VERSION,
+      command: 'executeCommand',
+      id: 'jsm.server.stop',
+      args: [{ workspaceFolderUri: 'file:///ws' }],
+      requestId: 'req-invalid',
+    });
+
+    expect(mocked.executeCommand).not.toHaveBeenCalled();
+    expect(mocked.postMessage).toHaveBeenCalledWith(expect.objectContaining({
+      command: 'commandResult',
+      requestId: 'req-invalid',
+      ok: false,
+      message: expect.stringContaining('Invalid arguments'),
     }));
   });
 
@@ -417,7 +461,8 @@ describe('DashboardPanel host boundary', () => {
     await emitWebviewMessage({
       v: WEBVIEW_PROTOCOL_VERSION,
       command: 'executeCommand',
-      id: 'jsm.server.edit',
+      id: 'jsm.server.showLogs',
+      args: [{ serverId: 'srv-1' }],
       requestId: 'req-2',
     });
 

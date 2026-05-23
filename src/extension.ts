@@ -127,8 +127,22 @@ async function resolveHookTask(taskName: string): Promise<Result<vscode.Task, Js
 function createHookExecutor(params: {
   processSpawner: ProcessSpawner;
   primaryWorkspaceFolder: string;
+  workspaceFolders: Array<{ uri: string; fsPath: string }>;
 }): HookExecutor {
-  const { processSpawner, primaryWorkspaceFolder } = params;
+  const { processSpawner, primaryWorkspaceFolder, workspaceFolders } = params;
+
+  const resolveDefaultHookCwd = (request: HookExecutionRequest): string => {
+    const serverKey = String(request.parent.serverId);
+    const separator = serverKey.lastIndexOf('::');
+    if (separator > 0) {
+      const workspaceFolderUri = serverKey.slice(0, separator);
+      const owner = workspaceFolders.find(folder => folder.uri === workspaceFolderUri);
+      if (owner) {
+        return owner.fsPath;
+      }
+    }
+    return primaryWorkspaceFolder;
+  };
 
   return {
     async runCommand(request): Promise<Result<void, JsmError>> {
@@ -139,16 +153,30 @@ function createHookExecutor(params: {
         }
         const child = processSpawner.spawnShell({
           line: cmd.line,
-          cwd: cmd.cwd ?? primaryWorkspaceFolder,
+          cwd: cmd.cwd ?? resolveDefaultHookCwd(request),
           env: cmd.env,
           onData: (chunk) => request.parent.output.append(chunk),
         });
+        const cancelSubscription = request.cancel.onCancelled(() => {
+          if (child.pid) {
+            processSpawner.kill(child.pid, true);
+          }
+        });
         await new Promise<void>((resolve, reject) => {
+          if (request.cancel.isCancelled) {
+            if (child.pid) {
+              processSpawner.kill(child.pid, true);
+            }
+            reject(new Error('Hook command cancelled'));
+            return;
+          }
           child.on('close', (code) => {
             if (code === 0) resolve();
             else reject(new Error(`Hook exited with code ${code}`));
           });
           child.on('error', reject);
+        }).finally(() => {
+          cancelSubscription.dispose();
         });
         return ok(undefined);
       } catch (e) {
@@ -175,7 +203,7 @@ function createHookExecutor(params: {
 
         request.parent.output.appendLine(`Starting VS Code task hook '${taskName}'`);
         const taskExecution = await vscode.tasks.executeTask(taskResult.value);
-        const exitCodeResult = await waitForTaskProcessExit(taskExecution, taskName, waitBudgetMs);
+        const exitCodeResult = await waitForTaskProcessExit(taskExecution, taskName, waitBudgetMs, request.cancel);
         if (!exitCodeResult.ok) {
           return exitCodeResult;
         }
@@ -218,11 +246,13 @@ function waitForTaskProcessExit(
   taskExecution: vscode.TaskExecution,
   taskName: string,
   timeoutMs: number,
+  cancel?: HookExecutionRequest['cancel'],
 ): Promise<Result<number | undefined, JsmError>> {
   return new Promise(resolve => {
     let settled = false;
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
     let subscription: vscode.Disposable | undefined;
+    let cancelSubscription: vscode.Disposable | undefined;
 
     const settle = (result: Result<number | undefined, JsmError>) => {
       if (settled) return;
@@ -231,7 +261,16 @@ function waitForTaskProcessExit(
         clearTimeout(timeoutHandle);
       }
       subscription?.dispose();
+      cancelSubscription?.dispose();
       resolve(result);
+    };
+
+    const terminateTask = () => {
+      try {
+        taskExecution.terminate();
+      } catch {
+        // Some task providers may already have ended; the settled result carries the failure boundary.
+      }
     };
 
     try {
@@ -248,7 +287,25 @@ function waitForTaskProcessExit(
       return;
     }
 
+    if (cancel?.isCancelled) {
+      terminateTask();
+      settle(err(new JsmError({
+        code: ErrorCode.Cancelled,
+        message: `VS Code task '${taskName}' was cancelled`,
+      })));
+      return;
+    }
+
+    cancelSubscription = cancel?.onCancelled(() => {
+      terminateTask();
+      settle(err(new JsmError({
+        code: ErrorCode.Cancelled,
+        message: `VS Code task '${taskName}' was cancelled`,
+      })));
+    }) as vscode.Disposable | undefined;
+
     timeoutHandle = setTimeout(() => {
+      terminateTask();
       settle(err(new JsmError({
         code: ErrorCode.Timeout,
         message: `VS Code task '${taskName}' timed out after ${timeoutMs}ms`,
@@ -460,6 +517,7 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<JsmExtensi
     const runtime = lifecycle.getRuntime(serverId);
     if (runtime) runtime.setDebugAttached(attached);
   }));
+  disposables.push(debugAdapter);
   const fileWatcherAdapter = new FileWatcherAdapter();
   const logChannel = new ServerLogChannel();
   disposables.push(logChannel);
@@ -469,6 +527,10 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<JsmExtensi
   const hookExecutor: HookExecutor = createHookExecutor({
     processSpawner,
     primaryWorkspaceFolder,
+    workspaceFolders: workspaceFolders.map(folder => ({
+      uri: workspaceFolderUriString(folder),
+      fsPath: folder.uri.fsPath,
+    })),
   });
 
   // TrustGate (§12.8): injected into services that perform side-effecting operations

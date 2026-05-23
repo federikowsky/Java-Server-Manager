@@ -266,6 +266,43 @@ describe('ConfigService', () => {
       if (!result.ok) expect(result.error.code).toBe(ErrorCode.SecurityPolicyViolation);
       expect(repo.save).not.toHaveBeenCalled();
     });
+
+    it('rejects duplicate managed instance paths across servers', async () => {
+      repo._seed(makeServer('srv-1', 'Primary'));
+      const duplicatePath = {
+        ...makeServer('srv-2', 'Duplicate Path'),
+        ports: { http: 9080, debug: 6006 },
+        pluginConfig: { type: 'tomcat' as const, shutdownPort: 8105, disableAjp: true },
+      };
+
+      const result = await service.addServer(duplicatePath);
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe(ErrorCode.InvalidConfig);
+        expect(result.error.message).toContain('Instance path');
+      }
+      expect(repo.save).not.toHaveBeenCalled();
+    });
+
+    it('rejects duplicate runtime ports across managed servers', async () => {
+      repo._seed(makeServer('srv-1', 'Primary'));
+      const duplicatePort = {
+        ...makeServer('srv-2', 'Duplicate Port'),
+        instancePath: '/tmp/inst-2',
+        ports: { http: 8080, debug: 6006 },
+        pluginConfig: { type: 'tomcat' as const, shutdownPort: 8105, disableAjp: true },
+      };
+
+      const result = await service.addServer(duplicatePort);
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe(ErrorCode.InvalidConfig);
+        expect(result.error.message).toContain('Port 8080');
+      }
+      expect(repo.save).not.toHaveBeenCalled();
+    });
   });
 
   describe('trust enforcement', () => {
@@ -492,6 +529,24 @@ describe('ConfigService', () => {
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error.message).toContain('already exists');
     });
+
+    it('rejects duplicate deployment targets on the same server', async () => {
+      const srv = makeServer();
+      srv.deployments = [makeDeployment('dep-1')];
+      repo._seed(srv);
+
+      const result = await service.addDeployment('srv-1', {
+        ...makeDeployment('dep-2'),
+        deployName: 'APP',
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe(ErrorCode.InvalidConfig);
+        expect(result.error.message).toContain('Deployment target');
+      }
+      expect(repo.save).not.toHaveBeenCalled();
+    });
   });
 
   /* ── removeDeployment ────────────────────────────────────────────────── */
@@ -605,6 +660,33 @@ describe('ConfigService', () => {
       const result = await service.reload();
 
       expect(result.ok).toBe(false);
+      expect(repo.replaceAll).not.toHaveBeenCalled();
+      expect(bus.emit).not.toHaveBeenCalledWith('ConfigChanged', expect.anything());
+    });
+
+    it('does not commit externally loaded configs with duplicate authoritative targets', async () => {
+      const first = {
+        ...makeServer('srv-1', 'First'),
+        pluginConfig: { type: 'tomcat' as const, shutdownPort: 8005, disableAjp: true },
+      };
+      const second = {
+        ...makeServer('srv-2', 'Second'),
+        instancePath: '/tmp/inst-2',
+        ports: { http: 9080, debug: 6006 },
+        pluginConfig: { type: 'tomcat' as const, shutdownPort: 8005, disableAjp: true },
+      };
+      repo.readWorkspace.mockResolvedValue(ok({
+        content: JSON.stringify({ servers: [first, second] }),
+        servers: [first, second],
+      }));
+
+      const result = await service.reload();
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe(ErrorCode.InvalidConfig);
+        expect(result.error.message).toContain('shutdown');
+      }
       expect(repo.replaceAll).not.toHaveBeenCalled();
       expect(bus.emit).not.toHaveBeenCalledWith('ConfigChanged', expect.anything());
     });

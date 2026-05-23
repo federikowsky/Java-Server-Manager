@@ -5,7 +5,10 @@ import {
   createServerDraft,
   deploymentDraftToConfig,
   formDataToDeploymentDraft,
+  formDataToServerConfig,
   formDataToServerDraft,
+  REDACTED_SECRET_PLACEHOLDER,
+  serverConfigToFormData,
   serverConfigToDraft,
   serverDraftToCreateServerRequest,
   templateToServerDraftDefaults,
@@ -74,6 +77,21 @@ describe('authoring adapters', () => {
     const updated = applyServerDraftToConfig(draft, existing);
 
     expect(updated).toEqual(existing);
+  });
+
+  it('preserves existing SSL secrets when dashboard forms submit redacted placeholders', () => {
+    const existing = makeServer();
+    const data = serverConfigToFormData(existing);
+    data['pluginConfig.ssl.keystorePassword'] = REDACTED_SECRET_PLACEHOLDER;
+
+    const updated = formDataToServerConfig(data, existing);
+
+    expect(updated.pluginConfig).toMatchObject({
+      type: 'tomcat',
+      ssl: {
+        keystorePassword: 'secret',
+      },
+    });
   });
 
   it('converts flat server form data into a create request', () => {

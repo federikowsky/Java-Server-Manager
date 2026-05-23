@@ -5,6 +5,7 @@ import type {
   DeploymentId,
   Logger,
   OperationContext,
+  CancellationToken,
   TrustGate,
 } from '@core/types';
 import type { Result } from '@core/result';
@@ -12,6 +13,7 @@ import { ok, err } from '@core/result';
 import { JsmError } from '@core/errors/JsmError';
 import { ErrorCode } from '@core/errors/codes';
 import { HOOK_PHASE_BUDGET_MS } from '../../constants';
+import { createCancellationTokenSource } from '@core/ops';
 
 // ── Hook Executor (injected) ────────────────────────────────────────────────
 
@@ -21,6 +23,7 @@ import { HOOK_PHASE_BUDGET_MS } from '../../constants';
  */
 export interface HookExecutionRequest {
   parent: OperationContext;
+  cancel: CancellationToken;
   phase: HookPhase;
   event: HookEvent;
   hook: HookConfig;
@@ -137,6 +140,7 @@ export class HookRunner {
       parent.output.appendLine(`Running hook '${hook.id}' (${phase} ${event})`);
       const hookResult = await this.executeOneHook({
         parent,
+        cancel: parent.cancel,
         phase,
         event,
         hook,
@@ -164,20 +168,43 @@ export class HookRunner {
     request: HookExecutionRequest,
     timeoutMs: number,
   ): Promise<Result<void, JsmError>> {
+    const hookCancellation = createCancellationTokenSource();
+    const parentCancellationSubscription = request.parent.cancel.onCancelled(() => {
+      hookCancellation.cancel();
+    });
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+
     try {
+      const executionRequest = {
+        ...request,
+        cancel: hookCancellation.token,
+      };
       const resultPromise =
         request.hook.kind === 'command'
-          ? this.executor.runCommand(request)
-          : this.executor.runVscodeTask(request);
+          ? this.executor.runCommand(executionRequest)
+          : this.executor.runVscodeTask(executionRequest);
 
       const result = await Promise.race([
         resultPromise,
-        this.timeoutPromise(timeoutMs, request.hook.id),
+        new Promise<Result<void, JsmError>>(resolve => {
+          timeoutHandle = setTimeout(() => {
+            hookCancellation.cancel();
+            resolve(err(new JsmError({
+              code: ErrorCode.Timeout,
+              message: `Hook '${request.hook.id}' timed out after ${timeoutMs}ms`,
+            })));
+          }, timeoutMs);
+        }),
       ]);
 
       return result;
     } catch (cause) {
       return err(cause instanceof JsmError ? cause : JsmError.fromUnknown(cause));
+    } finally {
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
+      parentCancellationSubscription.dispose();
     }
   }
 
@@ -208,14 +235,4 @@ export class HookRunner {
     return Math.max(0, parent.timeoutMs - (Date.now() - parent.startedAt));
   }
 
-  private timeoutPromise(ms: number, hookId: string): Promise<Result<void, JsmError>> {
-    return new Promise(resolve => {
-      setTimeout(() => {
-        resolve(err(new JsmError({
-          code: ErrorCode.Timeout,
-          message: `Hook '${hookId}' timed out after ${ms}ms`,
-        })));
-      }, ms);
-    });
-  }
 }

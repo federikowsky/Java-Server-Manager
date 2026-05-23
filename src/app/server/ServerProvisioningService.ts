@@ -1,4 +1,5 @@
 import * as fs from 'fs/promises';
+import * as path from 'path';
 import { v4 as uuid } from 'uuid';
 import type { CreateServerRequest } from '@core/authoring';
 import type { Result } from '@core/result';
@@ -15,6 +16,7 @@ const DEFAULT_HTTP_PORT = 8080;
 const DEFAULT_DEBUG_PORT = 5005;
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_DEBUG_BIND = '127.0.0.1';
+const MANAGED_INSTANCE_MARKER = '.jsm-managed-instance';
 
 export class ServerProvisioningService {
   private readonly configService: ConfigService;
@@ -92,12 +94,18 @@ export class ServerProvisioningService {
       }));
     }
 
+    const markerResult = await this.writeManagedInstanceMarker(serverConfig.instancePath, serverConfig.id);
+    if (!markerResult.ok) {
+      return markerResult;
+    }
+
     const initResult = await plugin.initializeInstancePath(
       serverConfig.runtime.homePath,
       serverConfig.instancePath,
       serverConfig,
     );
     if (!initResult.ok) {
+      await this.cleanupManagedInstance(serverConfig.instancePath);
       return initResult;
     }
 
@@ -160,12 +168,18 @@ export class ServerProvisioningService {
       return validateResult;
     }
 
+    const markerResult = await this.writeManagedInstanceMarker(cloned.instancePath, cloned.id);
+    if (!markerResult.ok) {
+      return markerResult;
+    }
+
     const initResult = await plugin.initializeInstancePath(
       source.runtime.homePath,
       cloned.instancePath,
       cloned,
     );
     if (!initResult.ok) {
+      await this.cleanupManagedInstance(cloned.instancePath);
       return initResult;
     }
 
@@ -191,14 +205,14 @@ export class ServerProvisioningService {
       }));
     }
 
-    const removeResult = await this.configService.removeServer(serverId);
-    if (!removeResult.ok) {
-      return removeResult;
-    }
-
     const cleanupResult = await this.cleanupManagedInstance(existing.instancePath);
     if (!cleanupResult.ok) {
       return cleanupResult;
+    }
+
+    const removeResult = await this.configService.removeServer(serverId);
+    if (!removeResult.ok) {
+      return removeResult;
     }
 
     this.logger.info(`ServerProvisioningService: removed managed server '${serverId}'`);
@@ -256,6 +270,11 @@ export class ServerProvisioningService {
 
   private async cleanupManagedInstance(instancePath: string): Promise<Result<void, JsmError>> {
     try {
+      const safetyResult = await this.validateManagedInstancePath(instancePath);
+      if (!safetyResult.ok) {
+        return safetyResult;
+      }
+
       await fs.rm(instancePath, { recursive: true, force: true });
       return ok(undefined);
     } catch (cause) {
@@ -269,5 +288,66 @@ export class ServerProvisioningService {
       this.logger.warn(`ServerProvisioningService: failed to clean up managed instance '${instancePath}': ${String(cause)}`);
       return err(error);
     }
+  }
+
+  private async writeManagedInstanceMarker(instancePath: string, serverId: string): Promise<Result<void, JsmError>> {
+    try {
+      await fs.mkdir(instancePath, { recursive: true });
+      await fs.writeFile(path.join(instancePath, MANAGED_INSTANCE_MARKER), `${serverId}\n`, 'utf8');
+      return ok(undefined);
+    } catch (cause) {
+      return err(new JsmError({
+        code: ErrorCode.ConfigWriteFailed,
+        message: `Failed to mark managed instance path: ${instancePath}`,
+        details: cause instanceof Error ? cause.message : String(cause),
+        cause,
+      }));
+    }
+  }
+
+  private async validateManagedInstancePath(instancePath: string): Promise<Result<void, JsmError>> {
+    const storageRoot = this.pathResolver.getStorageRoot();
+
+    let realRoot: string;
+    let realInstancePath: string;
+    try {
+      realRoot = await fs.realpath(storageRoot);
+      realInstancePath = await fs.realpath(instancePath);
+    } catch (cause) {
+      return err(new JsmError({
+        code: ErrorCode.InvalidConfig,
+        message: 'Managed instance path does not exist or cannot be verified.',
+        details: cause instanceof Error ? cause.message : String(cause),
+        suggestedFix: ['Check the configured instance path before removing this server'],
+        cause,
+      }));
+    }
+
+    const relative = path.relative(realRoot, realInstancePath);
+    if (relative === '' || relative.startsWith('..') || path.isAbsolute(relative)) {
+      return err(new JsmError({
+        code: ErrorCode.InvalidConfig,
+        message: `Refusing to delete '${instancePath}' because it is not a managed JSM instance path.`,
+        details: `Managed storage root: ${storageRoot}`,
+        suggestedFix: ['Remove or move the server configuration from the dashboard without deleting external files'],
+      }));
+    }
+
+    try {
+      const marker = await fs.readFile(path.join(realInstancePath, MANAGED_INSTANCE_MARKER), 'utf8');
+      if (marker.trim().length === 0) {
+        throw new Error('Managed marker is empty.');
+      }
+    } catch (cause) {
+      return err(new JsmError({
+        code: ErrorCode.InvalidConfig,
+        message: `Refusing to delete '${instancePath}' because the managed marker is missing.`,
+        details: cause instanceof Error ? cause.message : String(cause),
+        suggestedFix: [`Expected marker file: ${path.join(instancePath, MANAGED_INSTANCE_MARKER)}`],
+        cause,
+      }));
+    }
+
+    return ok(undefined);
   }
 }

@@ -15,6 +15,7 @@ import { buildServerFormSchema, type ServerFormUiMeta } from './dashboard/buildS
 import { buildTemplateFormSchema } from './dashboard/buildTemplateFormSchema';
 import { collectJavaInstallationCandidates } from './dashboard/javaInstallationCandidates';
 import { buildDashboardSyncStatePayload } from './dashboard/buildDashboardSyncStatePayload';
+import { redactDashboardSecrets } from './dashboard/redactDashboardSecrets';
 import {
   deleteServerWithConfirm,
   deleteTemplateWithConfirm,
@@ -357,6 +358,11 @@ export class DashboardPanel implements vscode.Disposable {
   private async handleExecuteCommandMessage(
     msg: Extract<WebviewToHost, { command: 'executeCommand' }>,
   ): Promise<CommandExecutionResult | undefined> {
+    const guard = this.validateExecuteCommandRequest(msg);
+    if (!guard.ok) {
+      return guard;
+    }
+
     if (msg.id === 'jsm.internal.requestServerSchema') {
       const [mode, serverId, workspaceFolderUri] = (msg.args || []) as ['edit' | 'create', string?, string?];
       await this.handleSchemaRequest(mode, serverId, workspaceFolderUri);
@@ -425,6 +431,162 @@ export class DashboardPanel implements vscode.Disposable {
     );
   }
 
+  private validateExecuteCommandRequest(
+    msg: Extract<WebviewToHost, { command: 'executeCommand' }>,
+  ): CommandExecutionResult {
+    const args = msg.args ?? [];
+    switch (msg.id) {
+      case 'jsm.internal.requestServerSchema':
+        return this.validateTuple(args, value =>
+          (value.length === 1 || value.length === 2 || value.length === 3)
+          && (value[0] === 'create' || value[0] === 'edit')
+          && (value[1] === undefined || typeof value[1] === 'string')
+          && (value[2] === undefined || typeof value[2] === 'string'));
+
+      case 'jsm.internal.requestTemplateSchema':
+        return this.validateTuple(args, value =>
+          (value.length === 1 || value.length === 2)
+          && (value[0] === 'create' || value[0] === 'edit')
+          && (value[1] === undefined || typeof value[1] === 'string'));
+
+      case 'jsm.server.autodiscover':
+      case 'jsm.server.import':
+      case 'jsm.server.export':
+        return this.validateTuple(args, value => value.length === 0);
+
+      case 'jsm.java.detect':
+        return this.validateTuple(args, value =>
+          value.length === 0 || (value.length === 1 && typeof value[0] === 'string'));
+
+      case 'jsm.template.createServer':
+      case 'jsm.template.delete':
+        return this.validateTuple(args, value =>
+          value.length === 1 && typeof value[0] === 'string' && value[0].trim().length > 0);
+
+      case 'jsm.settings.save':
+        return this.validateTuple(args, value =>
+          value.length === 1 && this.isSettingsPayload(value[0]));
+
+      case 'jsm.server.add':
+        return this.validateTuple(args, value =>
+          value.length === 0 || (value.length === 1 && this.isServerAddPayload(value[0])));
+
+      case 'jsm.server.showLogs':
+      case 'jsm.server.startRun':
+      case 'jsm.server.stop':
+        return this.validateTuple(args, value =>
+          value.length === 1 && this.isServerCommandArg(value[0]));
+
+      case 'jsm.deployment.add':
+        return this.validateTuple(args, value =>
+          value.length === 1 && this.isDeploymentDraftCommandArg(value[0]));
+
+      case 'jsm.deployment.edit':
+        return this.validateTuple(args, value =>
+          value.length === 1
+          && this.isDeploymentDraftCommandArg(value[0])
+          && this.isDeploymentCommandArg(value[0]));
+
+      case 'jsm.deployment.redeploy':
+      case 'jsm.deployment.revealSource':
+      case 'jsm.deployment.remove':
+        return this.validateTuple(args, value =>
+          value.length === 1 && this.isDeploymentCommandArg(value[0]));
+
+      default:
+        return {
+          ok: false,
+          message: `Dashboard command '${msg.id}' is not available.`,
+        };
+    }
+  }
+
+  private validateTuple(
+    args: unknown[],
+    predicate: (args: unknown[]) => boolean,
+  ): CommandExecutionResult {
+    if (predicate(args)) {
+      return { ok: true };
+    }
+    return {
+      ok: false,
+      message: 'Invalid arguments for dashboard command.',
+    };
+  }
+
+  private isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+  }
+
+  private isNonEmptyString(value: unknown): value is string {
+    return typeof value === 'string' && value.trim().length > 0;
+  }
+
+  private isServerCommandArg(value: unknown): boolean {
+    if (!this.isRecord(value)) {
+      return false;
+    }
+    return this.isNonEmptyString(value['serverId'])
+      && (
+        value['workspaceFolderUri'] === undefined
+        || this.isNonEmptyString(value['workspaceFolderUri'])
+      )
+      && (
+        value['serverKey'] === undefined
+        || this.isNonEmptyString(value['serverKey'])
+      )
+      && (
+        value['workspaceFolderName'] === undefined
+        || typeof value['workspaceFolderName'] === 'string'
+      );
+  }
+
+  private isServerAddPayload(value: unknown): boolean {
+    if (!this.isRecord(value)) {
+      return false;
+    }
+    return this.isNonEmptyString(value['workspaceFolderUri'])
+      && this.isRecord(value['draft']);
+  }
+
+  private isDeploymentCommandArg(value: unknown): boolean {
+    if (!this.isServerCommandArg(value) || !this.isRecord(value)) {
+      return false;
+    }
+    return this.isNonEmptyString(value['deploymentId']);
+  }
+
+  private isDeploymentDraftCommandArg(value: unknown): boolean {
+    if (!this.isServerCommandArg(value) || !this.isRecord(value)) {
+      return false;
+    }
+    return this.isRecord(value['draft']);
+  }
+
+  private isSettingsPayload(value: unknown): boolean {
+    if (!this.isRecord(value)) {
+      return false;
+    }
+    const allowedKeys = new Set([
+      'defaultHttpPort',
+      'defaultDebugPort',
+      'defaultJavaHome',
+      'showStatusInSidebar',
+    ]);
+    return Object.entries(value).every(([key, item]) => {
+      if (!allowedKeys.has(key)) {
+        return false;
+      }
+      if (key === 'defaultHttpPort' || key === 'defaultDebugPort') {
+        return Number.isInteger(item) && Number(item) >= 1 && Number(item) <= 65535;
+      }
+      if (key === 'defaultJavaHome') {
+        return typeof item === 'string';
+      }
+      return typeof item === 'boolean';
+    });
+  }
+
   // ── Schema & Form Handlers ─────────────────────────────────────────────────
 
   private async handleSchemaRequest(
@@ -464,7 +626,7 @@ export class DashboardPanel implements vscode.Disposable {
       formId: 'jsm.serverForm',
       mode,
       schema,
-      data: record ? serverConfigToFormData(record.config) : undefined,
+      data: record ? redactDashboardSecrets(serverConfigToFormData(record.config)) : undefined,
       targetId: record?.serverId,
       targetWorkspaceFolderUri: record?.workspaceFolderUri,
     });

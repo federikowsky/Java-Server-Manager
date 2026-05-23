@@ -8,13 +8,16 @@ coverage/**
 data/**
 docs/**
 jsm_pids/**
+node_modules/**
 out/**
 scripts/**
 src/**
 tools/**
+dist/**/*.map
 
 .DS_Store
 .env
+*.vsix
 .gitignore
 AGENTS.md
 CLAUDE.md

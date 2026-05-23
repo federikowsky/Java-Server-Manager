@@ -3,9 +3,10 @@ import { HookRunner, type HookExecutor } from '@app/hooks/HookRunner';
 import type { Logger } from '@core/types/logger';
 import type { HookConfig } from '@core/types/domain';
 import type { OperationContext } from '@core/types';
-import { ok, err } from '@core/result';
+import { ok, err, type Result } from '@core/result';
 import { JsmError } from '@core/errors/JsmError';
 import { ErrorCode } from '@core/errors/codes';
+import type { HookExecutionRequest } from '@app/hooks';
 
 function mockLogger(): Logger {
   return { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
@@ -191,6 +192,33 @@ describe('HookRunner', () => {
       expect(result.error.cause).toBeInstanceOf(JsmError);
       expect((result.error.cause as JsmError).code).toBe(ErrorCode.Timeout);
     }
+
+    vi.useRealTimers();
+  });
+
+  it('cancels the in-flight hook request when the per-hook timeout expires', async () => {
+    vi.useFakeTimers();
+    let capturedRequest: HookExecutionRequest | undefined;
+    executor.runCommand = vi.fn().mockImplementation(
+      async (request: HookExecutionRequest) => {
+        capturedRequest = request;
+        return new Promise<Result<void, JsmError>>(() => {});
+      },
+    );
+    runner = new HookRunner({ executor, logger: mockLogger() });
+
+    const promise = runner.runHooks({
+      parent: makeParent(),
+      phase: 'pre',
+      event: 'lifecycle.start',
+      hooks: [makeHook({ timeoutMs: 10 })],
+    });
+
+    await vi.advanceTimersByTimeAsync(11);
+    const result = await promise;
+
+    expect(result.ok).toBe(false);
+    expect(capturedRequest?.cancel.isCancelled).toBe(true);
 
     vi.useRealTimers();
   });

@@ -5,6 +5,7 @@ import type {
   DeploymentId,
   Logger,
 } from '@core/types';
+import * as path from 'path';
 import type { Result } from '@core/result';
 import { ok, err } from '@core/result';
 import { JsmError } from '@core/errors/JsmError';
@@ -60,6 +61,42 @@ function deploymentPersistedChanged(before: DeploymentConfig, after: DeploymentC
     || before.hooks.length !== after.hooks.length
     || before.hooks.some((hook, index) => !sameHookConfig(hook, after.hooks[index]));
 }
+
+function comparablePath(value: string): string {
+  const normalized = path.normalize(path.resolve(value));
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+}
+
+function comparableDeploymentName(value: string): string {
+  return value.toLowerCase();
+}
+
+function getTomcatShutdownPort(config: ServerConfig): number | undefined {
+  const pluginConfig = config.pluginConfig as { type?: string; shutdownPort?: unknown } | undefined;
+  if (config.type !== 'tomcat' || pluginConfig?.type !== 'tomcat') {
+    return undefined;
+  }
+
+  return typeof pluginConfig.shutdownPort === 'number' ? pluginConfig.shutdownPort : 8005;
+}
+
+function getTomcatSslPort(config: ServerConfig): number | undefined {
+  const pluginConfig = config.pluginConfig as {
+    type?: string;
+    ssl?: { enabled?: unknown; port?: unknown };
+  } | undefined;
+  if (config.type !== 'tomcat' || pluginConfig?.type !== 'tomcat' || pluginConfig.ssl?.enabled !== true) {
+    return undefined;
+  }
+
+  return typeof pluginConfig.ssl.port === 'number' ? pluginConfig.ssl.port : undefined;
+}
+
+type PortUse = {
+  serverId: ServerId;
+  serverName: string;
+  role: string;
+};
 
 /**
  * Application-level config service (§5.5).
@@ -141,6 +178,9 @@ export class ConfigService {
     const validResult = this.validateForPersistence(config);
     if (!validResult.ok) return validResult;
 
+    const invariantResult = this.validateInventoryInvariants([...this.repo.getAll(), config]);
+    if (!invariantResult.ok) return invariantResult;
+
     const saveResult = await this.repo.save(config);
     if (!saveResult.ok) return saveResult;
 
@@ -164,6 +204,11 @@ export class ConfigService {
 
     const validResult = this.validateForPersistence(config);
     if (!validResult.ok) return validResult;
+
+    const invariantResult = this.validateInventoryInvariants(
+      this.repo.getAll().map(server => server.id === config.id ? config : server),
+    );
+    if (!invariantResult.ok) return invariantResult;
 
     const saveResult = await this.repo.save(config);
     if (!saveResult.ok) return saveResult;
@@ -231,6 +276,11 @@ export class ConfigService {
     const validResult = this.validateForPersistence(updated);
     if (!validResult.ok) return validResult;
 
+    const invariantResult = this.validateInventoryInvariants(
+      this.repo.getAll().map(candidate => candidate.id === serverId ? updated : candidate),
+    );
+    if (!invariantResult.ok) return invariantResult;
+
     const saveResult = await this.repo.save(updated);
     if (!saveResult.ok) return saveResult;
 
@@ -297,6 +347,94 @@ export class ConfigService {
       }
     }
 
+    const invariantResult = this.validateInventoryInvariants(servers);
+    if (!invariantResult.ok) {
+      return invariantResult;
+    }
+
     return ok(undefined);
+  }
+
+  private validateInventoryInvariants(servers: readonly ServerConfig[]): Result<void, JsmError> {
+    const instancePaths = new Map<string, ServerConfig>();
+    const ports = new Map<number, PortUse>();
+
+    for (const server of servers) {
+      const instanceKey = comparablePath(server.instancePath);
+      const existingInstance = instancePaths.get(instanceKey);
+      if (existingInstance && existingInstance.id !== server.id) {
+        return this.invalidInventory(
+          `Instance path '${server.instancePath}' is already used by server '${existingInstance.name}' (${existingInstance.id}).`,
+        );
+      }
+      instancePaths.set(instanceKey, server);
+
+      const deploymentNames = new Map<string, DeploymentConfig>();
+      for (const dep of server.deployments) {
+        const deploymentKey = comparableDeploymentName(dep.deployName);
+        const existingDeployment = deploymentNames.get(deploymentKey);
+        if (existingDeployment) {
+          return this.invalidInventory(
+            `Deployment target '${dep.deployName}' is duplicated on server '${server.name}' (${server.id}).`,
+          );
+        }
+        deploymentNames.set(deploymentKey, dep);
+      }
+
+      const portResult = this.recordPortUse(ports, server, 'HTTP', server.ports.http);
+      if (!portResult.ok) return portResult;
+
+      if (server.debug.enabled && server.ports.debug !== undefined) {
+        const debugResult = this.recordPortUse(ports, server, 'debug', server.ports.debug);
+        if (!debugResult.ok) return debugResult;
+      }
+
+      const shutdownPort = getTomcatShutdownPort(server);
+      if (shutdownPort !== undefined) {
+        const shutdownResult = this.recordPortUse(ports, server, 'shutdown', shutdownPort);
+        if (!shutdownResult.ok) return shutdownResult;
+      }
+
+      const sslPort = getTomcatSslPort(server);
+      if (sslPort !== undefined) {
+        const sslResult = this.recordPortUse(ports, server, 'SSL', sslPort);
+        if (!sslResult.ok) return sslResult;
+      }
+    }
+
+    return ok(undefined);
+  }
+
+  private recordPortUse(
+    ports: Map<number, PortUse>,
+    server: ServerConfig,
+    role: string,
+    port: number,
+  ): Result<void, JsmError> {
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      return ok(undefined);
+    }
+
+    const existing = ports.get(port);
+    if (existing) {
+      return this.invalidInventory(
+        `Port ${port} (${role}) on server '${server.name}' (${server.id}) conflicts with `
+        + `${existing.role} on server '${existing.serverName}' (${existing.serverId}).`,
+      );
+    }
+
+    ports.set(port, {
+      serverId: server.id,
+      serverName: server.name,
+      role,
+    });
+    return ok(undefined);
+  }
+
+  private invalidInventory(message: string): Result<void, JsmError> {
+    return err(new JsmError({
+      code: ErrorCode.InvalidConfig,
+      message,
+    }));
   }
 }

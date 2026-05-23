@@ -257,6 +257,7 @@ vi.mock('@ui/adapters', () => ({
   },
   DebugAdapter: class {
     onDidChangeSession = vi.fn(() => ({ dispose: vi.fn() }));
+    dispose = vi.fn();
   },
   FileWatcherAdapter: class {},
 }));

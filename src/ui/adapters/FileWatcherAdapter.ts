@@ -5,6 +5,14 @@ import type { FileChange } from '@core/types/events';
 import type { FileWatcherFactory } from '@app/sync/AutoSyncService';
 import type { WatchSpec } from '@app/sync/watchSpec';
 
+function relativeContained(root: string, candidate: string): string | undefined {
+  const relative = path.relative(root, candidate);
+  if (relative === '' || relative.startsWith('..') || path.isAbsolute(relative)) {
+    return undefined;
+  }
+  return relative;
+}
+
 /**
  * Implements FileWatcherFactory via vscode.workspace.createFileSystemWatcher (§5.5).
  */
@@ -25,27 +33,38 @@ export class FileWatcherAdapter implements FileWatcherFactory {
     const watcher = vscode.workspace.createFileSystemWatcher(pattern);
 
     const shouldIgnore = (uri: vscode.Uri): boolean => {
-      const rel = path.relative(sourcePath, uri.fsPath);
+      const rel = relativeContained(sourcePath, uri.fsPath);
+      if (rel === undefined) {
+        return true;
+      }
       return ignoreGlobs.some(glob => {
         const parts = glob.replace(/\*\*/g, '').replace(/\*/g, '').replace(/\//g, '');
         return parts.length > 0 && rel.includes(parts);
       });
     };
 
-    const makeChange = (uri: vscode.Uri, type: FileChange['type']): FileChange => ({
-      type,
-      path: uri.fsPath,
-      relativePath: path.relative(sourcePath, uri.fsPath),
-    });
+    const makeChange = (uri: vscode.Uri, type: FileChange['type']): FileChange | undefined => {
+      const relativePath = relativeContained(sourcePath, uri.fsPath);
+      return relativePath === undefined
+        ? undefined
+        : {
+          type,
+          path: uri.fsPath,
+          relativePath,
+        };
+    };
 
     const createDisp = watcher.onDidCreate(uri => {
-      if (!shouldIgnore(uri)) onChange(makeChange(uri, 'add'));
+      const change = makeChange(uri, 'add');
+      if (change && !shouldIgnore(uri)) onChange(change);
     });
     const changeDisp = watcher.onDidChange(uri => {
-      if (!shouldIgnore(uri)) onChange(makeChange(uri, 'change'));
+      const change = makeChange(uri, 'change');
+      if (change && !shouldIgnore(uri)) onChange(change);
     });
     const deleteDisp = watcher.onDidDelete(uri => {
-      if (!shouldIgnore(uri)) onChange(makeChange(uri, 'delete'));
+      const change = makeChange(uri, 'delete');
+      if (change && !shouldIgnore(uri)) onChange(change);
     });
 
     return {
@@ -64,20 +83,29 @@ export class FileWatcherAdapter implements FileWatcherFactory {
     const pattern = new vscode.RelativePattern(dir, base);
     const watcher = vscode.workspace.createFileSystemWatcher(pattern);
 
-    const makeChange = (uri: vscode.Uri, type: FileChange['type']): FileChange => ({
-      type,
-      path: uri.fsPath,
-      relativePath: path.relative(dir, uri.fsPath),
-    });
+    const makeChange = (uri: vscode.Uri, type: FileChange['type']): FileChange | undefined => {
+      const relativePath = relativeContained(dir, uri.fsPath);
+      if (relativePath !== base) {
+        return undefined;
+      }
+      return {
+        type,
+        path: uri.fsPath,
+        relativePath,
+      };
+    };
 
     const createDisp = watcher.onDidCreate(uri => {
-      onChange(makeChange(uri, 'add'));
+      const change = makeChange(uri, 'add');
+      if (change) onChange(change);
     });
     const changeDisp = watcher.onDidChange(uri => {
-      onChange(makeChange(uri, 'change'));
+      const change = makeChange(uri, 'change');
+      if (change) onChange(change);
     });
     const deleteDisp = watcher.onDidDelete(uri => {
-      onChange(makeChange(uri, 'delete'));
+      const change = makeChange(uri, 'delete');
+      if (change) onChange(change);
     });
 
     return {

@@ -10,6 +10,7 @@ const buildDir = path.join(scriptDir, 'build');
 const classesDir = path.join(buildDir, 'classes');
 const assetDir = path.join(scriptDir, '..', '..', 'assets', 'tomcat');
 const jarPath = path.join(assetDir, 'jsm-tomcat-startup-listener.jar');
+const reproducibleTimestamp = '2026-01-01T00:00:00Z';
 
 rmSync(buildDir, { recursive: true, force: true });
 mkdirSync(classesDir, { recursive: true });
@@ -18,7 +19,7 @@ mkdirSync(assetDir, { recursive: true });
 const javaFiles = collectJavaFiles(srcDir, stubDir);
 
 run('javac', ['--release', '8', '-encoding', 'UTF-8', '-d', classesDir, ...javaFiles]);
-run('jar', ['--create', '--file', jarPath, '-C', classesDir, 'com']);
+run('jar', ['--create', '--date', reproducibleTimestamp, '--file', jarPath, '-C', classesDir, 'com']);
 
 console.log(`Built ${jarPath}`);
 

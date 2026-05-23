@@ -1,28 +1,41 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { EventEmitter } from 'events';
 import { ErrorCode } from '@core/errors/codes';
 
-const mocked = vi.hoisted(() => ({
-  stopError: new Error('stop-after-hook-executor'),
-  capturedExecutor: undefined as unknown,
-  fetchTasks: vi.fn(async () => [{ name: 'Build Task' }]),
-  executeTask: vi.fn(async () => ({ id: 'task-execution-1' })),
-  onDidEndTaskProcess: undefined as undefined | ((event: { execution: unknown; exitCode?: number }) => void),
-  taskListenerDispose: vi.fn(),
-  createOutputChannel: vi.fn(() => ({
-    append: vi.fn(),
-    appendLine: vi.fn(),
-    clear: vi.fn(),
-    dispose: vi.fn(),
-  })),
-}));
+const mocked = vi.hoisted(() => {
+  const taskTerminate = vi.fn();
+  return {
+    stopError: new Error('stop-after-hook-executor'),
+    capturedExecutor: undefined as unknown,
+    fetchTasks: vi.fn(async () => [{ name: 'Build Task' }]),
+    taskTerminate,
+    executeTask: vi.fn(async () => ({ id: 'task-execution-1', terminate: taskTerminate })),
+    onDidEndTaskProcess: undefined as undefined | ((event: { execution: unknown; exitCode?: number }) => void),
+    taskListenerDispose: vi.fn(),
+    spawnShell: vi.fn(),
+    kill: vi.fn(),
+    createOutputChannel: vi.fn(() => ({
+      append: vi.fn(),
+      appendLine: vi.fn(),
+      clear: vi.fn(),
+      dispose: vi.fn(),
+    })),
+  };
+});
 
 vi.mock('vscode', () => ({
   workspace: {
     workspaceFolders: [{
-      name: 'ws',
+      name: 'ws1',
       uri: {
-        fsPath: '/ws',
-        toString: () => 'file:///ws',
+        fsPath: '/ws1',
+        toString: () => 'file:///ws1',
+      },
+    }, {
+      name: 'ws2',
+      uri: {
+        fsPath: '/ws2',
+        toString: () => 'file:///ws2',
       },
     }],
     isTrusted: true,
@@ -53,7 +66,8 @@ vi.mock('@infra/logging', () => ({
 
 vi.mock('@infra/process', () => ({
   ProcessSpawner: class {
-    spawnShell = vi.fn();
+    spawnShell = (...args: unknown[]) => mocked.spawnShell(...args);
+    kill = (...args: unknown[]) => mocked.kill(...args);
   },
 }));
 
@@ -94,6 +108,7 @@ vi.mock('@ui/adapters', () => ({
   MementoAdapter: class {},
   DebugAdapter: class {
     onDidChangeSession = vi.fn(() => ({ dispose: vi.fn() }));
+    dispose = vi.fn();
   },
   FileWatcherAdapter: class {},
 }));
@@ -176,6 +191,27 @@ function makeRequest(timeoutMs = 100) {
         clear: vi.fn(),
       },
     },
+    cancel: {
+      isCancelled: false,
+      onCancelled: () => ({ dispose: () => {} }),
+    },
+  };
+}
+
+function makeCommandRequest() {
+  const request = makeRequest(100);
+  return {
+    ...request,
+    hook: {
+      ...request.hook,
+      kind: 'command',
+      vscodeTask: undefined,
+      command: { mode: 'shell', line: 'echo hook' },
+    },
+    parent: {
+      ...request.parent,
+      serverId: 'file:///ws2::srv-1',
+    },
   };
 }
 
@@ -186,6 +222,7 @@ async function captureExecutor() {
   expect(mocked.capturedExecutor).toBeDefined();
 
   return mocked.capturedExecutor as {
+    runCommand: (request: ReturnType<typeof makeCommandRequest>) => Promise<{ ok: boolean; error?: { code: string; message: string } }>;
     runVscodeTask: (request: ReturnType<typeof makeRequest>) => Promise<{ ok: boolean; error?: { code: string; message: string } }>;
   };
 }
@@ -194,7 +231,9 @@ describe('extension hook executor', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocked.fetchTasks.mockResolvedValue([{ name: 'Build Task' }]);
-    mocked.executeTask.mockResolvedValue({ id: 'task-execution-1' });
+    mocked.executeTask.mockResolvedValue({ id: 'task-execution-1', terminate: mocked.taskTerminate });
+    mocked.spawnShell.mockReset();
+    mocked.kill.mockReset();
     mocked.onDidEndTaskProcess = undefined;
   });
 
@@ -214,6 +253,7 @@ describe('extension hook executor', () => {
     if (!result.ok) {
       expect(result.error?.code).toBe(ErrorCode.Timeout);
     }
+    expect(mocked.taskTerminate).toHaveBeenCalledOnce();
     expect(mocked.taskListenerDispose).toHaveBeenCalledOnce();
   });
 
@@ -290,5 +330,23 @@ describe('extension hook executor', () => {
     }
     expect(mocked.onDidEndTaskProcess).toBeUndefined();
     expect(mocked.taskListenerDispose).not.toHaveBeenCalled();
+  });
+
+  it('defaults command hook cwd to the owning multi-root workspace folder', async () => {
+    const executor = await captureExecutor();
+    mocked.spawnShell.mockImplementation(() => {
+      const child = new EventEmitter() as EventEmitter & { pid: number };
+      child.pid = 1234;
+      queueMicrotask(() => child.emit('close', 0));
+      return child;
+    });
+
+    const result = await executor.runCommand(makeCommandRequest());
+
+    expect(result.ok).toBe(true);
+    expect(mocked.spawnShell).toHaveBeenCalledWith(expect.objectContaining({
+      line: 'echo hook',
+      cwd: '/ws2',
+    }));
   });
 });

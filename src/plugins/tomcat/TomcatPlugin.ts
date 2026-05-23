@@ -81,6 +81,22 @@ function catalinaScript(): string {
   return isWindows() ? 'catalina.bat' : 'catalina.sh';
 }
 
+function isLoopbackHost(host: string): boolean {
+  const normalized = host.trim().toLowerCase().replace(/^\[(.*)]$/, '$1');
+  return normalized === 'localhost'
+    || normalized === '127.0.0.1'
+    || normalized === '::1'
+    || normalized === '0:0:0:0:0:0:0:1';
+}
+
+function formatHttpHost(host: string): string {
+  const normalized = host.trim();
+  if (normalized.includes(':') && !normalized.startsWith('[')) {
+    return `[${normalized}]`;
+  }
+  return normalized;
+}
+
 async function tryRm(p: string): Promise<void> {
   try {
     await fs.rm(p, { recursive: true, force: true });
@@ -654,9 +670,6 @@ export class TomcatPlugin implements IServerPlugin {
     config: ServerConfig,
     dep: DeploymentConfig,
   ): Promise<Result<void, JsmError>> {
-    const managerUrl = `http://${config.host}:${config.ports.http}/manager/text`;
-    const reloadUrl = `${managerUrl}/reload?path=/${dep.deployName}`;
-
     // Get credentials from environment or plugin config
     const username = config.run.env['JSM_MANAGER_USER'] ?? 'manager';
     const password = config.run.env['JSM_MANAGER_PASS'];
@@ -668,20 +681,28 @@ export class TomcatPlugin implements IServerPlugin {
       }));
     }
 
+    if (!isLoopbackHost(config.host)) {
+      return err(new JsmError({
+        code: ErrorCode.InvalidConfig,
+        message: 'Tomcat Manager reload requires a loopback host because credentials are sent over local HTTP.',
+      }));
+    }
+
+    const managerUrl = `http://${formatHttpHost(config.host)}:${config.ports.http}/manager/text`;
+    const reloadUrl = `${managerUrl}/reload?path=/${dep.deployName}`;
     const auth = Buffer.from(`${username}:${password}`).toString('base64');
     const timeoutMs = 10000;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+      timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
       const response = await fetch(reloadUrl, {
         method: 'GET',
         headers: { 'Authorization': `Basic ${auth}` },
         signal: controller.signal,
       });
-
-      clearTimeout(timeoutId);
 
       if (!response.ok) {
         const body = await response.text();
@@ -709,6 +730,10 @@ export class TomcatPlugin implements IServerPlugin {
         }));
       }
       return err(JsmError.fromUnknown(cause, ErrorCode.DeployFailed));
+    } finally {
+      if (timeoutId !== undefined) {
+        clearTimeout(timeoutId);
+      }
     }
   }
 
@@ -1030,7 +1055,7 @@ export class TomcatPlugin implements IServerPlugin {
       const ensuredDirs = new Set<string>();
       for (const change of changes.changes) {
         this.throwIfCancelled(ctx, options.cancellationMessage);
-        const targetFile = path.join(targetPath, change.relativePath);
+        const targetFile = this.resolveContainedChangeTarget(targetPath, change.relativePath);
 
         switch (change.type) {
           case 'add':
@@ -1059,6 +1084,25 @@ export class TomcatPlugin implements IServerPlugin {
         cause,
       }));
     }
+  }
+
+  private resolveContainedChangeTarget(targetPath: string, relativePath: string): string {
+    if (path.isAbsolute(relativePath)) {
+      throw new Error(`Deployment change path must be relative: ${relativePath}`);
+    }
+
+    const resolvedRoot = path.resolve(targetPath);
+    const resolvedTarget = path.resolve(resolvedRoot, relativePath);
+    const relativeToRoot = path.relative(resolvedRoot, resolvedTarget);
+    if (
+      relativeToRoot === ''
+      || relativeToRoot.startsWith('..')
+      || path.isAbsolute(relativeToRoot)
+    ) {
+      throw new Error(`Deployment change path escapes target directory: ${relativePath}`);
+    }
+
+    return resolvedTarget;
   }
 
   private async resolveReloadTouchTarget(
@@ -1096,10 +1140,10 @@ export class TomcatPlugin implements IServerPlugin {
     options: { includeRunEnv?: boolean } = {},
   ): Record<string, string> {
     return {
+      ...(options.includeRunEnv ? config.run.env : {}),
       CATALINA_HOME: config.runtime.homePath,
       CATALINA_BASE: config.instancePath,
       JAVA_HOME: config.javaHome,
-      ...(options.includeRunEnv ? config.run.env : {}),
     };
   }
 

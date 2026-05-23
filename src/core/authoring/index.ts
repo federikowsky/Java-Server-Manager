@@ -23,6 +23,7 @@ export {
   formDataToServerConfig,
   formDataToServerDraft,
   formDataToTemplateDraft,
+  REDACTED_SECRET_PLACEHOLDER,
   serverConfigToDraft,
   serverConfigToFormData,
   serverDraftToCreateServerRequest,

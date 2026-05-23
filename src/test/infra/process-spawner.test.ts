@@ -6,6 +6,18 @@ function mockLogger(): Logger {
   return { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 }
 
+function nodeCommand(script: string): { exe: string; args: string[] } {
+  return {
+    exe: process.execPath,
+    args: ['-e', script],
+  };
+}
+
+function nodeShellLine(script: string): string {
+  const nodeExe = JSON.stringify(process.execPath.replace(/\\/g, '/'));
+  return `${nodeExe} -e ${JSON.stringify(script)}`;
+}
+
 describe('ProcessSpawner', () => {
   let spawner: ProcessSpawner;
 
@@ -17,10 +29,10 @@ describe('ProcessSpawner', () => {
 
   describe('spawn', () => {
     it('spawns a process that exits normally', async () => {
+      const command = nodeCommand('');
       const exitPromise = new Promise<{ code: number | null; signal: string | null }>((resolve) => {
         spawner.spawn({
-          exe: 'echo',
-          args: ['hello'],
+          ...command,
           onExit: (code, signal) => resolve({ code, signal }),
         });
       });
@@ -31,10 +43,10 @@ describe('ProcessSpawner', () => {
 
     it('captures stdout via onData', async () => {
       const chunks: string[] = [];
+      const command = nodeCommand("process.stdout.write('hello world')");
       const exitPromise = new Promise<void>((resolve) => {
         spawner.spawn({
-          exe: 'echo',
-          args: ['hello world'],
+          ...command,
           onData: (chunk) => chunks.push(chunk),
           onExit: () => resolve(),
         });
@@ -46,10 +58,10 @@ describe('ProcessSpawner', () => {
 
     it('passes environment variables', async () => {
       const chunks: string[] = [];
+      const command = nodeCommand("process.stdout.write(process.env.TEST_VAR_JSM || '')");
       const exitPromise = new Promise<void>((resolve) => {
         spawner.spawn({
-          exe: 'sh',
-          args: ['-c', 'echo $TEST_VAR_JSM'],
+          ...command,
           env: { TEST_VAR_JSM: 'custom_value' },
           onData: (chunk) => chunks.push(chunk),
           onExit: () => resolve(),
@@ -61,10 +73,10 @@ describe('ProcessSpawner', () => {
     });
 
     it('reports non-zero exit code', async () => {
+      const command = nodeCommand('process.exit(42)');
       const exitPromise = new Promise<{ code: number | null }>((resolve) => {
         spawner.spawn({
-          exe: 'sh',
-          args: ['-c', 'exit 42'],
+          ...command,
           onExit: (code) => resolve({ code }),
         });
       });
@@ -75,11 +87,9 @@ describe('ProcessSpawner', () => {
 
     it('runs a shell command line', async () => {
       const chunks: string[] = [];
-      const nodeExe = JSON.stringify(process.execPath.replace(/\\/g, '/'));
-      const script = JSON.stringify("process.stdout.write('alpha-beta')");
       const exitPromise = new Promise<void>((resolve) => {
         spawner.spawnShell({
-          line: `${nodeExe} -e ${script}`,
+          line: nodeShellLine("process.stdout.write('alpha-beta')"),
           onData: (chunk) => chunks.push(chunk),
           onExit: () => resolve(),
         });
@@ -111,9 +121,9 @@ describe('ProcessSpawner', () => {
     });
 
     it('kills a spawned process', async () => {
+      const command = nodeCommand('setTimeout(() => {}, 60_000)');
       const child = spawner.spawn({
-        exe: 'sleep',
-        args: ['60'],
+        ...command,
       });
 
       // Wait a tick for the process to start

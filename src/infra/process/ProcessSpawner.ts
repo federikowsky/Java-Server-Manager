@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'child_process';
+import { spawn, spawnSync, type ChildProcess } from 'child_process';
 import * as os from 'os';
 import type { Logger } from '@core/types/logger';
 
@@ -44,29 +44,31 @@ export class ProcessSpawner {
   /** Spawn a child process. Returns the ChildProcess handle. */
   spawn(opts: SpawnOptions): ChildProcess {
     const isWindows = os.platform() === 'win32';
+    const requiresCmd = isWindows && /\.(?:bat|cmd)$/i.test(opts.exe);
     let exe: string;
     let args: string[];
+    let windowsVerbatimArguments = false;
 
-    if (isWindows) {
-      // cmd.exe /d /s /c "exe" "arg1" "arg2"
-      const quoted = [opts.exe, ...opts.args].map(a => `"${a}"`).join(' ');
+    if (requiresCmd) {
+      const quoted = [opts.exe, ...opts.args].map(arg => this.quoteCmdArg(arg)).join(' ');
       exe = 'cmd.exe';
-      args = ['/d', '/s', '/c', quoted];
+      args = ['/d', '/c', quoted];
+      windowsVerbatimArguments = true;
     } else {
       exe = opts.exe;
       args = opts.args;
     }
 
-    return this.spawnResolved(exe, args, opts, opts.exe, opts.args);
+    return this.spawnResolved(exe, args, opts, opts.exe, opts.args, undefined, windowsVerbatimArguments);
   }
 
   /** Spawn a shell command using the user's default platform shell. */
   spawnShell(opts: SpawnShellOptions): ChildProcess {
     const isWindows = os.platform() === 'win32';
     const exe = isWindows ? (process.env.ComSpec || 'cmd.exe') : (process.env.SHELL || 'sh');
-    const args = isWindows ? ['/d', '/s', '/c', opts.line] : ['-lc', opts.line];
+    const args = isWindows ? ['/d', '/c', opts.line] : ['-lc', opts.line];
 
-    return this.spawnResolved(exe, args, opts, exe, args, opts.line);
+    return this.spawnResolved(exe, args, opts, exe, args, opts.line, isWindows);
   }
 
   private spawnResolved(
@@ -81,6 +83,7 @@ export class ProcessSpawner {
     logExe: string,
     logArgs: string[],
     commandLine?: string,
+    windowsVerbatimArguments = false,
   ): ChildProcess {
 
     const env = opts.env
@@ -94,6 +97,7 @@ export class ProcessSpawner {
       env,
       shell: false,
       stdio: ['ignore', 'pipe', 'pipe'],
+      windowsVerbatimArguments,
     });
 
     if (opts.onData) {
@@ -118,12 +122,12 @@ export class ProcessSpawner {
   kill(pid: number, force = false): boolean {
     try {
       if (os.platform() === 'win32') {
-        const killProc = spawn('taskkill', force ? ['/F', '/PID', String(pid)] : ['/PID', String(pid)], {
+        const result = spawnSync('taskkill', force ? ['/F', '/T', '/PID', String(pid)] : ['/PID', String(pid)], {
           shell: false,
           stdio: 'ignore',
+          windowsHide: true,
         });
-        killProc.on('error', () => { /* ignore */ });
-        return true;
+        return result.status === 0;
       } else {
         process.kill(pid, force ? 'SIGKILL' : 'SIGTERM');
         return true;
@@ -135,6 +139,24 @@ export class ProcessSpawner {
 
   /** Check if a process with the given PID is currently running. */
   isRunning(pid: number): boolean {
+    if (!Number.isInteger(pid) || pid <= 0) {
+      return false;
+    }
+
+    if (os.platform() === 'win32') {
+      const result = spawnSync('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], {
+        encoding: 'utf8',
+        shell: false,
+        windowsHide: true,
+      });
+      if (result.error || result.status !== 0) {
+        return false;
+      }
+      return result.stdout
+        .split(/\r?\n/)
+        .some(line => new RegExp(`^"[^"]+","${pid}",`).test(line.trim()));
+    }
+
     try {
       // signal 0 doesn't kill but checks existence
       process.kill(pid, 0);
@@ -142,5 +164,15 @@ export class ProcessSpawner {
     } catch {
       return false;
     }
+  }
+
+  private quoteCmdArg(arg: string): string {
+    if (arg.length === 0) {
+      return '""';
+    }
+    if (!/[\s"]/u.test(arg)) {
+      return arg;
+    }
+    return `"${arg.replace(/"/g, '""')}"`;
   }
 }

@@ -75,9 +75,11 @@ describe('ProcessSpawner', () => {
 
     it('runs a shell command line', async () => {
       const chunks: string[] = [];
+      const nodeExe = JSON.stringify(process.execPath.replace(/\\/g, '/'));
+      const script = JSON.stringify("process.stdout.write('alpha-beta')");
       const exitPromise = new Promise<void>((resolve) => {
         spawner.spawnShell({
-          line: 'printf "alpha" && printf "-beta"',
+          line: `${nodeExe} -e ${script}`,
           onData: (chunk) => chunks.push(chunk),
           onExit: () => resolve(),
         });

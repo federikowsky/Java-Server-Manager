@@ -225,7 +225,8 @@ jobs:
         run: |
           npx --yes ovsx@${OVSX_VERSION} publish \
             "${{ runner.temp }}/release-package/${{ needs.package.outputs.vsix_name }}" \
-            --pat "${OVSX_PAT}"
+            --pat "${OVSX_PAT}" \
+            --skip-duplicate
 
   verify:
     runs-on: ubuntu-latest

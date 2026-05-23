@@ -84,6 +84,21 @@ export function extractOpenVsxVersions(payload) {
   }
 
   const versionCandidates = new Set();
+  const addVersionMapCandidates = (value) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return;
+    }
+
+    for (const [key, entry] of Object.entries(value)) {
+      if (/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(key)) {
+        versionCandidates.add(key);
+      }
+
+      if (typeof entry?.version === 'string' && entry.version.length > 0) {
+        versionCandidates.add(entry.version);
+      }
+    }
+  };
 
   if (Array.isArray(payload.versions)) {
     for (const entry of payload.versions) {
@@ -91,6 +106,8 @@ export function extractOpenVsxVersions(payload) {
         versionCandidates.add(entry.version);
       }
     }
+  } else {
+    addVersionMapCandidates(payload.versions);
   }
 
   if (Array.isArray(payload.allVersions)) {
@@ -99,6 +116,8 @@ export function extractOpenVsxVersions(payload) {
         versionCandidates.add(entry.version);
       }
     }
+  } else {
+    addVersionMapCandidates(payload.allVersions);
   }
 
   for (const key of Object.keys(payload)) {

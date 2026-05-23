@@ -79,12 +79,18 @@ test('buildOpenVsxVersionsUrl composes the versions endpoint', () => {
 
 test('extractOpenVsxVersions parses versions map and detects target version', () => {
   const payload = {
-    '0.1.0': { version: '0.1.0' },
-    '0.1.1': { version: '0.1.1' },
+    versions: {
+      '0.1.0': 'https://open-vsx.org/api/publisher/extension/0.1.0',
+      '0.1.1': { version: '0.1.1' },
+    },
+    allVersions: {
+      '0.1.2': 'https://open-vsx.org/api/publisher/extension/0.1.2',
+    },
+    '0.1.3': { version: '0.1.3' },
     irrelevant: true,
   };
 
-  assert.deepEqual(extractOpenVsxVersions(payload).sort(), ['0.1.0', '0.1.1']);
-  assert.equal(hasOpenVsxVersion(payload, '0.1.1'), true);
-  assert.equal(hasOpenVsxVersion(payload, '0.1.2'), false);
+  assert.deepEqual(extractOpenVsxVersions(payload).sort(), ['0.1.0', '0.1.1', '0.1.2', '0.1.3']);
+  assert.equal(hasOpenVsxVersion(payload, '0.1.3'), true);
+  assert.equal(hasOpenVsxVersion(payload, '0.1.4'), false);
 });

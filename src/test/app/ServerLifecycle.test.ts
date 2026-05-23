@@ -1,3 +1,4 @@
+import { spawnSync } from 'child_process';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ServerLifecycle } from '@app/server/ServerLifecycle';
 import type { ServerConfig } from '@core/types/domain';
@@ -9,7 +10,25 @@ import type { HookConfig } from '@core/types/domain';
 import type { StartupMonitor } from '@plugins/interfaces/IServerPlugin';
 import { OperationQueue } from '@core/ops/OperationQueue';
 
+vi.mock('child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('child_process')>();
+
+  return {
+    ...actual,
+    spawnSync: vi.fn(() => ({
+      pid: 0,
+      output: [null, Buffer.alloc(0), Buffer.alloc(0)],
+      stdout: Buffer.alloc(0),
+      stderr: Buffer.alloc(0),
+      status: 0,
+      signal: null,
+    })),
+  };
+});
+
 /* ── helpers ─────────────────────────────────────────────────────────────── */
+
+const spawnSyncMock = vi.mocked(spawnSync);
 
 function mockLogger(): Logger {
   return { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
@@ -138,6 +157,8 @@ describe('ServerLifecycle', () => {
   let lifecycle: ServerLifecycle;
 
   beforeEach(() => {
+    spawnSyncMock.mockClear();
+
     bus = mockBus();
     pluginRegistry = mockPluginRegistry();
     pidManager = mockPidManager();
@@ -852,7 +873,17 @@ describe('ServerLifecycle', () => {
         const executor = queue.setExecutor.mock.calls[0][0] as (entry: { kind: string; meta?: Record<string, unknown> }) => Promise<void>;
         await executor({ kind: 'LifecycleStop' });
 
-        expect(killSpy).toHaveBeenCalledWith(123, 'SIGKILL');
+        if (process.platform === 'win32') {
+          expect(spawnSyncMock).toHaveBeenCalledWith('taskkill', ['/F', '/T', '/PID', '123'], {
+            shell: false,
+            stdio: 'ignore',
+            windowsHide: true,
+          });
+          expect(killSpy).not.toHaveBeenCalled();
+        } else {
+          expect(spawnSyncMock).not.toHaveBeenCalled();
+          expect(killSpy).toHaveBeenCalledWith(123, 'SIGKILL');
+        }
       } finally {
         dateNowSpy.mockRestore();
         killSpy.mockRestore();
@@ -889,7 +920,17 @@ describe('ServerLifecycle', () => {
         const executor = queue.setExecutor.mock.calls[0][0] as (entry: { kind: string; meta?: Record<string, unknown> }) => Promise<void>;
         await executor({ kind: 'LifecycleStop' });
 
-        expect(killSpy).toHaveBeenCalledWith(123, 'SIGKILL');
+        if (process.platform === 'win32') {
+          expect(spawnSyncMock).toHaveBeenCalledWith('taskkill', ['/F', '/T', '/PID', '123'], {
+            shell: false,
+            stdio: 'ignore',
+            windowsHide: true,
+          });
+          expect(killSpy).not.toHaveBeenCalled();
+        } else {
+          expect(spawnSyncMock).not.toHaveBeenCalled();
+          expect(killSpy).toHaveBeenCalledWith(123, 'SIGKILL');
+        }
       } finally {
         dateNowSpy.mockRestore();
         killSpy.mockRestore();

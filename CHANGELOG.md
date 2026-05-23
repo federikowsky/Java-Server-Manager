@@ -16,6 +16,7 @@ The format follows Keep a Changelog and this project adheres to Semantic Version
 
 - Third beta (pre-release): production-readiness hardening focused on multi-root identity, Tomcat runtime tracking, diagnostics safety, extension deactivation cleanup, deterministic autosync E2E coverage, and release package hygiene.
 - Keeps the shipped scope Tomcat-first while tightening behavior that can otherwise fail in real multi-workspace sessions or leak sensitive support data.
+- Includes a release-readiness audit/remediation pass across architecture conformance, managed inventory authority, workspace trust, process cleanup, webview command safety, packaging, and CI release gates.
 
 ### Beta Disclaimer
 
@@ -32,13 +33,25 @@ The format follows Keep a Changelog and this project adheres to Semantic Version
 
 - **Multi-root identity**: dashboard navigation, server detail, deployment forms, recent selections, and deployment commands now preserve workspace-scoped `serverKey` data instead of relying on bare server IDs.
 - **Tomcat runtime tracking**: child process tracking, status lookups, stop cleanup, and startup listener callback metadata use the operation server key so duplicate server IDs in different workspaces remain isolated.
+- **Managed inventory invariants**: server edits, imports, and external reloads now reject duplicate instance paths, runtime ports, and deployment target names before they become ambiguous runtime behavior.
+- **E2E runner**: E2E tests no longer depend on Mocha/glob and run through a local runner compatible with the VS Code extension test host.
 - **E2E reliability**: autosync workbench coverage waits for watcher registration before mutating deployment files, avoiding race-prone false failures.
-- **Release packaging**: VSIX packaging excludes local agent/tooling files, test-only scripts, transient data, and source-root generated JavaScript artifacts.
+- **Release packaging**: VSIX packaging excludes local agent/tooling files, test-only scripts, transient data, dependency trees, source maps, and source-root generated JavaScript artifacts.
 - **CI coverage**: CI branch filters include `master` as the repository default branch while retaining existing branch coverage.
 
 ### Fixed
 
 - **Diagnostics safety**: diagnostics bundles recursively redact sensitive values in nested config, hooks, deployments, JVM args, shell command lines, environment variables, and bearer tokens while preserving non-secret support context.
+- **Dashboard webview boundary**: dashboard command execution is allowlisted and argument-validated instead of forwarding arbitrary VS Code commands.
+- **Dashboard secret exposure**: dashboard sync and config form initialization redact secret values while preserving existing persisted secrets on redacted form round-trips.
+- **Managed instance deletion**: server removal now proves the instance is under managed storage and marked as JSM-managed before recursive deletion.
+- **PID ownership**: stale or foreign PID files no longer mark a server as running unless the process identity matches the JSM-owned runtime record.
+- **Stop escalation**: stop timeouts now force-kill still-running server processes and report timeout if escalation fails.
+- **Hook cancellation**: timed-out or cancelled hook commands and VS Code tasks now terminate the child work instead of leaving it running.
+- **Deployment path containment**: autosync and incremental deployment changes reject relative paths that escape the deployment target.
+- **Tomcat Manager safety**: Manager reload credentials are only sent to loopback HTTP hosts.
+- **Tomcat environment ownership**: user environment overrides can no longer replace plugin-owned `CATALINA_HOME`, `CATALINA_BASE`, or `JAVA_HOME`.
+- **Multi-root hook cwd**: command hooks without an explicit cwd now default to the owning workspace folder instead of the first workspace folder.
 - **Extension deactivation**: plugin registry disposal is wired into extension shutdown so plugin-owned resources are cleaned up on reload/deactivation.
 - **Test source of truth**: removed tracked generated `src/*.js` artifacts that could shadow TypeScript source in local tests and mask source-of-truth behavior.
 

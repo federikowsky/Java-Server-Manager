@@ -15,6 +15,7 @@
   import { WEBVIEW_PROTOCOL_VERSION } from '../../../../protocol';
   import { HOOK_EVENT_OPTIONS } from '../../../../hookForm';
   import { get } from 'svelte/store';
+  import { inferDeploymentContextPath } from './deploymentWizardModel';
   import Icon from '../../Icon.svelte';
   import FormPage from '../FormPage.svelte';
   import SectionBlock from '../../ds/SectionBlock.svelte';
@@ -74,6 +75,7 @@
   let submitError = $state('');
   let pendingRequestId = $state('');
   let hydratedFor = $state('');
+  let deployNameUserEdited = $state(false);
 
   /** Plain deep clone for payloads. Svelte $state arrays are Proxies — structuredClone throws. */
   function cloneValue<T>(value: T): T {
@@ -125,24 +127,21 @@
   let lastInferredName = '';
 
   $effect(() => {
-    if (!sourcePath.trim()) {
+    const inference = inferDeploymentContextPath({
+      sourcePath,
+      deployName,
+      lastInferredName,
+      deployNameUserEdited,
+    });
+
+    if (!inference.changed) {
       return;
     }
 
-    // Only infer if deployName is empty OR it matches the LAST auto-derived value
-    // (meaning the user hasn't explicitly customized it to something else).
-    if (deployName.trim() && deployName !== lastInferredName) {
-      return;
-    }
-
-    const basename = sourcePath.split(/[/\\]/).pop()?.replace(/\.war$/i, '') || '';
-    if (basename) {
-      deployName = basename;
-      lastInferredName = basename;
-      // Clear errors if the inferred name is valid
-      if (errors.deployName && /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(basename)) {
-        errors.deployName = '';
-      }
+    deployName = inference.deployName;
+    lastInferredName = inference.lastInferredName;
+    if (errors.deployName && /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(inference.deployName)) {
+      errors.deployName = '';
     }
   });
 
@@ -177,6 +176,7 @@
     sourcePath = existingDeployment?.sourcePath || '';
     deployName = existingDeployment?.deployName || '';
     lastInferredName = existingDeployment?.deployName || '';
+    deployNameUserEdited = Boolean(existingDeployment?.deployName);
     syncMode = existingDeployment?.syncMode || 'auto';
     hotReload = existingDeployment?.hotReload || false;
     healthCheckPath = existingDeployment?.healthCheckPath || '';
@@ -213,6 +213,11 @@
 
   function handleFieldInput(field: string, value: string) {
     errors = { ...errors, [field]: validateField(field, value) };
+  }
+
+  function handleDeployNameInput() {
+    deployNameUserEdited = true;
+    handleFieldInput('deployName', deployName);
   }
 
   function handleFieldBlur(field: string) {
@@ -270,6 +275,7 @@
       ignoreGlobDraft,
       hooks: cloneValue(hooks),
       lastInferredName,
+      deployNameUserEdited,
     };
   }
 
@@ -285,6 +291,7 @@
     ignoreGlobDraft = snapshot.ignoreGlobDraft;
     hooks = cloneValue(snapshot.hooks);
     lastInferredName = snapshot.lastInferredName;
+    deployNameUserEdited = snapshot.deployNameUserEdited ?? false;
     errors = {};
     touched = {};
     submitState = 'idle';
@@ -470,7 +477,7 @@
             class="field-input"
             class:error={errors.deployName && touched.deployName}
             bind:value={deployName}
-            oninput={() => handleFieldInput('deployName', deployName)}
+            oninput={handleDeployNameInput}
             onblur={() => handleFieldBlur('deployName')}
             placeholder="myapp"
           />

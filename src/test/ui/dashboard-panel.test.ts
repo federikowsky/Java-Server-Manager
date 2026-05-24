@@ -365,6 +365,64 @@ describe('DashboardPanel host boundary', () => {
     );
   });
 
+  it('writes only provided settings keys for partial settings saves', async () => {
+    const { panel } = setupPanel(true);
+
+    const result = await (panel as any).handleSettingsSave({
+      defaultJavaHome: '/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home',
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(mocked.configUpdate).toHaveBeenCalledTimes(1);
+    expect(mocked.configUpdate).toHaveBeenCalledWith(
+      'defaults.javaHome',
+      '/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home',
+      1,
+    );
+    expect(mocked.configUpdate).not.toHaveBeenCalledWith(
+      'ui.showStatusInSidebar',
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it('does not let an unregistered optional setting break a Java-only settings save', async () => {
+    mocked.configUpdate.mockImplementation(async (key: string) => {
+      if (key === 'ui.showStatusInSidebar') {
+        throw new Error(
+          'CodeExpectedError: Unable to write to User Settings because jsm.ui.showStatusInSidebar is not a registered configuration.',
+        );
+      }
+    });
+    const { panel } = setupPanel(true);
+
+    const result = await (panel as any).handleSettingsSave({
+      defaultJavaHome: '/jdk',
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(mocked.configUpdate).toHaveBeenCalledTimes(1);
+    expect(mocked.configUpdate).toHaveBeenCalledWith('defaults.javaHome', '/jdk', 1);
+  });
+
+  it('surfaces configuration write failures for explicitly changed settings', async () => {
+    mocked.configUpdate.mockImplementation(async (key: string) => {
+      if (key === 'ui.showStatusInSidebar') {
+        throw new Error(
+          'CodeExpectedError: Unable to write to User Settings because jsm.ui.showStatusInSidebar is not a registered configuration.',
+        );
+      }
+    });
+    const { panel } = setupPanel(true);
+
+    const result = await (panel as any).handleSettingsSave({
+      showStatusInSidebar: false,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain('jsm.ui.showStatusInSidebar is not a registered configuration');
+  });
+
   it('clears local telemetry when the opt-in setting is disabled', async () => {
     const { deps, panel } = setupPanel(true);
 

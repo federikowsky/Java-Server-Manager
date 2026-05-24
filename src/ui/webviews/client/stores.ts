@@ -147,6 +147,7 @@ export interface DeploymentWizardDraftSnapshot {
   ignoreGlobDraft: string;
   hooks: HookConfig[];
   lastInferredName: string;
+  deployNameUserEdited: boolean;
 }
 
 export const deploymentWizardDraft = writable<DeploymentWizardDraftSnapshot | null>(null);

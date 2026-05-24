@@ -3,6 +3,7 @@
   import { spaState, browseResult, lastCommandResult } from '../../stores';
   import { postToHost } from '../../bridge';
   import { WEBVIEW_PROTOCOL_VERSION } from '../../../protocol';
+  import { buildDirtySettingsPayload, hasDirtySettings, type EditableSettings } from '../../settingsPayload';
   import Icon from '../Icon.svelte';
   import RootPageHeader from '../ds/RootPageHeader.svelte';
   import SectionBlock from '../ds/SectionBlock.svelte';
@@ -20,7 +21,13 @@
   let localTelemetryEnabled = $state(false);
 
   /** Last values applied from host sync — reset restores these (spec §25.4). */
-  let baseline = $state({ http: 8080, debug: 5005, java: '', sidebar: true, telemetry: false });
+  let baseline = $state<EditableSettings>({
+    defaultHttpPort: 8080,
+    defaultDebugPort: 5005,
+    defaultJavaHome: '',
+    showStatusInSidebar: true,
+    localTelemetryEnabled: false,
+  });
 
   let settingsFingerprint = $state('');
   let saving = $state(false);
@@ -75,20 +82,22 @@
     showStatusInSidebar = state.settings.showStatusInSidebar;
     localTelemetryEnabled = state.settings.localTelemetryEnabled;
     baseline = {
-      http: state.settings.defaultHttpPort,
-      debug: state.settings.defaultDebugPort,
-      java: state.settings.defaultJavaHome,
-      sidebar: state.settings.showStatusInSidebar,
-      telemetry: state.settings.localTelemetryEnabled,
+      defaultHttpPort: state.settings.defaultHttpPort,
+      defaultDebugPort: state.settings.defaultDebugPort,
+      defaultJavaHome: state.settings.defaultJavaHome,
+      showStatusInSidebar: state.settings.showStatusInSidebar,
+      localTelemetryEnabled: state.settings.localTelemetryEnabled,
     };
   });
 
   let dirty = $derived(
-    defaultHttpPort !== baseline.http
-    || defaultDebugPort !== baseline.debug
-    || defaultJavaHome !== baseline.java
-    || showStatusInSidebar !== baseline.sidebar
-    || localTelemetryEnabled !== baseline.telemetry,
+    hasDirtySettings(buildDirtySettingsPayload({
+      defaultHttpPort,
+      defaultDebugPort,
+      defaultJavaHome,
+      showStatusInSidebar,
+      localTelemetryEnabled,
+    }, baseline)),
   );
 
   let workspaceRows = $derived([
@@ -118,21 +127,20 @@
     saveMessage = '';
     pendingRequestId = crypto.randomUUID();
     lastCommandResult.set(null);
+    const payload = buildDirtySettingsPayload({
+      defaultHttpPort,
+      defaultDebugPort,
+      defaultJavaHome,
+      showStatusInSidebar,
+      localTelemetryEnabled,
+    }, baseline);
 
     postToHost({
       v: WEBVIEW_PROTOCOL_VERSION,
       command: 'executeCommand',
       id: 'jsm.settings.save',
       requestId: pendingRequestId,
-      args: [
-        {
-          defaultHttpPort,
-          defaultDebugPort,
-          defaultJavaHome,
-          showStatusInSidebar,
-          localTelemetryEnabled,
-        },
-      ],
+      args: [payload],
     });
   }
 
@@ -146,11 +154,11 @@
   }
 
   function handleReset() {
-    defaultHttpPort = baseline.http;
-    defaultDebugPort = baseline.debug;
-    defaultJavaHome = baseline.java;
-    showStatusInSidebar = baseline.sidebar;
-    localTelemetryEnabled = baseline.telemetry;
+    defaultHttpPort = baseline.defaultHttpPort;
+    defaultDebugPort = baseline.defaultDebugPort;
+    defaultJavaHome = baseline.defaultJavaHome;
+    showStatusInSidebar = baseline.showStatusInSidebar;
+    localTelemetryEnabled = baseline.localTelemetryEnabled;
     saveError = '';
     saveMessage = '';
   }

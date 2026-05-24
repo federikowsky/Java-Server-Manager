@@ -10,6 +10,36 @@ The format follows Keep a Changelog and this project adheres to Semantic Version
 
 - ongoing improvements toward stable readiness
 
+## [0.1.6] - 2026-05-24
+
+### Summary
+
+- Sixth beta patch focused on deployment authoring and settings-save regressions found after 0.1.5 publication.
+- Keeps the dashboard authoring model intact while preventing inferred deployment values and unchanged settings from overriding explicit user intent.
+- Expands regression coverage around deployment context path inference, dirty settings payloads, and host-side partial settings writes.
+
+### Beta Disclaimer
+
+- this is a beta prerelease intended for validation and feedback.
+- behavior and feature surface may change before stable.
+
+### Known Limitations
+
+- only Tomcat is supported in this release.
+- some advanced workflows and hardening tasks are still in progress.
+
+### Fixed
+
+- Deployment Context Path can now be cleared completely after being suggested from the source path; the wizard no longer restores the suggestion on the final deleted character.
+- Existing deployment context paths are treated as explicit values in edit mode, so changing source paths does not silently rename an existing deployment target.
+- Settings save now sends only fields that changed, so changing Default Java Home no longer attempts to rewrite unrelated UI preferences such as `jsm.ui.showStatusInSidebar`.
+
+### Tests
+
+- Added executable model coverage for deployment context path inference across exploded directories, WAR files, trailing separators, Windows paths, custom names, source changes, and intentionally cleared values.
+- Added dirty settings payload coverage for Java home, port defaults, boolean preferences, cleared values, mixed updates, and unchanged-state no-op payloads.
+- Added dashboard host tests proving partial settings writes update only provided keys and that unregistered optional settings cannot break Java-only settings saves.
+
 ## [0.1.5] - 2026-05-24
 
 ### Summary

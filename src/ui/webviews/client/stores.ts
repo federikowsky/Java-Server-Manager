@@ -4,6 +4,7 @@
 
 import { writable } from 'svelte/store';
 import type { DashboardNavigationTarget, FormSchema, SpaServerRecord, SpaSettings } from '../protocol';
+import type { HookConfig, PluginConfig, ServerType } from '@core/types';
 
 /** Mirrors `syncState` payload in protocol (host → webview). */
 export type SpaTemplateRow = { template: unknown; scope: 'global' | 'workspace' | 'gallery' };
@@ -111,6 +112,44 @@ export const hooksEditorSession = writable<{
   returnTarget: ActiveEntity;
   eventOptions?: Array<{ value: string; label: string }>;
 } | null>(null);
+
+export interface ServerWizardDraftSnapshot {
+  templateId?: string;
+  creationMode: 'scratch' | 'template';
+  selectedTemplateId: string;
+  selectedType: ServerType;
+  serverName: string;
+  runtimeHome: string;
+  javaHome: string;
+  httpPort: number;
+  debugPort?: number;
+  host: string;
+  vmArgs: string[];
+  vmArgDraft: string;
+  debugBind: string;
+  selectedWorkspace: string;
+  hooks: HookConfig[];
+  draftPluginConfig?: PluginConfig;
+}
+
+export const serverWizardDraft = writable<ServerWizardDraftSnapshot | null>(null);
+
+export interface DeploymentWizardDraftSnapshot {
+  key: string;
+  formType: 'exploded' | 'war';
+  sourcePath: string;
+  deployName: string;
+  syncMode: 'auto' | 'manual';
+  hotReload: boolean;
+  healthCheckPath: string;
+  healthCheckTimeoutMs?: number;
+  ignoreGlobs: string[];
+  ignoreGlobDraft: string;
+  hooks: HookConfig[];
+  lastInferredName: string;
+}
+
+export const deploymentWizardDraft = writable<DeploymentWizardDraftSnapshot | null>(null);
 
 /**
  * Drop host-form mirror in spaState + related stores so the next editor session

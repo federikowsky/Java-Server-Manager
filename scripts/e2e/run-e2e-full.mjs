@@ -8,7 +8,7 @@ import { existsSync } from 'node:fs';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { runTests } from '@vscode/test-electron';
+import { runVsCodeExtensionTests } from './run-vscode-extension-tests.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
@@ -57,10 +57,10 @@ async function main() {
     process.exit(1);
   }
 
-  const exitCode = await runTests({
+  const exitCode = await runVsCodeExtensionTests({
     extensionDevelopmentPath: repoRoot,
     extensionTestsPath: path.join(repoRoot, 'out', 'e2e', 'suite', 'index-full.js'),
-    launchArgs: [workspace],
+    workspacePath: workspace,
     vscodeExecutablePath,
     extensionTestsEnv: {
       JSM_E2E: '1',

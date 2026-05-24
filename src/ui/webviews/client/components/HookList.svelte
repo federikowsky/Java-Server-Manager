@@ -16,7 +16,7 @@
   import SectionBlock from './ds/SectionBlock.svelte';
   import AdvancedCollapse from './ds/AdvancedCollapse.svelte';
 
-  const { def, value, onChange, id }: {
+  const { def, value, onChange, id, onTest, testState }: {
     def: FormFieldDef;
     value: HookConfig[] | undefined;
     onChange: (v: HookConfig[]) => void;
@@ -37,23 +37,28 @@
   let addContinueOnError = $state(false);
   let addCwd = $state('');
   let addEnv = $state<Record<string, string>>({});
+  let hooks = $state<HookConfig[]>([]);
 
   const allowedEvents = $derived((def.hookOptions?.events ?? HOOK_EVENT_OPTIONS).map(option => option.value as HookConfig['event']));
   const eventOptions = $derived(def.hookOptions?.events ?? HOOK_EVENT_OPTIONS);
   const taskOptions = $derived(def.hookOptions?.taskOptions ?? []);
 
   $effect(() => {
-    const hooks = normalizeHookList(value, allowedEvents);
-    nextHookIndex = Math.max(nextHookIndex, hooks.length + 1);
+    const normalizedHooks = normalizeHookList(value, allowedEvents);
+    hooks = normalizedHooks;
+    nextHookIndex = Math.max(nextHookIndex, normalizedHooks.length + 1);
     hookErrors = validateHookList(value, def.name, allowedEvents);
   });
 
   function getHooks(): HookConfig[] {
-    return normalizeHookList(value, allowedEvents);
+    return hooks;
   }
 
-  function commit(hooks: HookConfig[]): void {
-    onChange(hooks);
+  function commit(nextHooks: HookConfig[]): void {
+    const normalizedHooks = normalizeHookList(nextHooks, allowedEvents);
+    hooks = normalizedHooks;
+    hookErrors = validateHookList(normalizedHooks, def.name, allowedEvents);
+    onChange(normalizedHooks);
   }
 
   function addHook(): void {

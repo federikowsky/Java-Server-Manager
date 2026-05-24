@@ -6,7 +6,7 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { runTests } from '@vscode/test-electron';
+import { runVsCodeExtensionTests } from './run-vscode-extension-tests.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
@@ -82,10 +82,10 @@ async function main() {
     });
     await fs.writeFile(path.join(vscodeDir, 'jsm.servers.json'), `${JSON.stringify(cfg, null, 2)}\n`, 'utf8');
 
-    exitCode = await runTests({
+    exitCode = await runVsCodeExtensionTests({
       extensionDevelopmentPath: repoRoot,
       extensionTestsPath: path.join(repoRoot, 'out', 'e2e', 'suite', 'index.js'),
-      launchArgs: [tmp],
+      workspacePath: tmp,
       vscodeExecutablePath,
       extensionTestsEnv: {
         JSM_E2E: '1',

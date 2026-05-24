@@ -5,7 +5,15 @@
   import { capabilityUiSlice } from '../../../capabilityUi';
   import { findServerTemplateById, hasServerTemplateId } from '../../../templateLookup';
   import { get } from 'svelte/store';
-  import { spaState, activeEntity, browseResult, lastCommandResult, hooksEditorSession } from '../../../stores';
+  import {
+    spaState,
+    activeEntity,
+    browseResult,
+    lastCommandResult,
+    hooksEditorSession,
+    serverWizardDraft,
+    type ServerWizardDraftSnapshot,
+  } from '../../../stores';
   import { postToHost } from '../../../bridge';
   import { WEBVIEW_PROTOCOL_VERSION } from '../../../../protocol';
   import Icon from '../../Icon.svelte';
@@ -151,6 +159,49 @@
     };
   }
 
+  function snapshotServerWizardDraft(): ServerWizardDraftSnapshot {
+    return {
+      ...(templateId ? { templateId } : {}),
+      creationMode,
+      selectedTemplateId,
+      selectedType,
+      serverName,
+      runtimeHome,
+      javaHome,
+      httpPort,
+      ...(debugPort !== undefined ? { debugPort } : {}),
+      host,
+      vmArgs: [...vmArgs],
+      vmArgDraft,
+      debugBind,
+      selectedWorkspace,
+      hooks: cloneValue(hooks),
+      draftPluginConfig: cloneValue(draftPluginConfig),
+    };
+  }
+
+  function restoreServerWizardDraft(snapshot: ServerWizardDraftSnapshot): void {
+    creationMode = snapshot.creationMode;
+    selectedTemplateId = snapshot.selectedTemplateId;
+    selectedType = snapshot.selectedType;
+    serverName = snapshot.serverName;
+    runtimeHome = snapshot.runtimeHome;
+    javaHome = snapshot.javaHome;
+    httpPort = snapshot.httpPort;
+    debugPort = snapshot.debugPort;
+    host = snapshot.host;
+    vmArgs = [...snapshot.vmArgs];
+    vmArgDraft = snapshot.vmArgDraft;
+    debugBind = snapshot.debugBind;
+    selectedWorkspace = snapshot.selectedWorkspace;
+    hooks = cloneValue(snapshot.hooks);
+    draftPluginConfig = cloneValue(snapshot.draftPluginConfig);
+  }
+
+  function isServerWizardDraftForThisPage(snapshot: ServerWizardDraftSnapshot | null): snapshot is ServerWizardDraftSnapshot {
+    return !!snapshot && snapshot.templateId === templateId;
+  }
+
   function applyTemplate(nextTemplateId: string): void {
     const template = findServerTemplateById(availableTemplates, nextTemplateId);
     if (!template) {
@@ -229,6 +280,7 @@
       return;
     }
 
+    serverWizardDraft.set(null);
     submitError = '';
     const createdServerId = typeof result.data?.serverId === 'string' ? result.data.serverId : undefined;
     const createdServerKey = typeof result.data?.serverKey === 'string' ? result.data.serverKey : undefined;
@@ -271,6 +323,13 @@
 
   $effect(() => {
     if (!state.initialized || defaultsHydrated) {
+      return;
+    }
+
+    const savedDraft = get(serverWizardDraft);
+    if (isServerWizardDraftForThisPage(savedDraft)) {
+      restoreServerWizardDraft(savedDraft);
+      defaultsHydrated = true;
       return;
     }
 
@@ -438,6 +497,7 @@
     submitState = 'idle';
     pendingRequestId = '';
     submitError = '';
+    serverWizardDraft.set(null);
     if (templateId) {
       spaState.update(s => ({ ...s, globalTab: 'templates' }));
       activeEntity.set({ type: 'template', id: templateId });
@@ -448,11 +508,19 @@
   }
 
   function openHooksEditor(): void {
+    const snapshot = snapshotServerWizardDraft();
+    serverWizardDraft.set(snapshot);
     hooksEditorSession.set({
       draft: cloneValue(hooks),
       fieldName: 'hooks',
       commit: (next) => {
-        hooks = Array.isArray(next) ? cloneValue(next) : [];
+        const nextHooks = Array.isArray(next) ? cloneValue(next as HookConfig[]) : [];
+        hooks = nextHooks;
+        const current = get(serverWizardDraft);
+        serverWizardDraft.set({
+          ...(isServerWizardDraftForThisPage(current) ? current : snapshot),
+          hooks: nextHooks,
+        });
       },
       returnTarget: get(activeEntity),
     });

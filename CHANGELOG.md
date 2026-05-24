@@ -10,6 +10,32 @@ The format follows Keep a Changelog and this project adheres to Semantic Version
 
 - ongoing improvements toward stable readiness
 
+## [0.1.5] - 2026-05-24
+
+### Summary
+
+- Fifth beta patch focused on the hooks editor regression found after 0.1.4 publication.
+- Restores reliable command/task hook authoring from the full-screen hooks editor and preserves Add Server draft input when returning from that editor.
+- Fixes the lightweight VS Code E2E launcher so workspace-backed extension tests run instead of treating the workspace path as the test module.
+
+### Beta Disclaimer
+
+- this is a beta prerelease intended for validation and feedback.
+- behavior and feature surface may change before stable.
+
+### Known Limitations
+
+- only Tomcat is supported in this release.
+- some advanced workflows and hardening tasks are still in progress.
+
+### Fixed
+
+- Existing Hooks now updates immediately after adding command or VS Code task hooks.
+- Hook test actions are wired through the hooks editor props so saved server/deployment hooks can be tested from the editor.
+- Add Server draft state, including runtime paths, Java home, ports, VM args, selected workspace, template mode, and hooks, is preserved while opening and returning from the hooks editor.
+- Deployment draft state is preserved through the same hooks editor round-trip.
+- `npm run test:e2e` now launches VS Code with test flags before the workspace path and passes locally.
+
 ## [0.1.4] - 2026-05-24
 
 ### Summary

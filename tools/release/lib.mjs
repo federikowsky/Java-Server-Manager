@@ -133,7 +133,7 @@ export function hasOpenVsxVersion(payload, version) {
   return extractOpenVsxVersions(payload).includes(version);
 }
 
-export function buildRetryDelaySchedule(attempts, baseDelayMs) {
+export function buildRetryDelaySchedule(attempts, baseDelayMs, maxDelayMs = Number.MAX_SAFE_INTEGER) {
   if (!Number.isInteger(attempts) || attempts < 1) {
     throw new Error(`Retry attempts must be a positive integer; received "${attempts}".`);
   }
@@ -142,12 +142,16 @@ export function buildRetryDelaySchedule(attempts, baseDelayMs) {
     throw new Error(`Retry base delay must be a non-negative integer; received "${baseDelayMs}".`);
   }
 
+  if (!Number.isInteger(maxDelayMs) || maxDelayMs < 0) {
+    throw new Error(`Retry max delay must be a non-negative integer; received "${maxDelayMs}".`);
+  }
+
   const schedule = [];
   let nextDelay = baseDelayMs;
 
   for (let attempt = 1; attempt < attempts; attempt += 1) {
-    schedule.push(nextDelay);
-    nextDelay *= 2;
+    schedule.push(Math.min(nextDelay, maxDelayMs));
+    nextDelay = Math.min(nextDelay * 2, maxDelayMs);
   }
 
   return schedule;

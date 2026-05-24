@@ -246,12 +246,16 @@ jobs:
         env:
           JSM_EXTENSION_NAME: ${{ needs.preflight.outputs.extension_name }}
           RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+          VERIFY_ATTEMPTS: 20
+          VERIFY_MAX_DELAY_MS: 60000
         run: npm run release:verify
 
       - name: Verify OpenVSX version
         env:
           JSM_EXTENSION_NAME: ${{ needs.preflight.outputs.extension_name }}
           RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+          OPENVSX_VERIFY_ATTEMPTS: 20
+          OPENVSX_VERIFY_MAX_DELAY_MS: 60000
         run: npm run release:verify:openvsx
 
       - name: Release summary

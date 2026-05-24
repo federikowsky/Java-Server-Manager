@@ -36,13 +36,14 @@ async function main() {
   const version = process.env.RELEASE_VERSION?.trim();
   const attempts = Number.parseInt(process.env.VERIFY_ATTEMPTS ?? '6', 10);
   const baseDelayMs = Number.parseInt(process.env.VERIFY_BASE_DELAY_MS ?? '10000', 10);
+  const maxDelayMs = Number.parseInt(process.env.VERIFY_MAX_DELAY_MS ?? String(Number.MAX_SAFE_INTEGER), 10);
 
   if (!publisher || !extensionName || !version) {
     throw new Error('JSM_MARKETPLACE_PUBLISHER, JSM_EXTENSION_NAME, and RELEASE_VERSION are required.');
   }
 
   const extensionId = `${publisher}.${extensionName}`;
-  const delaySchedule = buildRetryDelaySchedule(attempts, baseDelayMs);
+  const delaySchedule = buildRetryDelaySchedule(attempts, baseDelayMs, maxDelayMs);
   let lastSeenVersions = [];
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {

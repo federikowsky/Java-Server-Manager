@@ -2,7 +2,15 @@
   import { onDestroy } from 'svelte';
   import { formDataToDeploymentDraft, getDeploymentHookEvents } from '@core/authoring';
   import type { ServerConfig, HookConfig } from '@core/types';
-  import { spaState, activeEntity, browseResult, lastCommandResult, hooksEditorSession } from '../../../stores';
+  import {
+    spaState,
+    activeEntity,
+    browseResult,
+    lastCommandResult,
+    hooksEditorSession,
+    deploymentWizardDraft,
+    type DeploymentWizardDraftSnapshot,
+  } from '../../../stores';
   import { postToHost } from '../../../bridge';
   import { WEBVIEW_PROTOCOL_VERSION } from '../../../../protocol';
   import { HOOK_EVENT_OPTIONS } from '../../../../hookForm';
@@ -103,6 +111,7 @@
     }
 
     submitError = '';
+    deploymentWizardDraft.set(null);
     spaState.update(s => ({ ...s, serverDetailResumeTab: 'deployments' }));
     activeEntity.set({
       type: 'server',
@@ -150,6 +159,14 @@
   });
 
   $effect(() => {
+    const savedDraft = get(deploymentWizardDraft);
+    const currentDraftKey = getDraftKey();
+    if (savedDraft?.key === currentDraftKey && hydratedFor !== `draft:${currentDraftKey}`) {
+      hydratedFor = `draft:${currentDraftKey}`;
+      restoreDeploymentWizardDraft(savedDraft);
+      return;
+    }
+
     const nextKey = `${mode}:${serverRecord?.serverKey ?? serverKey ?? configServerId}:${deploymentId ?? 'create'}:${existingDeployment?.id ?? 'pending'}`;
     if (hydratedFor === nextKey) {
       return;
@@ -235,7 +252,48 @@
     ignoreGlobs = ignoreGlobs.filter((_, i) => i !== index);
   }
 
+  function getDraftKey(): string {
+    return `${mode}:${serverRecord?.serverKey ?? serverKey ?? configServerId}:${deploymentId ?? 'create'}`;
+  }
+
+  function snapshotDeploymentWizardDraft(): DeploymentWizardDraftSnapshot {
+    return {
+      key: getDraftKey(),
+      formType,
+      sourcePath,
+      deployName,
+      syncMode,
+      hotReload,
+      healthCheckPath,
+      ...(healthCheckTimeoutMs !== undefined ? { healthCheckTimeoutMs } : {}),
+      ignoreGlobs: [...ignoreGlobs],
+      ignoreGlobDraft,
+      hooks: cloneValue(hooks),
+      lastInferredName,
+    };
+  }
+
+  function restoreDeploymentWizardDraft(snapshot: DeploymentWizardDraftSnapshot): void {
+    formType = snapshot.formType;
+    sourcePath = snapshot.sourcePath;
+    deployName = snapshot.deployName;
+    syncMode = snapshot.syncMode;
+    hotReload = snapshot.hotReload;
+    healthCheckPath = snapshot.healthCheckPath;
+    healthCheckTimeoutMs = snapshot.healthCheckTimeoutMs;
+    ignoreGlobs = [...snapshot.ignoreGlobs];
+    ignoreGlobDraft = snapshot.ignoreGlobDraft;
+    hooks = cloneValue(snapshot.hooks);
+    lastInferredName = snapshot.lastInferredName;
+    errors = {};
+    touched = {};
+    submitState = 'idle';
+    submitError = '';
+    pendingRequestId = '';
+  }
+
   function handleBack() {
+    deploymentWizardDraft.set(null);
     spaState.update(s => ({ ...s, serverDetailResumeTab: 'deployments' }));
     activeEntity.set({
       type: 'server',
@@ -249,12 +307,20 @@
   function openHooksEditor(): void {
     const allowed = new Set(getDeploymentHookEvents());
     const filteredOptions = HOOK_EVENT_OPTIONS.filter(opt => allowed.has(opt.value));
+    const snapshot = snapshotDeploymentWizardDraft();
+    deploymentWizardDraft.set(snapshot);
 
     hooksEditorSession.set({
       draft: cloneValue(hooks),
       fieldName: 'hooks',
       commit: (next) => {
-        hooks = Array.isArray(next) ? cloneValue(next as HookConfig[]) : [];
+        const nextHooks = Array.isArray(next) ? cloneValue(next as HookConfig[]) : [];
+        hooks = nextHooks;
+        const current = get(deploymentWizardDraft);
+        deploymentWizardDraft.set({
+          ...(current?.key === snapshot.key ? current : snapshot),
+          hooks: nextHooks,
+        });
       },
       returnTarget: get(activeEntity),
       eventOptions: filteredOptions,

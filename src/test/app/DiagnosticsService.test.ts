@@ -203,4 +203,31 @@ describe('DiagnosticsService', () => {
     const text = service.generateBundleText();
     expect(() => JSON.parse(text)).not.toThrow();
   });
+
+  it('includes local telemetry only when the opt-in snapshot is available', () => {
+    const service = new DiagnosticsService({
+      extensionVersion: '1.0.0',
+      getConfigs: () => [],
+      getRuntimeState: () => undefined,
+      getLogBuffer: () => '',
+      getLocalTelemetrySnapshot: () => ({
+        version: 1,
+        enabled: true,
+        createdAt: '2026-05-24T12:00:00.000Z',
+        updatedAt: '2026-05-24T12:00:00.000Z',
+        counters: {
+          operations: { succeeded: 1, failed: 0 },
+          operationsByKind: { LifecycleStart: { succeeded: 1, failed: 0 } },
+          inventory: {
+            serversAdded: 0,
+            serversDeleted: 0,
+            deploymentsAdded: 0,
+            deploymentsRemoved: 0,
+          },
+        },
+      }),
+    });
+
+    expect(service.generateBundle().localTelemetry?.counters.operations.succeeded).toBe(1);
+  });
 });

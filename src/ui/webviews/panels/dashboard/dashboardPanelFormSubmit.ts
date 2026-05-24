@@ -112,6 +112,10 @@ export async function submitTemplateConfigForm(params: {
   const existingEntry = templateId
     ? deps.templateService.listScoped().find(item => item.template.id === templateId)
     : undefined;
+  if (existingEntry?.scope === 'gallery') {
+    postError('Built-in gallery templates cannot be edited.');
+    return { ok: false };
+  }
 
   const validationErrors: Array<{ field: string; message: string }> = [];
   if (String(lastSubmittedData['name'] ?? '').trim().length === 0) {

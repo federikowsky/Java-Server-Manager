@@ -3,7 +3,7 @@
   "publisher": "federikowsky",
   "displayName": "Java Server Manager",
   "description": "Tomcat-first VS Code extension for managing local Java application servers.",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -108,6 +108,11 @@
         "command": "jsm.deployment.redeploy",
         "title": "Redeploy",
         "icon": "$(repo-push)"
+      },
+      {
+        "command": "jsm.deployment.rollback",
+        "title": "Roll Back Deployment",
+        "icon": "$(history)"
       },
       {
         "command": "jsm.deployment.undeploy",
@@ -310,6 +315,11 @@
           "group": "actions@2"
         },
         {
+          "command": "jsm.deployment.rollback",
+          "when": "view == javaServerManagerView && viewItem =~ /jsm\\.deployment\\..*/",
+          "group": "actions@1"
+        },
+        {
           "command": "jsm.deployment.toggleAutosync",
           "when": "view == javaServerManagerView && viewItem =~ /jsm\\.deployment\\.(exploded|war)\\..*/",
           "group": "autosync@1"
@@ -372,6 +382,11 @@
           "type": "boolean",
           "default": true,
           "description": "Show server runtime status badges in the JSM sidebar tree."
+        },
+        "jsm.telemetry.localMetrics.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Store anonymous aggregate JSM usage counters locally and include them only in copied diagnostics bundles."
         }
       }
     }

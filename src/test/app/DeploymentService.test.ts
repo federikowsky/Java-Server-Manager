@@ -136,6 +136,11 @@ describe('DeploymentService', () => {
         deployedPath: '/tmp/inst/webapps/app.war',
         warnings: [],
       })),
+      rollbackDeploy: vi.fn().mockResolvedValue(ok({
+        strategy: 'copy-war',
+        deployedPath: '/tmp/inst/webapps/app.war',
+        warnings: [],
+      })),
       undeploy: vi.fn().mockResolvedValue(ok(undefined)),
       getStatus: vi.fn(),
       getLogSources: vi.fn(),
@@ -218,6 +223,34 @@ describe('DeploymentService', () => {
     const result = await service.fullRedeploy(makeCtx(), makeConfig(), makeDep());
     expect(result.ok).toBe(false);
     expect(service.getDeploymentState('s1', 'd1')).toBe('error');
+  });
+
+  it('rollback delegates to plugin rollback and transitions to synced on success', async () => {
+    const config = makeConfig();
+    const dep = makeDep();
+
+    const result = await service.rollback(makeCtx('s1', 'd1', 'DeployRollback'), config, dep);
+
+    expect(result.ok).toBe(true);
+    expect(mockPlugin.planDeploy).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'DeployRollback',
+    }), config, dep);
+    expect(mockPlugin.rollbackDeploy).toHaveBeenCalledOnce();
+    expect(service.getDeploymentState('s1', 'd1')).toBe('synced');
+  });
+
+  it('rollback fails closed when the plugin has no rollback implementation', async () => {
+    mockPlugin.rollbackDeploy = undefined;
+
+    const result = await service.rollback(makeCtx('s1', 'd1', 'DeployRollback'), makeConfig(), makeDep());
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCode.Unsupported);
+      expect(result.error.message).toContain('not supported');
+    }
+    expect(mockPlugin.planDeploy).not.toHaveBeenCalled();
+    expect(service.getDeploymentState('s1', 'd1')).toBe('undeployed');
   });
 
   it('redeployAll rethrows a deployment failure instead of completing silently', async () => {
@@ -364,6 +397,12 @@ describe('DeploymentService', () => {
     it('blocks sync in untrusted workspace', async () => {
       const batch = { changes: [], totalFiles: 0, totalBytes: 0 };
       const result = await untrustedService.sync(makeCtx('s1', 'd1', 'DeployIncremental'), makeConfig(), makeDep(), batch);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe(ErrorCode.WorkspaceUntrusted);
+    });
+
+    it('blocks rollback in untrusted workspace', async () => {
+      const result = await untrustedService.rollback(makeCtx('s1', 'd1', 'DeployRollback'), makeConfig(), makeDep());
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error.code).toBe(ErrorCode.WorkspaceUntrusted);
     });

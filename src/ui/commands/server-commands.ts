@@ -4,18 +4,24 @@ import {
   serverDraftToCreateServerRequest,
 } from '@core/authoring';
 import type { ServerAuthoringDraft } from '@core/authoring';
-import type { ServerConfig, ServerId } from '@core/types';
+import type { HookConfig, ServerConfig, ServerId } from '@core/types';
 import type { Result } from '@core/result';
 import { ok, err } from '@core/result';
 import { JsmError } from '@core/errors/JsmError';
 import { ErrorCode } from '@core/errors/codes';
+import { createCancellationTokenSource } from '@core/ops';
 import type { ServerLifecycle } from '@app/server/ServerLifecycle';
 import type { ServerDiscoveryService } from '@app/server/ServerDiscoveryService';
+import type { HookRunner } from '@app/hooks';
 import { makeWorkspaceServerKey, type WorkspaceServiceRegistry, type WorkspaceScope } from '@app/config';
+import type { WorkspaceServiceEntry } from '@app/config';
 import type { PluginRegistry } from '@plugins/registry/PluginRegistry';
 import type { ConfigSource } from '@plugins/interfaces/IServerPlugin';
 import type { SchemaValidator } from '@core/validation/SchemaValidator';
+import { normalizeHookList, validateHookList } from '@ui/webviews/hookForm';
 import { exists } from '@infra/fs';
+import { CURRENT_WORKSPACE_CONFIG_VERSION } from '@infra/fs/ConfigRepo';
+import { HOOK_PHASE_BUDGET_MS } from '../../constants';
 import type { ServerTreeViewProvider } from '@ui/tree/ServerTreeViewProvider';
 import {
   isServerNode,
@@ -35,6 +41,11 @@ type ServerCommandArg = {
   serverConfig?: ServerConfig;
 };
 
+type HookTestCommandArg = ServerCommandArg & {
+  hook: HookConfig;
+  targetDeploymentId?: string;
+};
+
 type ServerCommandContext = {
   arg: ServerCommandArg;
   serverKey: ServerId;
@@ -44,10 +55,16 @@ type ServerCommandContext = {
 
 type ServerQueueAction = (context: ServerCommandContext) => Result<void, JsmError>;
 
+type ImportPlanEntry = {
+  source: ServerConfig;
+  planned: ServerConfig;
+};
+
 export interface ServerCommandsDeps {
   lifecycle: ServerLifecycle;
   pluginRegistry: PluginRegistry;
   logChannel: ServerLogChannel;
+  hookRunner?: HookRunner;
   workspaceRegistry?: WorkspaceServiceRegistry;
   configService?: {
     getServer(serverId: string): ServerConfig | undefined;
@@ -192,7 +209,11 @@ async function writeExportFile(
   configs: ServerConfig[],
 ): Promise<Result<void, JsmError>> {
   try {
-    await fs.writeFile(filePath, JSON.stringify({ servers: configs }, null, 2), 'utf8');
+    await fs.writeFile(
+      filePath,
+      JSON.stringify({ version: CURRENT_WORKSPACE_CONFIG_VERSION, servers: configs }, null, 2),
+      'utf8',
+    );
     return ok(undefined);
   } catch (e) {
     return err(JsmError.fromUnknown(e));
@@ -235,6 +256,63 @@ async function readImportedServerConfigs(
   return ok((parsed as { servers: ServerConfig[] }).servers);
 }
 
+async function buildImportPlan(
+  entry: WorkspaceServiceEntry,
+  serverConfigs: ServerConfig[],
+): Promise<Result<ImportPlanEntry[], JsmError>> {
+  const plan: ImportPlanEntry[] = [];
+  for (const serverConfig of serverConfigs) {
+    const planResult = await entry.provisioningService.planDuplicateServer(serverConfig, { keepName: true });
+    if (!planResult.ok) {
+      return err(new JsmError({
+        code: planResult.error.code,
+        message: `Cannot import server '${serverConfig.name}': ${planResult.error.message}`,
+        details: planResult.error.details,
+        cause: planResult.error,
+      }));
+    }
+    plan.push({ source: serverConfig, planned: planResult.value });
+  }
+
+  const validateResult = entry.configService.validateServerCandidates(plan.map(item => item.planned));
+  if (!validateResult.ok) {
+    return err(validateResult.error);
+  }
+
+  return ok(plan);
+}
+
+function formatImportPlanDetails(plan: ImportPlanEntry[], scope: WorkspaceScope): string {
+  const previewLimit = 8;
+  const lines = plan.slice(0, previewLimit).map(item =>
+    `- ${item.source.name} -> ${item.planned.name} (${item.source.type}, `
+    + `${item.source.deployments.length} deployment(s))`,
+  );
+  if (plan.length > previewLimit) {
+    lines.push(`- ...and ${plan.length - previewLimit} more server(s)`);
+  }
+
+  return [
+    `Workspace: ${scope.name}`,
+    '',
+    'JSM will create new managed instances from this import. Existing servers are not modified.',
+    '',
+    ...lines,
+  ].join('\n');
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function formatHookValidationFailure(errors: Array<{ field: string; message: string }>): string {
+  const preview = errors.slice(0, 3).map(error => `${error.field}: ${error.message}`);
+  if (errors.length > 3) {
+    preview.push(`...and ${errors.length - 3} more issue(s)`);
+  }
+  return preview.join('; ');
+}
+
 export function registerServerCommands(
   deps: ServerCommandsDeps,
 ): vscode.Disposable[] {
@@ -242,6 +320,7 @@ export function registerServerCommands(
     lifecycle,
     pluginRegistry,
     logChannel,
+    hookRunner,
     workspaceRegistry,
     configService,
     provisioningService,
@@ -284,6 +363,45 @@ export function registerServerCommands(
 
     showErr(serverSelectionRequiredError(actionLabel));
     return undefined;
+  };
+
+  const requireHookTestArg = (arg: unknown): HookTestCommandArg | undefined => {
+    const resolvedArg = requireServerCommandArg(arg, 'Testing a hook');
+    if (!resolvedArg || !isRecord(arg) || !isRecord(arg['hook'])) {
+      const error = new JsmError({
+        code: ErrorCode.InvalidConfig,
+        message: 'Testing a hook requires a server context and a hook definition.',
+      });
+      showErr(error);
+      return undefined;
+    }
+
+    const targetDeploymentId = arg['targetDeploymentId'];
+    if (targetDeploymentId !== undefined && (typeof targetDeploymentId !== 'string' || targetDeploymentId.trim().length === 0)) {
+      const error = new JsmError({
+        code: ErrorCode.InvalidConfig,
+        message: 'Hook test deployment target is invalid.',
+      });
+      showErr(error);
+      return undefined;
+    }
+
+    const hookErrors = validateHookList([arg['hook']], 'hook');
+    if (hookErrors.length > 0) {
+      const error = new JsmError({
+        code: ErrorCode.InvalidConfig,
+        message: `Hook cannot be tested until it is valid: ${formatHookValidationFailure(hookErrors)}`,
+      });
+      showErr(error);
+      return undefined;
+    }
+
+    const [hook] = normalizeHookList([arg['hook']]);
+    return {
+      ...resolvedArg,
+      hook,
+      ...(targetDeploymentId ? { targetDeploymentId } : {}),
+    };
   };
 
   const runQueueAction = async (
@@ -420,6 +538,108 @@ export function registerServerCommands(
       const nav: DashboardNavigationTarget = { type: 'new-server', globalTab: 'home' };
       openDashboardTarget(nav);
       return undefined;
+    }],
+
+    ['jsm.hook.test', async (arg: unknown) => {
+      const resolvedArg = requireHookTestArg(arg);
+      if (!resolvedArg) {
+        return { ok: false, message: 'Invalid hook test request.' };
+      }
+
+      if (!hookRunner) {
+        const error = new JsmError({
+          code: ErrorCode.InvalidConfig,
+          message: 'Hook testing is not available in this session.',
+        });
+        showErr(error);
+        return { ok: false, message: error.message };
+      }
+
+      const context = createContext(resolvedArg);
+      const config = requireContextConfig(context);
+      if (!config) {
+        return { ok: false, message: serverConfigNotFoundError().message };
+      }
+
+      const confirmation = await vscode.window.showWarningMessage(
+        `Run hook "${resolvedArg.hook.id}" for "${context.label}" now? This may execute local commands or VS Code tasks.`,
+        { modal: true },
+        'Run Hook',
+      );
+      if (confirmation !== 'Run Hook') {
+        return { ok: false, message: 'Hook test cancelled.' };
+      }
+
+      const cancellation = createCancellationTokenSource();
+      const channel = logChannel.getChannel(context.serverKey, context.label);
+      logChannel.showLogs(context.serverKey, context.label);
+      channel.appendLine(`[JSM] Testing hook "${resolvedArg.hook.id}" (${resolvedArg.hook.phase} ${resolvedArg.hook.event})`);
+
+      const timeoutMs = Math.max(
+        1000,
+        Math.min(resolvedArg.hook.timeoutMs ?? 60_000, HOOK_PHASE_BUDGET_MS),
+      );
+
+      const runResult = await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: `Testing hook ${resolvedArg.hook.id}...`,
+          cancellable: true,
+        },
+        async (_progress, token) => {
+          const subscription = token.onCancellationRequested(() => {
+            cancellation.cancel();
+          });
+          try {
+            return await hookRunner.runHooks({
+              parent: {
+                operationId: `hook-test-${Date.now()}`,
+                serverId: context.serverKey,
+                kind: 'StatusRefresh',
+                startedAt: Date.now(),
+                timeoutMs,
+                cancel: cancellation.token,
+                progress: {
+                  report: message => channel.appendLine(message),
+                },
+                output: {
+                  append: text => channel.append(text),
+                  appendLine: text => channel.appendLine(text),
+                  clear: () => {},
+                },
+                ...(resolvedArg.targetDeploymentId ? { targetDeploymentId: resolvedArg.targetDeploymentId } : {}),
+              },
+              phase: resolvedArg.hook.phase,
+              event: resolvedArg.hook.event,
+              hooks: [{ ...resolvedArg.hook, enabled: true }],
+              targetDeploymentId: resolvedArg.targetDeploymentId,
+            });
+          } finally {
+            subscription.dispose();
+          }
+        },
+      );
+
+      if (!runResult.ok) {
+        channel.appendLine(`[JSM] Hook test failed: ${runResult.error.message}`);
+        showErr(runResult.error);
+        return { ok: false, message: runResult.error.message };
+      }
+
+      if (runResult.value.failed > 0) {
+        const error = runResult.value.errors[0] ?? new JsmError({
+          code: ErrorCode.HookFailed,
+          message: `Hook "${resolvedArg.hook.id}" failed.`,
+        });
+        channel.appendLine(`[JSM] Hook test failed: ${error.message}`);
+        showErr(error);
+        return { ok: false, message: error.message };
+      }
+
+      const message = `Hook "${resolvedArg.hook.id}" completed.`;
+      channel.appendLine(`[JSM] ${message}`);
+      showSuccess(message);
+      return { ok: true, message };
     }],
 
     ['jsm.server.startRun', async (arg: unknown) => runServerQueueCommand(arg, {
@@ -729,10 +949,29 @@ export function registerServerCommands(
         }));
         return;
       }
+      const planResult = await buildImportPlan(entry, serverConfigs);
+      if (!planResult.ok) {
+        showErr(planResult.error);
+        return;
+      }
+
+      const plan = planResult.value;
+      const confirmation = await vscode.window.showWarningMessage(
+        `Import ${plan.length} server(s) into workspace "${scope.name}"?`,
+        {
+          modal: true,
+          detail: formatImportPlanDetails(plan, scope),
+        },
+        'Import',
+      );
+      if (confirmation !== 'Import') {
+        return;
+      }
+
       let imported = 0;
       let importError: JsmError | undefined;
-      for (const serverConfig of serverConfigs) {
-        const result = await entry.provisioningService.duplicateServer(serverConfig, { keepName: true });
+      for (const item of plan) {
+        const result = await entry.provisioningService.provisionPlannedDuplicate(item.source, item.planned);
         if (!result.ok) {
           importError = result.error;
           break;

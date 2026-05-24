@@ -18,7 +18,13 @@ export async function deleteServerWithConfirm(
       return;
     }
 
-    const result = await deps.workspaceRegistry.removeServer({ workspaceFolderUri, serverId });
+    const entry = deps.workspaceRegistry.getEntry(workspaceFolderUri);
+    if (!entry) {
+      postError(`Workspace '${workspaceFolderUri}' is not registered.`);
+      return;
+    }
+
+    const result = await entry.provisioningService.removeServer(serverId);
     if (!result.ok) {
       postError(result.error.message);
       return;

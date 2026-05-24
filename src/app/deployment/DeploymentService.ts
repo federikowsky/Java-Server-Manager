@@ -198,6 +198,50 @@ export class DeploymentService {
     });
   }
 
+  // ── Rollback ──────────────────────────────────────────────────────
+
+  async rollback(
+    ctx: OperationContext,
+    config: ServerConfig,
+    dep: DeploymentConfig,
+  ): Promise<Result<void, JsmError>> {
+    const trustCheck = this.checkTrust();
+    if (!trustCheck.ok) return trustCheck;
+
+    this.ensureNotCancelled(ctx, dep, 'before rollback.');
+    const plugin = this.getPlugin(config);
+    if (!plugin.rollbackDeploy) {
+      return err(new JsmError({
+        code: ErrorCode.Unsupported,
+        message: `Deployment rollback is not supported for server type '${config.type}'.`,
+      }));
+    }
+
+    this.transitionDeploy(ctx.serverId, dep.id, 'deploying');
+    try {
+      const planResult = await plugin.planDeploy(ctx, config, dep);
+      if (!planResult.ok) {
+        this.transitionDeploy(ctx.serverId, dep.id, 'error', { error: planResult.error });
+        return planResult;
+      }
+
+      this.ensureNotCancelled(ctx, dep, 'before executing rollback.');
+      const rollbackResult = await plugin.rollbackDeploy(ctx, config, dep, planResult.value);
+      if (!rollbackResult.ok) {
+        this.transitionDeploy(ctx.serverId, dep.id, 'error', { error: rollbackResult.error });
+        return rollbackResult;
+      }
+
+      this.transitionDeploy(ctx.serverId, dep.id, 'synced');
+      this.logger.info(`DeploymentService: rolled back ${dep.deployName} via ${rollbackResult.value.strategy}`);
+      return ok(undefined);
+    } catch (cause) {
+      const error = cause instanceof JsmError ? cause : JsmError.fromUnknown(cause);
+      this.transitionDeploy(ctx.serverId, dep.id, 'error', { error });
+      return err(error);
+    }
+  }
+
   // ── Incremental Sync ──────────────────────────────────────────────
 
   async sync(

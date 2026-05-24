@@ -27,6 +27,7 @@ export type {
   DeploymentRuntimeState,
   TrustGate,
   OperationKind,
+  OperationHistoryEntry,
   CancellationToken,
   OutputSink,
   ProgressSink,

@@ -21,6 +21,8 @@
     value: HookConfig[] | undefined;
     onChange: (v: HookConfig[]) => void;
     id: string;
+    onTest?: (hook: HookConfig, index: number) => void;
+    testState?: { index: number; status: 'running' | 'succeeded' | 'failed'; message?: string } | null;
   } = $props();
 
   let nextHookIndex = $state(1);
@@ -205,12 +207,28 @@
               <button type="button" class="hook-text-action" onclick={() => toggleEdit(index)}>
                 Edit
               </button>
+              {#if onTest}
+                <span class="hook-action-sep" aria-hidden="true">|</span>
+                <button
+                  type="button"
+                  class="hook-text-action"
+                  onclick={() => onTest?.(hook, index)}
+                  disabled={testState?.status === 'running'}
+                >
+                  Test
+                </button>
+              {/if}
               <span class="hook-action-sep" aria-hidden="true">|</span>
               <button type="button" class="hook-text-action hook-text-action-danger" onclick={() => removeHook(index)}>
                 Remove
               </button>
             </div>
           </div>
+          {#if testState?.index === index}
+            <p class={`hook-test-status hook-test-status-${testState.status}`}>
+              {testState.status === 'running' ? 'Testing hook...' : testState.message}
+            </p>
+          {/if}
 
           {#if editingIndex === index}
         <div class="hook-row-expanded">
@@ -555,6 +573,12 @@
     text-underline-offset: 2px;
   }
 
+  .hook-text-action:disabled {
+    cursor: default;
+    color: var(--jsm-color-fg-muted);
+    text-decoration: none;
+  }
+
   .hook-text-action:hover {
     color: var(--vscode-textLink-activeForeground, var(--jsm-color-fg));
   }
@@ -576,6 +600,20 @@
     display: flex;
     flex-direction: column;
     gap: var(--jsm-space-md);
+  }
+
+  .hook-test-status {
+    margin: var(--jsm-space-2xs) 0 0;
+    font-size: var(--jsm-font-size-xs);
+    color: var(--jsm-color-fg-muted);
+  }
+
+  .hook-test-status-succeeded {
+    color: var(--jsm-color-success);
+  }
+
+  .hook-test-status-failed {
+    color: var(--jsm-color-error);
   }
 
   .hook-edit-grid {

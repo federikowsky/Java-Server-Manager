@@ -29,6 +29,9 @@ import { DeploymentService } from '@app/deployment';
 import { AutoSyncService } from '@app/sync';
 import { DiagnosticsService } from '@app/diagnostics';
 import { TemplateService } from '@app/templates';
+import { OperationHistoryService } from '@app/operations';
+import { PortAssistantService } from '@app/network';
+import { LocalTelemetryService } from '@app/telemetry';
 import { HookRunner } from '@app/hooks';
 import type { HookExecutor, HookExecutionRequest } from '@app/hooks';
 import { OutputSinkAdapter, MementoAdapter, DebugAdapter, FileWatcherAdapter } from '@ui/adapters';
@@ -93,6 +96,13 @@ type ReconcileLoadedServersParams = {
   lifecycle: ServerLifecycle;
   logger: ILogger;
   e2eEnabled: boolean;
+};
+
+type PortSuggestCommandArg = {
+  port?: unknown;
+  host?: unknown;
+  field?: unknown;
+  maxTries?: unknown;
 };
 
 async function resolveHookTask(taskName: string): Promise<Result<vscode.Task, JsmError>> {
@@ -312,6 +322,87 @@ function waitForTaskProcessExit(
       })));
     }, timeoutMs);
   });
+}
+
+function parsePortCommandArg(arg: unknown): Result<PortSuggestCommandArg, JsmError> {
+  if (typeof arg !== 'object' || arg === null || Array.isArray(arg)) {
+    return err(new JsmError({
+      code: ErrorCode.InvalidConfig,
+      message: 'Port assistant requires a port request.',
+    }));
+  }
+  return ok(arg as PortSuggestCommandArg);
+}
+
+function normalizePortValue(value: unknown): number | undefined {
+  if (typeof value === 'number') {
+    return value;
+  }
+  if (typeof value === 'string' && value.trim().length > 0) {
+    const parsed = Number(value);
+    return Number.isInteger(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
+async function runPortSuggestCommand(
+  arg: unknown,
+  portAssistant: PortAssistantService,
+): Promise<{ ok: boolean; message: string; data?: Record<string, unknown> }> {
+  const parsed = parsePortCommandArg(arg);
+  if (!parsed.ok) {
+    return { ok: false, message: parsed.error.message };
+  }
+
+  const port = normalizePortValue(parsed.value.port);
+  if (port === undefined) {
+    return { ok: false, message: 'Port must be an integer between 1 and 65535.' };
+  }
+
+  const result = await portAssistant.suggest({
+    port,
+    host: typeof parsed.value.host === 'string' ? parsed.value.host : undefined,
+    field: typeof parsed.value.field === 'string' ? parsed.value.field : undefined,
+    maxTries: typeof parsed.value.maxTries === 'number' && Number.isInteger(parsed.value.maxTries)
+      ? parsed.value.maxTries
+      : undefined,
+  });
+
+  if (!result.ok) {
+    return { ok: false, message: result.error.message };
+  }
+
+  const suggestion = result.value;
+  if (suggestion.free) {
+    return {
+      ok: true,
+      message: `Port ${suggestion.requestedPort} is available on ${suggestion.probeHost}.`,
+      data: {
+        ...suggestion,
+        port: suggestion.requestedPort,
+      },
+    };
+  }
+
+  if (suggestion.suggestedPort !== undefined) {
+    return {
+      ok: true,
+      message: `Port ${suggestion.requestedPort} is in use. Suggested port ${suggestion.suggestedPort}.`,
+      data: {
+        ...suggestion,
+        port: suggestion.requestedPort,
+      },
+    };
+  }
+
+  return {
+    ok: false,
+    message: `Port ${suggestion.requestedPort} is in use and no nearby free port was found.`,
+    data: {
+      ...suggestion,
+      port: suggestion.requestedPort,
+    },
+  };
 }
 
 function buildWorkspaceServiceEntry(params: WorkspaceEntryFactoryParams): WorkspaceServiceEntry {
@@ -624,11 +715,27 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<JsmExtensi
     trustGate,
   });
 
+  const portAssistant = new PortAssistantService(portScanner);
+
+  const operationHistory = new OperationHistoryService({
+    bus: eventBus,
+  });
+  disposables.push(operationHistory);
+
+  const localTelemetry = new LocalTelemetryService({
+    bus: eventBus,
+    store: globalStore,
+    logger,
+    isEnabled: () => vscode.workspace.getConfiguration('jsm').get('telemetry.localMetrics.enabled', false),
+  });
+  disposables.push(localTelemetry);
+
   const diagnosticsService = new DiagnosticsService({
     extensionVersion: ctx.extension.packageJSON.version ?? '0.0.0',
     getConfigs: () => workspaceServiceRegistry.getAllServers().map(r => r.config),
     getRuntimeState: (serverId: ServerId) => lifecycle.getRuntime(serverId)?.getState(),
     getLogBuffer: () => ringBuffer.getAll().join('\n'),
+    getLocalTelemetrySnapshot: () => localTelemetry.getSnapshot(),
   });
 
   const discoveryService = new ServerDiscoveryService(pluginRegistry, logger);
@@ -678,6 +785,9 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<JsmExtensi
     pluginRegistry,
     discoveryService,
     deployService,
+    operationHistory,
+    autoSyncService,
+    localTelemetry,
     logger,
     bus: eventBus,
     trustGate,
@@ -690,10 +800,14 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<JsmExtensi
     vscode.commands.registerCommand('jsm.dashboard.open', (target) => {
       dashboardPanel.show(target);
     }),
+    vscode.commands.registerCommand('jsm.port.suggest', (arg) => {
+      return runPortSuggestCommand(arg, portAssistant);
+    }),
     ...registerServerCommands({
       lifecycle,
       pluginRegistry,
       logChannel,
+      hookRunner,
       workspaceRegistry: workspaceServiceRegistry,
       discoveryService,
       treeProvider,

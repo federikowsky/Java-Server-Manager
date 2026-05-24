@@ -92,6 +92,58 @@ describe('AutoSyncService', () => {
     expect(registrations[0]?.onChange).toBeDefined();
   });
 
+  it('reports derived autosync diagnostics without persisting state', () => {
+    const config = makeConfig();
+    service.enable(config);
+
+    registrations[0].onChange({
+      type: 'change',
+      path: '/src/app/Main.java',
+      relativePath: 'Main.java',
+      sizeBytes: 100,
+    });
+
+    const diagnostics = service.getDiagnostics('s1', config);
+
+    expect(diagnostics).toMatchObject({
+      enabled: true,
+      suspended: false,
+      watcherCount: 1,
+      deployments: [{
+        deploymentId: 'd1',
+        deployName: 'app',
+        state: 'watching',
+        active: true,
+        watchKind: 'tree',
+        watchPath: '/src/app',
+        pendingFiles: 1,
+        pendingBytes: 100,
+      }],
+    });
+  });
+
+  it('reports inactive, manual, and disabled autosync states', () => {
+    const activeConfig = makeConfig();
+    expect(service.getDiagnostics('s1', activeConfig).deployments[0]).toMatchObject({
+      state: 'inactive',
+      message: 'Watcher is inactive until the server is running.',
+    });
+
+    const manualConfig = makeConfig();
+    manualConfig.deployments[0].syncMode = 'manual';
+    expect(service.getDiagnostics('s1', manualConfig).deployments[0]).toMatchObject({
+      state: 'manual',
+    });
+
+    const disabledConfig = makeConfig({
+      autosync: { ...makeConfig().autosync, enabled: false },
+    });
+    expect(service.getDiagnostics('s1', disabledConfig)).toMatchObject({
+      enabled: false,
+      deployments: [{ state: 'disabled' }],
+    });
+  });
+
   it('does not create watcher when autosync is disabled', () => {
     service.enable(makeConfig({ autosync: { ...makeConfig().autosync, enabled: false } }));
     expect(watcherFactory.watch).not.toHaveBeenCalled();

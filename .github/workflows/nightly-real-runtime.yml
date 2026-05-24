@@ -1,0 +1,65 @@
+name: Nightly Real Runtime
+
+on:
+  schedule:
+    - cron: '27 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tomcat-real-runtime:
+    name: Tomcat ${{ matrix.tomcat.version }} on Java ${{ matrix.java_version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    strategy:
+      fail-fast: false
+      matrix:
+        java_version: [17, 21]
+        tomcat:
+          - version: 9.0.105
+            url: https://archive.apache.org/dist/tomcat/tomcat-9/v9.0.105/bin/apache-tomcat-9.0.105.tar.gz
+          - version: 10.1.28
+            url: https://archive.apache.org/dist/tomcat/tomcat-10/v10.1.28/bin/apache-tomcat-10.1.28.tar.gz
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java_version }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download Tomcat runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/tomcat"
+          curl -fsSL "${{ matrix.tomcat.url }}" \
+            | tar -xz --strip-components=1 -C "$RUNNER_TEMP/tomcat"
+          chmod +x "$RUNNER_TEMP/tomcat"/bin/*.sh
+          "$RUNNER_TEMP/tomcat/bin/catalina.sh" version
+
+      - name: Compile extension
+        run: npm run compile
+
+      - name: Run real Tomcat integration tests
+        env:
+          JSM_TEST_TOMCAT_HOME: ${{ runner.temp }}/tomcat
+        run: |
+          JSM_TEST_JAVA_HOME="$JAVA_HOME" npx vitest run \
+            src/test/integration/user-tomcat-jdk-paths-sanity.test.ts \
+            src/test/integration/tomcat-real-installation-detect-extended.test.ts

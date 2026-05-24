@@ -242,6 +242,15 @@ vi.mock('@app/diagnostics', () => ({
   },
 }));
 
+// LocalTelemetryService
+vi.mock('@app/telemetry', () => ({
+  LocalTelemetryService: class {
+    getSnapshot = vi.fn(() => undefined);
+    clear = vi.fn(async () => undefined);
+    dispose = vi.fn();
+  },
+}));
+
 // HookRunner
 vi.mock('@app/hooks', () => ({
   HookRunner: class {},

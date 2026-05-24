@@ -38,6 +38,11 @@
     activeEntity.set({ type: 'edit-template', id: templateId });
   }
 
+  function createServerFromTemplate(): void {
+    clearSpaFormMirror();
+    activeEntity.set({ type: 'new-server', templateId, globalTab: 'home' });
+  }
+
   function deleteTemplate(): void {
     if (!tpl) return;
     const scope = tpl.scope;
@@ -50,8 +55,11 @@
       ? 'Global'
       : tpl?.scope === 'workspace'
         ? 'Workspace'
+        : tpl?.scope === 'gallery'
+          ? 'Gallery'
         : String(tpl?.scope ?? ''),
   );
+  let editable = $derived(tpl?.scope === 'global' || tpl?.scope === 'workspace');
 
   let detailRows = $derived(
     t
@@ -100,13 +108,19 @@
     <div class="tpl-top">
       <BackControl label="Templates" onBack={goTemplatesIndex} />
       <div class="tpl-actions">
-        <button type="button" class="btn btn-secondary tpl-btn-delete" onclick={deleteTemplate}>
-          <Icon name="trash" size={14} />
-          <span>Delete</span>
-        </button>
-        <button type="button" class="btn btn-primary" onclick={goEdit}>
-          <Icon name="edit" size={14} />
-          <span>Edit</span>
+        {#if editable}
+          <button type="button" class="btn btn-secondary tpl-btn-delete" onclick={deleteTemplate}>
+            <Icon name="trash" size={14} />
+            <span>Delete</span>
+          </button>
+          <button type="button" class="btn btn-secondary" onclick={goEdit}>
+            <Icon name="edit" size={14} />
+            <span>Edit</span>
+          </button>
+        {/if}
+        <button type="button" class="btn btn-primary" onclick={createServerFromTemplate}>
+          <Icon name="add" size={14} />
+          <span>Create Server</span>
         </button>
       </div>
     </div>

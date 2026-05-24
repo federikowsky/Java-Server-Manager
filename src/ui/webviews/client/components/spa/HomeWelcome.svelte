@@ -7,6 +7,7 @@
   import RootPageHeader from '../ds/RootPageHeader.svelte';
   import SectionBlock from '../ds/SectionBlock.svelte';
   import DetailRows from '../ds/DetailRows.svelte';
+  import { buildOnboardingSteps, type OnboardingAction } from '../../onboarding';
 
   const {
     onAddServer,
@@ -43,6 +44,21 @@
   let trusted = $derived(state.workspaceTrusted !== false);
 
   let multiRoot = $derived(state.workspaceFolders.length > 1);
+  let onboardingSteps = $derived(buildOnboardingSteps(state));
+  let firstServerEntry = $derived.by(() => {
+    for (const record of state.servers) {
+      const cfg = record.config as { id?: string; name?: string } | undefined;
+      if (cfg?.id) {
+        return {
+          serverId: cfg.id,
+          serverKey: record.serverKey,
+          workspaceFolderUri: record.workspaceFolderUri,
+          name: typeof cfg.name === 'string' && cfg.name.trim().length > 0 ? cfg.name : cfg.id,
+        };
+      }
+    }
+    return undefined;
+  });
 
   let recentEntries = $derived(
     recentServerKeys
@@ -86,6 +102,30 @@
     spaState.update(s => ({ ...s, globalTab: 'settings' }));
     activeEntity.set({ type: 'settings' });
   }
+
+  function addDeployment() {
+    if (!firstServerEntry) {
+      return;
+    }
+    spaState.update(s => ({ ...s, globalTab: 'home' }));
+    activeEntity.set({
+      type: 'deployment',
+      serverId: firstServerEntry.serverId,
+      serverKey: firstServerEntry.serverKey,
+      workspaceFolderUri: firstServerEntry.workspaceFolderUri,
+      mode: 'create',
+    });
+  }
+
+  function handleOnboardingAction(action: OnboardingAction) {
+    if (action === 'settings') {
+      goSettings();
+    } else if (action === 'add-server') {
+      onAddServer();
+    } else if (action === 'add-deployment') {
+      addDeployment();
+    }
+  }
 </script>
 
 <div class="home-welcome">
@@ -107,6 +147,35 @@
         <button type="button" class="btn btn-secondary" onclick={onBrowseTemplates}>Browse Templates</button>
       </svelte:fragment>
     </RootPageHeader>
+
+    <SectionBlock title="Setup Checklist">
+      <ol class="setup-list">
+        {#each onboardingSteps as step}
+          <li class:complete={step.status === 'complete'} class:blocked={step.status === 'blocked'}>
+            <span class="setup-state">
+              {#if step.status === 'complete'}
+                <Icon name="check" size={14} />
+              {:else if step.status === 'blocked'}
+                <Icon name="lock" size={14} />
+              {:else}
+                <Icon name="circle" size={14} />
+              {/if}
+            </span>
+            <span class="setup-label">{step.label}</span>
+            {#if step.action !== 'none' && step.status !== 'complete'}
+              <button
+                type="button"
+                class="setup-action"
+                disabled={step.status === 'blocked'}
+                onclick={() => handleOnboardingAction(step.action)}
+              >
+                {#if step.action === 'settings'}Configure{:else if step.action === 'add-server'}Add{:else}Add{/if}
+              </button>
+            {/if}
+          </li>
+        {/each}
+      </ol>
+    </SectionBlock>
 
     <div class="home-two-col">
       <SectionBlock title="Quick Actions">
@@ -188,8 +257,87 @@
     min-height: 0;
   }
 
+  .setup-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: var(--jsm-space-sm);
+  }
+
+  .setup-list li {
+    min-width: 0;
+    border: 1px solid var(--jsm-color-border-secondary);
+    border-radius: var(--jsm-radius-sm);
+    padding: var(--jsm-space-sm);
+    background: var(--jsm-surface-0);
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    column-gap: var(--jsm-space-sm);
+    row-gap: var(--jsm-space-xs);
+    align-items: center;
+  }
+
+  .setup-list li.complete {
+    border-color: color-mix(in srgb, var(--jsm-color-success) 55%, var(--jsm-color-border-secondary));
+  }
+
+  .setup-list li.blocked {
+    opacity: 0.72;
+  }
+
+  .setup-state {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--jsm-color-fg-secondary);
+  }
+
+  .setup-list li.complete .setup-state {
+    color: var(--jsm-color-success);
+  }
+
+  .setup-label {
+    min-width: 0;
+    font-size: var(--jsm-font-size-sm);
+    font-weight: var(--jsm-font-weight-semibold);
+    overflow-wrap: anywhere;
+  }
+
+  .setup-action {
+    grid-column: 2;
+    justify-self: start;
+    border: none;
+    background: transparent;
+    color: var(--vscode-textLink-foreground);
+    font-family: var(--jsm-font-family);
+    font-size: var(--jsm-font-size-sm);
+    padding: 0;
+    cursor: pointer;
+  }
+
+  .setup-action:hover:not(:disabled) {
+    text-decoration: underline;
+  }
+
+  .setup-action:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  @media (max-width: 860px) {
+    .setup-list {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
   @media (max-width: 720px) {
     .home-two-col {
+      grid-template-columns: 1fr;
+    }
+    .setup-list {
       grid-template-columns: 1fr;
     }
   }

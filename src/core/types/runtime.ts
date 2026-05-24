@@ -24,6 +24,20 @@ export interface DeploymentRuntimeState {
   lastError?: JsmError;
 }
 
+export interface OperationHistoryEntry {
+  operationId: OperationId;
+  serverId: ServerId;
+  kind: OperationKind;
+  targetDeploymentId?: DeploymentId;
+  status: 'running' | 'succeeded' | 'failed';
+  startedAt: number;
+  finishedAt?: number;
+  durationMs?: number;
+  errorMessage?: string;
+  errorCode?: string;
+  suggestedFix?: string[];
+}
+
 // ── Workspace Trust ─────────────────────────────────────────────────────────
 
 /** Injected gate that checks vscode.workspace.isTrusted (§12.8). */
@@ -38,6 +52,7 @@ export type OperationKind =
   | 'LifecycleStop'
   | 'LifecycleRestart'
   | 'DeployFull'
+  | 'DeployRollback'
   | 'DeployIncremental'
   | 'DeploySync'
   | 'DeployHotReload'

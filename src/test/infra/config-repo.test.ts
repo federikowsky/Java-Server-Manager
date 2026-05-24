@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
-import { ConfigRepo } from '@infra/fs/ConfigRepo';
+import { ConfigRepo, CURRENT_WORKSPACE_CONFIG_VERSION } from '@infra/fs/ConfigRepo';
 import * as FileUtils from '@infra/fs/FileUtils';
 import type { Logger } from '@core/types/logger';
 import type { ServerConfig } from '@core/types';
@@ -65,6 +65,9 @@ describe('ConfigRepo', () => {
     const server = minimalServer('s1', 'Test Server');
     await repo.save(server);
 
+    const raw = await fs.readFile(path.join(tmpDir, '.vscode', 'jsm.servers.json'), 'utf-8');
+    expect(JSON.parse(raw).version).toBe(CURRENT_WORKSPACE_CONFIG_VERSION);
+
     // Reload from disk
     const repo2 = new ConfigRepo(tmpDir, mockLogger());
     const result = await repo2.load();
@@ -118,6 +121,43 @@ describe('ConfigRepo', () => {
       expect(r.ok).toBe(true);
     }
     expect(repo.getAll()).toHaveLength(5);
+  });
+
+  it('loads legacy unversioned configs and reports the migration source', async () => {
+    const server = minimalServer('s1', 'Legacy Server');
+    await fs.writeFile(
+      path.join(tmpDir, '.vscode', 'jsm.servers.json'),
+      JSON.stringify({ servers: [server] }, null, 2),
+      'utf-8',
+    );
+
+    const result = await repo.readWorkspace();
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.version).toBe(CURRENT_WORKSPACE_CONFIG_VERSION);
+    expect(result.value.migratedFromVersion).toBe(0);
+    expect(result.value.servers[0].name).toBe('Legacy Server');
+  });
+
+  it('rewrites legacy configs at the current document version on next save', async () => {
+    const server = minimalServer('s1', 'Legacy Server');
+    await fs.writeFile(
+      path.join(tmpDir, '.vscode', 'jsm.servers.json'),
+      JSON.stringify({ servers: [server] }, null, 2),
+      'utf-8',
+    );
+
+    const loadResult = await repo.load();
+    expect(loadResult.ok).toBe(true);
+
+    const saveResult = await repo.save({ ...server, name: 'Migrated Server' });
+    expect(saveResult.ok).toBe(true);
+
+    const raw = await fs.readFile(path.join(tmpDir, '.vscode', 'jsm.servers.json'), 'utf-8');
+    const parsed = JSON.parse(raw);
+    expect(parsed.version).toBe(CURRENT_WORKSPACE_CONFIG_VERSION);
+    expect(parsed.servers[0].name).toBe('Migrated Server');
   });
 
   it('does not mutate the in-memory cache when save fails', async () => {

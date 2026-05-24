@@ -10,6 +10,43 @@ The format follows Keep a Changelog and this project adheres to Semantic Version
 
 - ongoing improvements toward stable readiness
 
+## [0.1.4] - 2026-05-24
+
+### Summary
+
+- Fourth beta (pre-release): product-readiness expansion focused on guided setup, safer import/provisioning, operator observability, template authoring, and deployment recovery.
+- Keeps the shipped runtime scope Tomcat-first while adding plugin-bound rollback and stronger plugin API conformance evidence.
+- Adds CI-level real-runtime validation for pinned Tomcat and Java combinations.
+
+### Beta Disclaimer
+
+- this is a beta prerelease intended for validation and feedback
+- behavior and feature surface may change before the first stable release
+
+### Known Limitations
+
+- only Tomcat is supported in this release
+- local telemetry is opt-in, local-only, and never sent automatically
+- second server plugins remain a dedicated future milestone
+
+### Added
+
+- Dashboard first-run onboarding, operation history, health/readiness, deployment log access, autosync inspector, and built-in read-only template gallery.
+- Hook test action, local-only port assistant, and Tomcat deployment rollback from retained local artifact backups.
+- Opt-in local aggregate telemetry counters included only in explicitly copied diagnostics bundles.
+- Nightly GitHub Actions real-runtime matrix for Tomcat 9.0.105 and 10.1.28 on Java 17 and 21.
+
+### Changed
+
+- Workspace inventory documents now support explicit schema versioning and legacy migration.
+- Server import now performs a dry-run preview with validation before provisioning.
+- Real Tomcat integration tests can use `JSM_TEST_TOMCAT_HOME` and `JSM_TEST_JAVA_HOME`.
+
+### Fixed
+
+- Dashboard server deletion now uses provisioning cleanup parity instead of inventory-only removal.
+- Template saves are sanitized at persistence and reserved gallery template ids cannot be edited, deleted, or saved.
+
 ## [0.1.3] - 2026-05-23
 
 ### Summary
@@ -27,7 +64,6 @@ The format follows Keep a Changelog and this project adheres to Semantic Version
 
 - only Tomcat is supported in this release
 - some advanced workflows and hardening tasks are still in progress
-- OpenVSX publication/verification must be confirmed by the release workflow for this version before treating the dual-marketplace release as complete
 
 ### Changed
 

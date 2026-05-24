@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import {
   serverConfigToFormData,
   templateToServerFormData,
+  validateHookList,
 } from '@core/authoring';
 import type { Logger } from '@core/types';
 import type { DashboardNavigationTarget, HostToWebview, WebviewToHost } from '../protocol';
@@ -27,6 +28,12 @@ import {
 } from './dashboard/dashboardPanelFormSubmit';
 
 export type { DashboardPanelDeps } from './dashboard/dashboardPanelTypes';
+
+type EditableTemplateScope = 'global' | 'workspace';
+
+function isEditableTemplateScope(scope: 'global' | 'workspace' | 'gallery'): scope is EditableTemplateScope {
+  return scope === 'global' || scope === 'workspace';
+}
 
 export class DashboardPanel implements vscode.Disposable {
   static readonly viewType = 'jsm.dashboard';
@@ -452,11 +459,16 @@ export class DashboardPanel implements vscode.Disposable {
       case 'jsm.server.autodiscover':
       case 'jsm.server.import':
       case 'jsm.server.export':
+      case 'jsm.view.refresh':
         return this.validateTuple(args, value => value.length === 0);
 
       case 'jsm.java.detect':
         return this.validateTuple(args, value =>
           value.length === 0 || (value.length === 1 && typeof value[0] === 'string'));
+
+      case 'jsm.port.suggest':
+        return this.validateTuple(args, value =>
+          value.length === 1 && this.isPortSuggestPayload(value[0]));
 
       case 'jsm.template.createServer':
       case 'jsm.template.delete':
@@ -477,6 +489,10 @@ export class DashboardPanel implements vscode.Disposable {
         return this.validateTuple(args, value =>
           value.length === 1 && this.isServerCommandArg(value[0]));
 
+      case 'jsm.hook.test':
+        return this.validateTuple(args, value =>
+          value.length === 1 && this.isHookTestCommandArg(value[0]));
+
       case 'jsm.deployment.add':
         return this.validateTuple(args, value =>
           value.length === 1 && this.isDeploymentDraftCommandArg(value[0]));
@@ -488,6 +504,8 @@ export class DashboardPanel implements vscode.Disposable {
           && this.isDeploymentCommandArg(value[0]));
 
       case 'jsm.deployment.redeploy':
+      case 'jsm.deployment.rollback':
+      case 'jsm.deployment.openLogs':
       case 'jsm.deployment.revealSource':
       case 'jsm.deployment.remove':
         return this.validateTuple(args, value =>
@@ -563,6 +581,46 @@ export class DashboardPanel implements vscode.Disposable {
     return this.isRecord(value['draft']);
   }
 
+  private isHookTestCommandArg(value: unknown): boolean {
+    if (!this.isServerCommandArg(value) || !this.isRecord(value)) {
+      return false;
+    }
+    const hook = value['hook'];
+    if (!this.isRecord(hook)) {
+      return false;
+    }
+    if (
+      value['targetDeploymentId'] !== undefined
+      && !this.isNonEmptyString(value['targetDeploymentId'])
+    ) {
+      return false;
+    }
+    return validateHookList([hook], 'hook').length === 0;
+  }
+
+  private isPortSuggestPayload(value: unknown): boolean {
+    if (!this.isRecord(value)) {
+      return false;
+    }
+    const port = value['port'];
+    const normalizedPort = typeof port === 'number'
+      ? port
+      : typeof port === 'string' && port.trim().length > 0
+        ? Number(port)
+        : NaN;
+    if (!Number.isInteger(normalizedPort) || normalizedPort < 1 || normalizedPort > 65535) {
+      return false;
+    }
+    return (
+      value['host'] === undefined || typeof value['host'] === 'string'
+    ) && (
+      value['field'] === undefined || typeof value['field'] === 'string'
+    ) && (
+      value['maxTries'] === undefined
+      || (Number.isInteger(value['maxTries']) && Number(value['maxTries']) > 0)
+    );
+  }
+
   private isSettingsPayload(value: unknown): boolean {
     if (!this.isRecord(value)) {
       return false;
@@ -572,6 +630,7 @@ export class DashboardPanel implements vscode.Disposable {
       'defaultDebugPort',
       'defaultJavaHome',
       'showStatusInSidebar',
+      'localTelemetryEnabled',
     ]);
     return Object.entries(value).every(([key, item]) => {
       if (!allowedKeys.has(key)) {
@@ -641,7 +700,23 @@ export class DashboardPanel implements vscode.Disposable {
     const record = mode === 'edit' && templateId
       ? this.deps.templateService.listScoped().find(item => item.template.id === templateId)
       : undefined;
-    this.currentFormTargetScope = record?.scope ?? 'workspace';
+    if (mode === 'edit') {
+      if (!record) {
+        this.resetFormSession();
+        this.postError(templateId ? `Template not found: ${templateId}` : 'Template not found.');
+        return;
+      }
+      if (!isEditableTemplateScope(record.scope)) {
+        this.resetFormSession();
+        this.postError('Built-in gallery templates cannot be edited.');
+        return;
+      }
+    }
+
+    const targetScope: EditableTemplateScope = record && isEditableTemplateScope(record.scope)
+      ? record.scope
+      : 'workspace';
+    this.currentFormTargetScope = targetScope;
 
     this.postMessage({
       v: WEBVIEW_PROTOCOL_VERSION,
@@ -653,13 +728,13 @@ export class DashboardPanel implements vscode.Disposable {
         ? {
           name: record.template.name,
           description: record.template.description,
-          scope: record.scope,
+          scope: targetScope,
           pluginType: record.template.pluginType,
           ...templateToServerFormData(record.template),
         }
         : undefined,
       targetId: record?.template.id,
-      targetScope: record?.scope ?? 'workspace',
+      targetScope,
     });
   }
 
@@ -749,6 +824,9 @@ export class DashboardPanel implements vscode.Disposable {
     const entry = this.deps.templateService.listScoped().find(item => item.template.id === templateId);
     if (!entry) {
       return { ok: false, message: 'Template not found.' };
+    }
+    if (!isEditableTemplateScope(entry.scope)) {
+      return { ok: false, message: 'Built-in gallery templates cannot be deleted.' };
     }
 
     const confirmation = await vscode.window.showWarningMessage(
@@ -867,6 +945,12 @@ export class DashboardPanel implements vscode.Disposable {
       }
       if ('showStatusInSidebar' in s) {
         await config.update('ui.showStatusInSidebar', s.showStatusInSidebar, vscode.ConfigurationTarget.Global);
+      }
+      if ('localTelemetryEnabled' in s) {
+        await config.update('telemetry.localMetrics.enabled', s.localTelemetryEnabled, vscode.ConfigurationTarget.Global);
+        if (s.localTelemetryEnabled === false) {
+          await this.deps.localTelemetry?.clear();
+        }
       }
 
       this.deps.logger.info('Settings saved successfully');

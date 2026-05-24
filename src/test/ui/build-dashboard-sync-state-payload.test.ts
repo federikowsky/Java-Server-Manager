@@ -31,6 +31,8 @@ function makeDeps() {
       getSupportedTypes: vi.fn(() => []),
       get: vi.fn(() => undefined),
     },
+    operationHistory: undefined,
+    autoSyncService: undefined,
     deployService: undefined,
     trustGate: {
       isTrusted: vi.fn(() => true),
@@ -53,13 +55,14 @@ describe('buildDashboardSyncStatePayload', () => {
     expect(payload.settings.showStatusInSidebar).toBe(false);
   });
 
-  it('defaults showStatusInSidebar to true when the setting is absent', () => {
-    mocked.configGet.mockImplementation((_key: string, fallback?: unknown) => fallback);
+	  it('defaults showStatusInSidebar to true when the setting is absent', () => {
+	    mocked.configGet.mockImplementation((_key: string, fallback?: unknown) => fallback);
 
-    const payload = buildDashboardSyncStatePayload(makeDeps() as never);
+	    const payload = buildDashboardSyncStatePayload(makeDeps() as never);
 
-    expect(payload.settings.showStatusInSidebar).toBe(true);
-  });
+	    expect(payload.settings.showStatusInSidebar).toBe(true);
+	    expect(payload.settings.localTelemetryEnabled).toBe(false);
+	  });
 
   it('populates deploymentHealth correctly from deployService', () => {
     const deps = makeDeps();
@@ -82,6 +85,47 @@ describe('buildDashboardSyncStatePayload', () => {
       'ws1::s1': { d1: healthReport },
     });
     expect(deps.deployService.getDeploymentHealth).toHaveBeenCalledWith('ws1::s1', 'd1');
+  });
+
+  it('populates recent operation history when available', () => {
+    const deps = makeDeps();
+    deps.workspaceRegistry.getAllServers.mockReturnValue([{
+      serverKey: 'ws1::s1',
+      config: { id: 's1', deployments: [] },
+      workspaceFolderUri: 'ws1',
+      workspaceFolderName: 'ws',
+    }] as any);
+    deps.operationHistory = {
+      getRecent: vi.fn(() => [{ operationId: 'op-1', kind: 'LifecycleStart', status: 'succeeded' }]),
+    } as any;
+
+    const payload = buildDashboardSyncStatePayload(deps as any);
+
+    expect(payload.operationHistory).toEqual({
+      'ws1::s1': [{ operationId: 'op-1', kind: 'LifecycleStart', status: 'succeeded' }],
+    });
+    expect(deps.operationHistory.getRecent).toHaveBeenCalledWith('ws1::s1', 8);
+  });
+
+  it('populates derived autosync diagnostics when available', () => {
+    const deps = makeDeps();
+    const config = { id: 's1', deployments: [] };
+    deps.workspaceRegistry.getAllServers.mockReturnValue([{
+      serverKey: 'ws1::s1',
+      config,
+      workspaceFolderUri: 'ws1',
+      workspaceFolderName: 'ws',
+    }] as any);
+    deps.autoSyncService = {
+      getDiagnostics: vi.fn(() => ({ enabled: true, watcherCount: 1, watcherCap: 64, deployments: [] })),
+    } as any;
+
+    const payload = buildDashboardSyncStatePayload(deps as any);
+
+    expect(payload.autosyncDiagnostics).toEqual({
+      'ws1::s1': { enabled: true, watcherCount: 1, watcherCap: 64, deployments: [] },
+    });
+    expect(deps.autoSyncService.getDiagnostics).toHaveBeenCalledWith('ws1::s1', config);
   });
 
   it('redacts secret server config values before syncing state to the webview', () => {

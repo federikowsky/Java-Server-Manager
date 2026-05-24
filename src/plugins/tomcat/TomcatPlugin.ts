@@ -516,7 +516,7 @@ export class TomcatPlugin implements IServerPlugin {
 
     const timestamp = Date.now();
     const stagingPath = `${plan.targetPath}.staging.${timestamp}`;
-    const backupPath = `${plan.targetPath}.backup.${timestamp}`;
+    const backupPath = await this.nextBackupPath(plan.targetPath);
     const warnings: string[] = [];
 
     try {
@@ -538,12 +538,7 @@ export class TomcatPlugin implements IServerPlugin {
       // Step 3: Rename staging to target (atomic on POSIX)
       await fs.rename(stagingPath, plan.targetPath);
 
-      // Step 4: Clean up backup
-      if (targetExists) {
-        await tryRm(backupPath);
-      }
-
-      // Step 5: Prune old backups (§10.3 — keep at most DEPLOY_BACKUP_MAX_KEPT)
+      // Step 4: Keep previous artifact as rollback backup and prune old backups.
       await this.pruneBackups(plan.targetPath);
 
       ctx.progress.report(`Deployed ${dep.deployName}`);
@@ -572,6 +567,61 @@ export class TomcatPlugin implements IServerPlugin {
         message: `Failed to deploy ${dep.deployName}`,
         details: cause instanceof Error ? cause.message : String(cause),
         suggestedFix: ['Check disk space', 'Check permissions on webapps/'],
+        cause,
+      }));
+    }
+  }
+
+  async rollbackDeploy(
+    ctx: OperationContext,
+    _config: ServerConfig,
+    dep: DeploymentConfig,
+    plan: DeployPlan,
+  ): Promise<Result<DeployResult, JsmError>> {
+    this.throwIfCancelled(ctx, `Rollback for '${dep.deployName}' was cancelled before selecting a backup.`);
+    ctx.progress.report(`Rolling back ${dep.deployName}...`);
+
+    const backupPath = await this.latestBackupPath(plan.targetPath);
+    if (!backupPath) {
+      return err(new JsmError({
+        code: ErrorCode.DeployFailed,
+        message: `No rollback backup found for ${dep.deployName}`,
+        suggestedFix: ['Redeploy the application after this version so JSM can retain a previous artifact.'],
+      }));
+    }
+
+    const currentBackupPath = await this.nextBackupPath(plan.targetPath);
+    const targetExists = await exists(plan.targetPath);
+
+    try {
+      this.throwIfCancelled(ctx, `Rollback for '${dep.deployName}' was cancelled before swapping artifacts.`);
+      if (targetExists) {
+        await fs.rename(plan.targetPath, currentBackupPath);
+      }
+      await fs.rename(backupPath, plan.targetPath);
+      await this.pruneBackups(plan.targetPath);
+
+      ctx.progress.report(`Rolled back ${dep.deployName}`);
+      this.logger.info(`TomcatPlugin: rolled back ${dep.deployName} via ${plan.strategy}`);
+      return ok({
+        strategy: plan.strategy,
+        deployedPath: plan.targetPath,
+        warnings: [],
+      });
+    } catch (cause) {
+      try {
+        if (!(await exists(plan.targetPath)) && await exists(currentBackupPath)) {
+          await fs.rename(currentBackupPath, plan.targetPath);
+        }
+      } catch {
+        /* best effort rollback of rollback */
+      }
+
+      return err(new JsmError({
+        code: ErrorCode.DeployFailed,
+        message: `Failed to roll back ${dep.deployName}`,
+        details: cause instanceof Error ? cause.message : String(cause),
+        suggestedFix: ['Check permissions on webapps/', 'Check whether the deployment backup still exists'],
         cause,
       }));
     }
@@ -994,6 +1044,34 @@ export class TomcatPlugin implements IServerPlugin {
       }
     } catch {
       // dir listing failed — skip pruning
+    }
+  }
+
+  private async latestBackupPath(targetPath: string): Promise<string | undefined> {
+    const dir = path.dirname(targetPath);
+    const baseName = path.basename(targetPath);
+    const prefix = `${baseName}.backup.`;
+
+    try {
+      const entries = await fs.readdir(dir);
+      const latest = entries
+        .filter(e => e.startsWith(prefix))
+        .sort()
+        .reverse()[0];
+      return latest ? path.join(dir, latest) : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async nextBackupPath(targetPath: string): Promise<string> {
+    let timestamp = Date.now();
+    for (;;) {
+      const candidate = `${targetPath}.backup.${timestamp}`;
+      if (!(await exists(candidate))) {
+        return candidate;
+      }
+      timestamp += 1;
     }
   }
 

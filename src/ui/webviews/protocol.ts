@@ -83,6 +83,7 @@ export interface SpaSettings {
   defaultDebugPort: number;
   defaultJavaHome: string;
   showStatusInSidebar: boolean;
+  localTelemetryEnabled: boolean;
 }
 
 export interface HookTaskOption {
@@ -142,7 +143,9 @@ export type HostToWebview =
       runtimeStates: Record<string, unknown>;
       deploymentStates: Record<string, Record<string, string>>;
       deploymentHealth: Record<string, Record<string, any>>;
-      templates: Array<{ template: unknown; scope: 'global' | 'workspace' }>;
+      operationHistory: Record<string, unknown[]>;
+      autosyncDiagnostics: Record<string, unknown>;
+      templates: Array<{ template: unknown; scope: 'global' | 'workspace' | 'gallery' }>;
       capabilities: Record<string, unknown>;
       workspaceFolders: Array<{ uri: string; name: string }>;
       settings: SpaSettings;

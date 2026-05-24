@@ -28,9 +28,11 @@ function stubPlugin(overrides: Partial<IServerPlugin> = {}): IServerPlugin {
       supportsExplodedDeploy: true,
       supportsWarDeploy: true,
       supportsIncrementalDeploy: true,
+      supportsHotReload: true,
       supportsLogFollow: true,
       supportsAutoDetect: true,
       supportsMultipleInstances: true,
+      supportsSsl: false,
     }),
     detectInstallation: async () => ok({
       ok: false,

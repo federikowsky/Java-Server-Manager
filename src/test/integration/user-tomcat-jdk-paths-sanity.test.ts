@@ -13,9 +13,9 @@ import { promisify } from 'util';
 
 const execFileAsync = promisify(execFile);
 
-/** Exact paths from project test specification (user Inputs). */
-export const USER_TOMCAT_HOME = '/Users/federicofilippi/Desktop/apache-tomcat-9.0.105';
-export const USER_JAVA_HOME = '/Library/Java/JavaVirtualMachines/jdk-17.jdk/Contents/Home';
+/** Exact local fallback paths from project test specification; CI can override with env. */
+export const USER_TOMCAT_HOME = process.env.JSM_TEST_TOMCAT_HOME || '/Users/federicofilippi/Desktop/apache-tomcat-9.0.105';
+export const USER_JAVA_HOME = process.env.JSM_TEST_JAVA_HOME || process.env.JAVA_HOME || '/Library/Java/JavaVirtualMachines/jdk-17.jdk/Contents/Home';
 
 const pathsReady =
   fsSync.existsSync(USER_TOMCAT_HOME) &&

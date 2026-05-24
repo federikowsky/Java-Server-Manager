@@ -86,6 +86,8 @@ This domain excludes:
 - user preference defaults
 - template assets
 
+The workspace inventory document is versioned for safe forward migration. Missing `version` is interpreted as legacy v0 and rewritten as the current version by managed saves. Versioning protects the authoritative inventory format; it does not introduce a second configuration authority.
+
 ### 5.2 User Preferences
 
 User preferences define:
@@ -406,7 +408,7 @@ The following are outside the JSM product model:
 - a general-purpose automation platform built from hooks
 - broad UI parity between tree and dashboard
 - additional shipped server types beyond the supported product surface
-- mandatory schema-versioning or migration machinery unless a future persisted-model change requires it
+- schema-versioning machinery outside the managed inventory persistence boundary
 
 ## 18. Explicit Exclusions to Prevent Drift
 
@@ -420,4 +422,3 @@ The following concepts are explicitly excluded from the canonical architecture:
 - runtime-state persistence as a competing domain model
 - template-driven retroactive mutation of existing servers
 - speculative plugin surfaces that are not part of the supported product scope
-

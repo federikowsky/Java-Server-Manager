@@ -19,6 +19,29 @@
     workspaceFolderUri?: string;
   }
 
+  type AutosyncDeploymentUi = {
+    deploymentId: string;
+    deployName: string;
+    deploymentType: string;
+    syncMode: string;
+    state: string;
+    active: boolean;
+    watchKind?: string;
+    watchPath?: string;
+    pendingFiles: number;
+    pendingBytes: number;
+    cooldownRemainingMs: number;
+    message?: string;
+  };
+
+  type AutosyncServerUi = {
+    enabled: boolean;
+    suspended: boolean;
+    watcherCount: number;
+    watcherCap: number;
+    deployments: AutosyncDeploymentUi[];
+  };
+
   let { serverKey, serverId, workspaceFolderUri }: Props = $props();
 
   let state = $state($spaState);
@@ -35,6 +58,27 @@
   let config = $derived(serverRecord?.config);
   let configServerId = $derived(config?.id ?? serverId ?? serverKey ?? '');
   let runtimeState = $derived(serverRecord ? state.runtimeStates[serverRecord.serverKey] : undefined);
+  let recentOperations = $derived(
+    serverRecord ? ((state.operationHistory?.[serverRecord.serverKey] ?? []) as Array<Record<string, unknown>>) : [],
+  );
+  let autosyncInfo = $derived(
+    serverRecord ? ((state.autosyncDiagnostics?.[serverRecord.serverKey]) as AutosyncServerUi | undefined) : undefined,
+  );
+  let autosyncDeployments = $derived(autosyncInfo?.deployments ?? []);
+  let activeAutosyncCount = $derived(autosyncDeployments.filter(item => item.active).length);
+  let deploymentHealthMap = $derived(
+    serverRecord ? ((state.deploymentHealth?.[serverRecord.serverKey] ?? {}) as Record<string, { ok?: boolean; latencyMs?: number }>) : {},
+  );
+  let healthCheckDeployments = $derived(
+    (config?.deployments ?? []).filter((dep: { healthCheckPath?: string }) =>
+      typeof dep.healthCheckPath === 'string' && dep.healthCheckPath.trim().length > 0),
+  );
+  let healthyDeploymentCount = $derived(
+    Object.values(deploymentHealthMap).filter(report => report?.ok === true).length,
+  );
+  let unhealthyDeploymentCount = $derived(
+    Object.values(deploymentHealthMap).filter(report => report?.ok === false).length,
+  );
 
   let typeLabel = $derived(
     config ? config.type.charAt(0).toUpperCase() + config.type.slice(1) : '',
@@ -187,6 +231,79 @@
       }],
     });
   }
+
+  function handleNoArgAction(cmd: string) {
+    postToHost({
+      v: WEBVIEW_PROTOCOL_VERSION,
+      command: 'executeCommand',
+      id: cmd,
+      args: [],
+    });
+  }
+
+  function operationLabel(kind: unknown): string {
+    const labels: Record<string, string> = {
+      LifecycleStart: 'Start',
+      LifecycleStop: 'Stop',
+      LifecycleRestart: 'Restart',
+      DeployFull: 'Redeploy',
+      DeploySync: 'Sync',
+      DeployRollback: 'Rollback',
+      RedeployAll: 'Redeploy All',
+      Undeploy: 'Undeploy',
+      DeployUndeployed: 'Prepare Deployments',
+      RunDeploymentHealthChecks: 'Health Check',
+      StatusRefresh: 'Refresh Status',
+    };
+    return labels[String(kind)] ?? String(kind ?? 'Operation');
+  }
+
+  function formatTimestamp(value: unknown): string {
+    if (typeof value !== 'number') return '—';
+    return new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  }
+
+  function formatDuration(value: unknown): string {
+    if (typeof value !== 'number') return 'Running';
+    if (value < 1000) return `${value} ms`;
+    return `${(value / 1000).toFixed(1)} s`;
+  }
+
+  function formatBytes(value: unknown): string {
+    if (typeof value !== 'number' || value <= 0) return '0 B';
+    if (value < 1024) return `${value} B`;
+    if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+    return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  function autosyncStateLabel(value: unknown): string {
+    const labels: Record<string, string> = {
+      disabled: 'Disabled',
+      manual: 'Manual',
+      'not-watchable': 'Not Watchable',
+      suspended: 'Suspended',
+      watching: 'Watching',
+      cooldown: 'Cooldown',
+      inactive: 'Inactive',
+    };
+    return labels[String(value)] ?? String(value ?? 'Unknown');
+  }
+
+  function autosyncStateClass(value: unknown): string {
+    return `autosync-state ${String(value ?? 'unknown')}`;
+  }
+
+  function formatDateTime(value: unknown): string {
+    if (typeof value !== 'number') return '—';
+    return new Date(value).toLocaleString([], {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+  }
 </script>
 
 {#if config}
@@ -287,6 +404,102 @@
                 },
               ]}
             />
+          </SectionBlock>
+          <SectionBlock title="Health & Readiness">
+            <div class="health-section">
+              <DetailRows
+                rows={[
+                  { label: 'Runtime State', value: String(runtimeState?.state ?? 'stopped') },
+                  { label: 'PID', value: runtimeState?.pid != null ? String(runtimeState.pid) : '—' },
+                  { label: 'Last Transition', value: formatDateTime(runtimeState?.lastTransitionAt) },
+                  { label: 'Base URL', value: baseUrl || '—' },
+                  {
+                    label: 'Deployment Health',
+                    value: healthCheckDeployments.length === 0
+                      ? 'No health checks configured'
+                      : `${healthyDeploymentCount} healthy, ${unhealthyDeploymentCount} unhealthy, ${healthCheckDeployments.length} configured`,
+                  },
+                  {
+                    label: 'Last Error',
+                    value: runtimeState?.lastError?.message ? String(runtimeState.lastError.message) : '—',
+                  },
+                ]}
+              />
+              <button type="button" class="health-refresh-btn" onclick={() => handleNoArgAction('jsm.view.refresh')}>
+                <Icon name="refresh" size={14} />
+                <span>Refresh</span>
+              </button>
+            </div>
+          </SectionBlock>
+          <SectionBlock title="Auto Sync">
+            <div class="autosync-section">
+              <DetailRows
+                rows={[
+                  {
+                    label: 'Server Auto-Sync',
+                    value: autosyncInfo?.enabled ? 'Enabled' : 'Disabled',
+                  },
+                  {
+                    label: 'Watchers',
+                    value: autosyncInfo
+                      ? `${autosyncInfo.watcherCount} active, ${autosyncInfo.watcherCap} global cap`
+                      : 'No watcher data',
+                  },
+                  {
+                    label: 'Deployments',
+                    value: `${activeAutosyncCount} watching, ${autosyncDeployments.length} configured`,
+                  },
+                ]}
+              />
+              {#if autosyncDeployments.length === 0}
+                <div class="empty-section-note">No deployments configured for auto-sync.</div>
+              {:else}
+                <div class="autosync-list" role="list">
+                  {#each autosyncDeployments as item}
+                    <div class="autosync-row" role="listitem">
+                      <div class="autosync-main">
+                        <span class="autosync-name">{item.deployName}</span>
+                        <span class={autosyncStateClass(item.state)}>{autosyncStateLabel(item.state)}</span>
+                      </div>
+                      <div class="autosync-meta">
+                        <span>{item.watchPath ?? item.message ?? 'No watch path'}</span>
+                        <span>{item.pendingFiles} pending · {formatBytes(item.pendingBytes)}</span>
+                      </div>
+                      {#if item.cooldownRemainingMs > 0}
+                        <div class="autosync-note">Cooldown remaining: {formatDuration(item.cooldownRemainingMs)}</div>
+                      {:else if item.message}
+                        <div class="autosync-note">{item.message}</div>
+                      {/if}
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          </SectionBlock>
+          <SectionBlock title="Recent Operations">
+            {#if recentOperations.length === 0}
+              <div class="empty-section-note">No operations recorded in this session.</div>
+            {:else}
+              <div class="operation-history" role="list">
+                {#each recentOperations as operation}
+                  <div class="operation-row" role="listitem">
+                    <div class="operation-main">
+                      <span class="operation-name">{operationLabel(operation.kind)}</span>
+                      <span class:failed={operation.status === 'failed'} class:running={operation.status === 'running'} class="operation-status">
+                        {String(operation.status ?? 'unknown')}
+                      </span>
+                    </div>
+                    <div class="operation-meta">
+                      <span>{formatTimestamp(operation.startedAt)}</span>
+                      <span>{formatDuration(operation.durationMs)}</span>
+                    </div>
+                    {#if operation.errorMessage}
+                      <div class="operation-error">{String(operation.errorMessage)}</div>
+                    {/if}
+                  </div>
+                {/each}
+              </div>
+            {/if}
           </SectionBlock>
         </div>
       {:else if activeTab === 'config'}
@@ -496,6 +709,161 @@
   .overview-sections {
     width: 100%;
     max-width: none;
+  }
+
+  .empty-section-note {
+    color: var(--jsm-color-fg-muted);
+    font-size: var(--jsm-font-size-sm);
+  }
+
+  .health-section {
+    display: flex;
+    flex-direction: column;
+    gap: var(--jsm-space-md);
+  }
+
+  .health-refresh-btn {
+    align-self: flex-start;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--jsm-space-xs);
+    border: 1px solid var(--jsm-color-border-secondary);
+    border-radius: var(--jsm-radius-sm);
+    background: var(--jsm-surface-0);
+    color: var(--jsm-color-fg);
+    font-family: var(--jsm-font-family);
+    font-size: var(--jsm-font-size-sm);
+    padding: var(--jsm-space-xs) var(--jsm-space-sm);
+    cursor: pointer;
+  }
+
+  .health-refresh-btn:hover {
+    background: var(--jsm-color-bg-hover);
+  }
+
+  .operation-history {
+    display: flex;
+    flex-direction: column;
+    gap: var(--jsm-space-sm);
+  }
+
+  .autosync-section {
+    display: flex;
+    flex-direction: column;
+    gap: var(--jsm-space-md);
+  }
+
+  .autosync-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--jsm-space-sm);
+  }
+
+  .autosync-row {
+    border-bottom: 1px solid var(--jsm-color-border-secondary);
+    padding-bottom: var(--jsm-space-sm);
+  }
+
+  .autosync-row:last-child {
+    border-bottom: 0;
+    padding-bottom: 0;
+  }
+
+  .autosync-main,
+  .autosync-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--jsm-space-sm);
+  }
+
+  .autosync-name {
+    font-weight: var(--jsm-font-weight-semibold);
+    min-width: 0;
+  }
+
+  .autosync-state {
+    color: var(--jsm-color-fg-secondary);
+    font-size: var(--jsm-font-size-sm);
+    white-space: nowrap;
+  }
+
+  .autosync-state.watching {
+    color: var(--jsm-color-success);
+  }
+
+  .autosync-state.cooldown,
+  .autosync-state.suspended {
+    color: var(--vscode-charts-orange);
+  }
+
+  .autosync-state.disabled,
+  .autosync-state.manual,
+  .autosync-state.inactive,
+  .autosync-state.not-watchable {
+    color: var(--jsm-color-fg-muted);
+  }
+
+  .autosync-meta,
+  .autosync-note {
+    color: var(--jsm-color-fg-muted);
+    font-size: var(--jsm-font-size-sm);
+    line-height: var(--jsm-line-height-relaxed);
+    margin-top: var(--jsm-space-2xs);
+  }
+
+  .autosync-meta span:first-child {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .operation-row {
+    border-bottom: 1px solid var(--jsm-color-border-secondary);
+    padding-bottom: var(--jsm-space-sm);
+  }
+
+  .operation-row:last-child {
+    border-bottom: 0;
+    padding-bottom: 0;
+  }
+
+  .operation-main,
+  .operation-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--jsm-space-sm);
+  }
+
+  .operation-name {
+    font-weight: var(--jsm-font-weight-semibold);
+  }
+
+  .operation-status {
+    color: var(--jsm-color-success);
+    text-transform: capitalize;
+    font-size: var(--jsm-font-size-sm);
+  }
+
+  .operation-status.failed {
+    color: var(--jsm-color-error);
+  }
+
+  .operation-status.running {
+    color: var(--jsm-color-fg-secondary);
+  }
+
+  .operation-meta {
+    color: var(--jsm-color-fg-muted);
+    font-size: var(--jsm-font-size-sm);
+    margin-top: var(--jsm-space-2xs);
+  }
+
+  .operation-error {
+    color: var(--jsm-color-error);
+    font-size: var(--jsm-font-size-sm);
+    line-height: var(--jsm-line-height-relaxed);
+    margin-top: var(--jsm-space-2xs);
   }
   .note {
     color: var(--vscode-descriptionForeground);

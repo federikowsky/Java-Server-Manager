@@ -189,6 +189,16 @@ export class ConfigService {
     return ok(undefined);
   }
 
+  /** Validate prospective servers against the current authoritative inventory without persisting. */
+  validateServerCandidates(configs: readonly ServerConfig[]): Result<void, JsmError> {
+    for (const config of configs) {
+      const validResult = this.validateForPersistence(config);
+      if (!validResult.ok) return validResult;
+    }
+
+    return this.validateInventoryInvariants([...this.repo.getAll(), ...configs]);
+  }
+
   /** Update an existing server, validate, persist, and emit event. */
   async updateServer(config: ServerConfig): Promise<Result<void, JsmError>> {
     const trustResult = requireWorkspaceTrust(this.trustGate, 'modify server inventory');

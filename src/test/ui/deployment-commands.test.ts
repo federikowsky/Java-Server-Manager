@@ -134,6 +134,7 @@ function mockDeps() {
     },
     lifecycle: {
       enqueueDeployFull: vi.fn(() => ok(undefined)),
+      enqueueDeploymentRollback: vi.fn(() => ok(undefined)),
       enqueueUndeploy: vi.fn(() => ok(undefined)),
       cancel: vi.fn(),
       waitUntilQueueIdle: vi.fn(async () => {}),
@@ -171,7 +172,7 @@ describe('Deployment Commands', () => {
   it('should register all expected deployment commands', () => {
     const expected = [
       'jsm.deployment.add', 'jsm.deployment.redeploy',
-      'jsm.deployment.undeploy', 'jsm.deployment.toggleAutosync',
+      'jsm.deployment.rollback', 'jsm.deployment.undeploy', 'jsm.deployment.toggleAutosync',
       'jsm.deployment.configureIgnoreGlobs', 'jsm.deployment.edit',
       'jsm.deployment.remove', 'jsm.deployment.openLogs',
       'jsm.deployment.revealSource',
@@ -339,6 +340,27 @@ describe('Deployment Commands', () => {
       );
     });
 
+    it('jsm.deployment.rollback should confirm and enqueue DeployRollback on lifecycle', async () => {
+      const dep = makeDeployment();
+      const server = makeServer();
+      server.deployments = [dep];
+      deps.configService.getServer.mockReturnValue(server);
+      mockShowWarningMessage.mockResolvedValue('Roll Back');
+
+      const node = createDeploymentNode('srv-1', dep);
+      await invoke('jsm.deployment.rollback', node);
+
+      expect(mockShowWarningMessage).toHaveBeenCalledWith(
+        expect.stringContaining('Roll back deployment'),
+        { modal: true },
+        'Roll Back',
+      );
+      expect(deps.lifecycle.enqueueDeploymentRollback).toHaveBeenCalledWith('srv-1', 'dep-1');
+      expect(mockShowInfoMessage).toHaveBeenCalledWith(
+        expect.stringContaining('Rollback completed'),
+      );
+    });
+
     it('jsm.deployment.undeploy should enqueue Undeploy on lifecycle', async () => {
       const dep = makeDeployment();
       const server = makeServer();
@@ -436,7 +458,7 @@ describe('Deployment Commands', () => {
 
   describe('Type Guard: non-DeploymentNode arguments', () => {
     const depCommands = [
-      'jsm.deployment.redeploy', 'jsm.deployment.undeploy',
+      'jsm.deployment.redeploy', 'jsm.deployment.rollback', 'jsm.deployment.undeploy',
       'jsm.deployment.toggleAutosync', 'jsm.deployment.edit', 'jsm.deployment.remove',
     ];
 

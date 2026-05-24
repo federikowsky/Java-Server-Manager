@@ -58,6 +58,8 @@ export function handleHostToWebviewMessage(msg: HostToWebview): void {
         runtimeStates: msg.runtimeStates,
         deploymentStates: msg.deploymentStates,
         deploymentHealth: msg.deploymentHealth,
+        operationHistory: msg.operationHistory,
+        autosyncDiagnostics: msg.autosyncDiagnostics,
         templates: msg.templates,
         capabilities: msg.capabilities,
         workspaceFolders: msg.workspaceFolders,

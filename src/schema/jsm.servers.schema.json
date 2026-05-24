@@ -7,6 +7,11 @@
   "required": ["servers"],
   "additionalProperties": true,
   "properties": {
+    "version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Workspace config document version. Missing version is accepted as legacy v0 and saved as v1."
+    },
     "servers": {
       "type": "array",
       "items": { "$ref": "#/definitions/ServerConfig" }

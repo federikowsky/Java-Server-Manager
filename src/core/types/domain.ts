@@ -128,7 +128,7 @@ export interface ServerConfig {
   type: ServerType;
 
   runtime: {
-    /** Stable runtime ID (stored in global registry). */
+    /** Stable runtime reference stored with this managed server inventory entry. */
     id: string;
     /** Absolute path to server installation. Plugin maps to its own env var (e.g. CATALINA_HOME). */
     homePath: string;

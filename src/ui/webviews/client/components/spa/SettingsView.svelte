@@ -17,9 +17,10 @@
   let defaultDebugPort = $state(5005);
   let defaultJavaHome = $state('');
   let showStatusInSidebar = $state(true);
+  let localTelemetryEnabled = $state(false);
 
   /** Last values applied from host sync — reset restores these (spec §25.4). */
-  let baseline = $state({ http: 8080, debug: 5005, java: '', sidebar: true });
+  let baseline = $state({ http: 8080, debug: 5005, java: '', sidebar: true, telemetry: false });
 
   let settingsFingerprint = $state('');
   let saving = $state(false);
@@ -72,11 +73,13 @@
     defaultDebugPort = state.settings.defaultDebugPort;
     defaultJavaHome = state.settings.defaultJavaHome;
     showStatusInSidebar = state.settings.showStatusInSidebar;
+    localTelemetryEnabled = state.settings.localTelemetryEnabled;
     baseline = {
       http: state.settings.defaultHttpPort,
       debug: state.settings.defaultDebugPort,
       java: state.settings.defaultJavaHome,
       sidebar: state.settings.showStatusInSidebar,
+      telemetry: state.settings.localTelemetryEnabled,
     };
   });
 
@@ -84,7 +87,8 @@
     defaultHttpPort !== baseline.http
     || defaultDebugPort !== baseline.debug
     || defaultJavaHome !== baseline.java
-    || showStatusInSidebar !== baseline.sidebar,
+    || showStatusInSidebar !== baseline.sidebar
+    || localTelemetryEnabled !== baseline.telemetry,
   );
 
   let workspaceRows = $derived([
@@ -126,6 +130,7 @@
           defaultDebugPort,
           defaultJavaHome,
           showStatusInSidebar,
+          localTelemetryEnabled,
         },
       ],
     });
@@ -145,6 +150,7 @@
     defaultDebugPort = baseline.debug;
     defaultJavaHome = baseline.java;
     showStatusInSidebar = baseline.sidebar;
+    localTelemetryEnabled = baseline.telemetry;
     saveError = '';
     saveMessage = '';
   }
@@ -240,6 +246,20 @@
             <div class="toggle-copy">
               <span class="field-label">Show status in the sidebar tree</span>
               <p class="field-help">Include the current runtime state in the server description row.</p>
+            </div>
+          </label>
+        </div>
+
+        <div class="field-block">
+          <label class="toggle-row" for="set-local-telemetry">
+            <input
+              id="set-local-telemetry"
+              type="checkbox"
+              bind:checked={localTelemetryEnabled}
+            />
+            <div class="toggle-copy">
+              <span class="field-label">Store local aggregate metrics</span>
+              <p class="field-help">Opt-in counters kept on this machine and included only in copied diagnostics.</p>
             </div>
           </label>
         </div>

@@ -2,7 +2,9 @@
   import { onDestroy } from 'svelte';
   import { get } from 'svelte/store';
   import type { FormFieldDef } from '../../../protocol';
-  import { hooksEditorSession, activeEntity, spaState } from '../../stores';
+  import { sendExecuteCommand } from '../../bridge';
+  import { hooksEditorSession, activeEntity, spaState, lastCommandResult } from '../../stores';
+  import type { HookConfig } from '@core/types';
   import HookList from '../HookList.svelte';
   import BackControl from '../ds/BackControl.svelte';
 
@@ -17,10 +19,26 @@
   });
 
   let localHooks = $state<unknown[]>([]);
+  let pendingHookTest = $state<{ requestId: string; index: number } | null>(null);
+  let hookTestState = $state<{ index: number; status: 'running' | 'succeeded' | 'failed'; message?: string } | null>(null);
+
+  const unsubCommandResult = lastCommandResult.subscribe(result => {
+    if (!result || !pendingHookTest || result.requestId !== pendingHookTest.requestId) {
+      return;
+    }
+
+    hookTestState = {
+      index: pendingHookTest.index,
+      status: result.ok ? 'succeeded' : 'failed',
+      message: result.message ?? (result.ok ? 'Hook completed.' : 'Hook failed.'),
+    };
+    pendingHookTest = null;
+  });
 
   onDestroy(() => {
     unsubState();
     unsubSession();
+    unsubCommandResult();
   });
 
   $effect(() => {
@@ -48,6 +66,62 @@
     s.commit(localHooks);
     hooksEditorSession.set(null);
     activeEntity.set(s.returnTarget);
+  }
+
+  function getHookTestTarget():
+    | { serverId: string; serverKey?: string; workspaceFolderUri: string; targetDeploymentId?: string }
+    | undefined {
+    const target = session?.returnTarget;
+    if (!target) {
+      return undefined;
+    }
+
+    if (target.type === 'server') {
+      const serverId = target.serverId ?? target.id;
+      if (!serverId || !target.workspaceFolderUri) {
+        return undefined;
+      }
+      return {
+        serverId,
+        serverKey: target.serverKey ?? target.id,
+        workspaceFolderUri: target.workspaceFolderUri,
+      };
+    }
+
+    if (target.type === 'deployment') {
+      if (!target.serverId || !target.workspaceFolderUri) {
+        return undefined;
+      }
+      return {
+        serverId: target.serverId,
+        serverKey: target.serverKey,
+        workspaceFolderUri: target.workspaceFolderUri,
+        ...(target.id ? { targetDeploymentId: target.id } : {}),
+      };
+    }
+
+    return undefined;
+  }
+
+  function handleTestHook(hook: HookConfig, index: number): void {
+    const target = getHookTestTarget();
+    if (!target) {
+      hookTestState = {
+        index,
+        status: 'failed',
+        message: 'Save this server or deployment before testing hooks.',
+      };
+      return;
+    }
+
+    const requestId = crypto.randomUUID();
+    pendingHookTest = { requestId, index };
+    hookTestState = { index, status: 'running' };
+    lastCommandResult.set(null);
+    sendExecuteCommand('jsm.hook.test', [{
+      ...target,
+      hook,
+    }], requestId);
   }
 
   const backLabel = $derived.by(() => {
@@ -80,6 +154,8 @@
       def={hookDef}
       value={localHooks as import('@core/types').HookConfig[]}
       onChange={(v) => (localHooks = v)}
+      onTest={getHookTestTarget() ? handleTestHook : undefined}
+      testState={hookTestState}
       id="hooks-editor-list"
     />
   </div>

@@ -14,7 +14,7 @@
 ## Requirements
 
 - **VS Code** 1.100.0 or newer (see `engines.vscode` in `package.json`)
-- **Node.js** 18+ (for building and developing the extension)
+- **Node.js** 20+ (for building and developing the extension; CI/release use Node 20)
 - **JDK** and a **local Tomcat** installation for runtime testing
 
 ## Install (users)
@@ -26,7 +26,7 @@ Install the extension from the VS Code Marketplace when available, or from a `.v
 Clone the repository, install dependencies, then type-check, lint, test, and build:
 
 ```bash
-npm install
+npm ci
 npm run check-types
 npm run lint
 npm test
@@ -62,8 +62,8 @@ Prefer the extension UI and registered commands for server and deployment change
 | [docs/specs.md](./docs/specs.md) | Product and domain specification (intent vs shipped code may differ) |
 | [CHANGELOG.md](./CHANGELOG.md) | Version history for releases |
 
-Internal release policy, approval steps, and decision logs are kept **outside** this public tree if needed for maintainers.
+Release policy and local publication commands are tracked in [docs/release-process.md](./docs/release-process.md).
 
 ## Status
 
-The project is an **advanced MVP**: useful for real local Tomcat workflows, but not positioned as fully production-hardened. CI runs lint, type checks, tests, and production builds. Focus areas include runtime hardening, spec/code alignment, logging UX, and release confidence.
+The project is a **beta** extension for real local Tomcat workflows. CI runs lint, type checks, tests, and production builds; release publication is automated through GitHub Actions. Stable-readiness work remains focused on broader runtime matrices, deeper e2e coverage, and additional plugin hardening.

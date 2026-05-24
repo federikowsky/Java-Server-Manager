@@ -59,6 +59,60 @@ describe('ConfigRepo negative paths (extended)', () => {
     expect(repo.getAll()).toEqual([]);
   });
 
+  it('rejects newer workspace config versions before mutating the live cache', async () => {
+    const configPath = path.join(tmpDir, '.vscode', 'jsm.servers.json');
+    await fs.writeFile(configPath, JSON.stringify({
+      version: 999,
+      servers: [],
+    }), 'utf-8');
+
+    const repo = new ConfigRepo(tmpDir, mockLogger());
+    const result = await repo.load();
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCode.InvalidConfig);
+      expect(result.error.message).toContain('newer than this extension supports');
+    }
+    expect(repo.getAll()).toEqual([]);
+  });
+
+  it('rejects non-integer workspace config versions before mutating the live cache', async () => {
+    const configPath = path.join(tmpDir, '.vscode', 'jsm.servers.json');
+    await fs.writeFile(configPath, JSON.stringify({
+      version: '1',
+      servers: [],
+    }), 'utf-8');
+
+    const repo = new ConfigRepo(tmpDir, mockLogger());
+    const result = await repo.load();
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCode.InvalidConfig);
+      expect(result.error.message).toContain('version must be an integer');
+    }
+    expect(repo.getAll()).toEqual([]);
+  });
+
+  it('rejects configs whose servers property is not an array', async () => {
+    const configPath = path.join(tmpDir, '.vscode', 'jsm.servers.json');
+    await fs.writeFile(configPath, JSON.stringify({
+      version: 1,
+      servers: {},
+    }), 'utf-8');
+
+    const repo = new ConfigRepo(tmpDir, mockLogger());
+    const result = await repo.load();
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCode.InvalidConfig);
+      expect(result.error.message).toContain('"servers" array');
+    }
+    expect(repo.getAll()).toEqual([]);
+  });
+
   it('treats a deleted config file as dirty when content was previously loaded', async () => {
     const configPath = path.join(tmpDir, '.vscode', 'jsm.servers.json');
     await fs.writeFile(configPath, JSON.stringify({

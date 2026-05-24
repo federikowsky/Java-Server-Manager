@@ -72,6 +72,8 @@
   let submitState = $state<SubmitState>('idle');
   let submitError = $state('');
   let pendingRequestId = $state('');
+  let pendingPortAssist = $state<{ requestId: string; field: 'httpPort' | 'debugPort' } | null>(null);
+  let portAssistState = $state<Record<string, { status: 'checking' | 'ok' | 'error'; message: string }>>({});
   let defaultsHydrated = $state(false);
 
   /** Plain deep clone for payloads (createServerDraft / postMessage). Svelte $state arrays are Proxies — structuredClone throws. */
@@ -183,6 +185,38 @@
     if (!result) {
       return;
     }
+    if (pendingPortAssist && result.requestId === pendingPortAssist.requestId) {
+      const field = pendingPortAssist.field;
+      pendingPortAssist = null;
+
+      if (!result.ok) {
+        portAssistState = {
+          ...portAssistState,
+          [field]: { status: 'error', message: result.message ?? 'Unable to check port.' },
+        };
+        return;
+      }
+
+      const suggestedPort = typeof result.data?.suggestedPort === 'number'
+        ? result.data.suggestedPort
+        : undefined;
+      if (suggestedPort !== undefined) {
+        if (field === 'httpPort') {
+          httpPort = suggestedPort;
+        } else {
+          debugPort = suggestedPort;
+        }
+        touched = { ...touched, [field]: true };
+        errors = { ...errors, [field]: validateField(field, String(suggestedPort)) };
+      }
+
+      portAssistState = {
+        ...portAssistState,
+        [field]: { status: 'ok', message: result.message ?? 'Port check completed.' },
+      };
+      return;
+    }
+
     if (!pendingRequestId || result.requestId !== pendingRequestId) {
       return;
     }
@@ -339,6 +373,44 @@
     });
   }
 
+  function handlePortAssist(field: 'httpPort' | 'debugPort'): void {
+    const fallbackDebugPort = creationDefaults().defaultDebugPort;
+    const selectedPort = field === 'httpPort' ? httpPort : debugPort ?? fallbackDebugPort;
+    const validation = validateField(field, String(selectedPort));
+    if (validation) {
+      touched = { ...touched, [field]: true };
+      errors = { ...errors, [field]: validation };
+      portAssistState = {
+        ...portAssistState,
+        [field]: { status: 'error', message: validation },
+      };
+      return;
+    }
+
+    if (field === 'debugPort' && debugPort === undefined) {
+      debugPort = fallbackDebugPort;
+    }
+
+    const requestId = crypto.randomUUID();
+    pendingPortAssist = { requestId, field };
+    portAssistState = {
+      ...portAssistState,
+      [field]: { status: 'checking', message: 'Checking port...' },
+    };
+    lastCommandResult.set(null);
+    postToHost({
+      v: WEBVIEW_PROTOCOL_VERSION,
+      command: 'executeCommand',
+      id: 'jsm.port.suggest',
+      requestId,
+      args: [{
+        field,
+        port: selectedPort,
+        host,
+      }],
+    });
+  }
+
   function addVmArg() {
     const arg = vmArgDraft.trim();
     if (!arg) {
@@ -479,7 +551,7 @@
           />
           <p class="field-help">
             {availableTemplates.length === 0
-              ? 'No templates in this workspace — create one from the Templates tab to enable From Template.'
+              ? 'No templates available — create one from the Templates tab to enable From Template.'
               : creationMode === 'scratch'
                 ? 'Configure manually or start from a saved template.'
                 : 'Apply saved defaults, then adjust any values below.'}
@@ -619,19 +691,35 @@
           <label class="field-label" for="http-port">
             HTTP Port <span class="required">*</span>
           </label>
-          <input
-            id="http-port"
-            type="number"
-            class="field-input port-input"
-            class:error={errors.httpPort && touched.httpPort}
-            bind:value={httpPort}
-            oninput={() => handleFieldInput('httpPort', String(httpPort))}
-            onblur={() => handleFieldBlur('httpPort')}
-            min="1"
-            max="65535"
-          />
+          <div class="port-input-row">
+            <input
+              id="http-port"
+              type="number"
+              class="field-input port-input"
+              class:error={errors.httpPort && touched.httpPort}
+              bind:value={httpPort}
+              oninput={() => handleFieldInput('httpPort', String(httpPort))}
+              onblur={() => handleFieldBlur('httpPort')}
+              min="1"
+              max="65535"
+            />
+            <button
+              type="button"
+              class="btn btn-secondary"
+              onclick={() => handlePortAssist('httpPort')}
+              disabled={pendingPortAssist?.field === 'httpPort'}
+              title="Check port availability"
+              aria-label="Check HTTP port availability"
+            >
+              <Icon name="search" size={14} />
+            </button>
+          </div>
           {#if errors.httpPort && touched.httpPort}
             <p class="field-error">{errors.httpPort}</p>
+          {:else if portAssistState.httpPort}
+            <p class={`field-${portAssistState.httpPort.status === 'error' ? 'error' : 'help'}`}>
+              {portAssistState.httpPort.message}
+            </p>
           {/if}
         </div>
         <div class="form-field">
@@ -653,20 +741,36 @@
         <div class="section-grid two-columns">
           <div class="form-field">
             <label class="field-label" for="debug-port">Debug Port</label>
-            <input
-              id="debug-port"
-              type="number"
-              class="field-input"
-              class:error={errors.debugPort && touched.debugPort}
-              bind:value={debugPort}
-              oninput={() => handleFieldInput('debugPort', debugPort === undefined ? '' : String(debugPort))}
-              onblur={() => handleFieldBlur('debugPort')}
-              min="1"
-              max="65535"
-              placeholder="Auto-assign"
-            />
+            <div class="port-input-row">
+              <input
+                id="debug-port"
+                type="number"
+                class="field-input port-input"
+                class:error={errors.debugPort && touched.debugPort}
+                bind:value={debugPort}
+                oninput={() => handleFieldInput('debugPort', debugPort === undefined ? '' : String(debugPort))}
+                onblur={() => handleFieldBlur('debugPort')}
+                min="1"
+                max="65535"
+                placeholder="Auto-assign"
+              />
+              <button
+                type="button"
+                class="btn btn-secondary"
+                onclick={() => handlePortAssist('debugPort')}
+                disabled={pendingPortAssist?.field === 'debugPort'}
+                title="Check port availability"
+                aria-label="Check debug port availability"
+              >
+                <Icon name="search" size={14} />
+              </button>
+            </div>
             {#if errors.debugPort && touched.debugPort}
               <p class="field-error">{errors.debugPort}</p>
+            {:else if portAssistState.debugPort}
+              <p class={`field-${portAssistState.debugPort.status === 'error' ? 'error' : 'help'}`}>
+                {portAssistState.debugPort.message}
+              </p>
             {:else}
               <p class="field-help">Leave empty to auto-assign.</p>
             {/if}

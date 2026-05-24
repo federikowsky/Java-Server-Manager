@@ -8,12 +8,18 @@ import { ErrorCode } from '@core/errors/codes';
 import { WORKSPACE_CONFIG_FILENAME, WORKSPACE_CONFIG_DIR } from '../../constants';
 import { atomicWrite, readFileSafe, exists } from './FileUtils';
 
+export const CURRENT_WORKSPACE_CONFIG_VERSION = 1;
+const LEGACY_WORKSPACE_CONFIG_VERSION = 0;
+
 interface WorkspaceConfig {
-  servers: ServerConfig[];
+  version?: unknown;
+  servers?: ServerConfig[];
 }
 
 export interface ParsedWorkspaceConfig {
   content: string;
+  version: typeof CURRENT_WORKSPACE_CONFIG_VERSION;
+  migratedFromVersion?: typeof LEGACY_WORKSPACE_CONFIG_VERSION;
   servers: ServerConfig[];
 }
 
@@ -43,15 +49,25 @@ export class ConfigRepo {
   async readWorkspace(): Promise<Result<ParsedWorkspaceConfig, JsmError>> {
     const fileExists = await exists(this.configPath);
     if (!fileExists) {
-      return ok({ content: '', servers: [] });
+      return ok({ content: '', version: CURRENT_WORKSPACE_CONFIG_VERSION, servers: [] });
     }
 
     const readResult = await readFileSafe(this.configPath);
     if (!readResult.ok) return readResult;
 
     try {
-      const parsed: WorkspaceConfig = JSON.parse(readResult.value);
+      const parsed = JSON.parse(readResult.value) as WorkspaceConfig;
+      const versionResult = parseWorkspaceConfigVersion(parsed.version);
+      if (!versionResult.ok) return versionResult;
+
       const servers = parsed.servers ?? [];
+      if (!Array.isArray(servers)) {
+        return err(new JsmError({
+          code: ErrorCode.InvalidConfig,
+          message: 'Workspace config must contain a "servers" array',
+        }));
+      }
+
       const seen = new Set<string>();
 
       for (const server of servers) {
@@ -66,6 +82,8 @@ export class ConfigRepo {
 
       return ok({
         content: readResult.value,
+        version: CURRENT_WORKSPACE_CONFIG_VERSION,
+        migratedFromVersion: versionResult.value.migratedFromVersion,
         servers,
       });
     } catch (cause) {
@@ -145,6 +163,7 @@ export class ConfigRepo {
       mutate(nextCache);
 
       const data: WorkspaceConfig = {
+        version: CURRENT_WORKSPACE_CONFIG_VERSION,
         servers: [...nextCache.values()],
       };
       const content = JSON.stringify(data, null, 2);
@@ -161,4 +180,43 @@ export class ConfigRepo {
     this.writeQueue = pendingWrite.then(() => undefined, () => undefined);
     return pendingWrite;
   }
+}
+
+function parseWorkspaceConfigVersion(
+  value: unknown,
+): Result<{
+  version: typeof CURRENT_WORKSPACE_CONFIG_VERSION;
+  migratedFromVersion?: typeof LEGACY_WORKSPACE_CONFIG_VERSION;
+}, JsmError> {
+  if (value === undefined || value === LEGACY_WORKSPACE_CONFIG_VERSION) {
+    return ok({
+      version: CURRENT_WORKSPACE_CONFIG_VERSION,
+      migratedFromVersion: LEGACY_WORKSPACE_CONFIG_VERSION,
+    });
+  }
+
+  if (!Number.isInteger(value)) {
+    return err(new JsmError({
+      code: ErrorCode.InvalidConfig,
+      message: `Workspace config version must be an integer; received ${JSON.stringify(value)}`,
+    }));
+  }
+
+  if (value === CURRENT_WORKSPACE_CONFIG_VERSION) {
+    return ok({ version: CURRENT_WORKSPACE_CONFIG_VERSION });
+  }
+
+  if (typeof value === 'number' && value > CURRENT_WORKSPACE_CONFIG_VERSION) {
+    return err(new JsmError({
+      code: ErrorCode.InvalidConfig,
+      message: `Workspace config version ${value} is newer than this extension supports`,
+      suggestedFix: ['Update Java Server Manager before opening this workspace inventory'],
+    }));
+  }
+
+  return err(new JsmError({
+    code: ErrorCode.InvalidConfig,
+    message: `Workspace config version ${value} is not supported`,
+    suggestedFix: ['Export the inventory with a supported Java Server Manager version and import it again'],
+  }));
 }

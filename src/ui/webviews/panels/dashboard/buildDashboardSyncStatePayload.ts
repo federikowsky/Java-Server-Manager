@@ -56,6 +56,24 @@ export function buildDashboardSyncStatePayload(deps: DashboardPanelDeps): Dashbo
     }
   }
 
+  const operationHistory: Record<string, unknown[]> = {};
+  if (deps.operationHistory) {
+    for (const server of servers) {
+      operationHistory[server.serverKey] = deps.operationHistory.getRecent(server.serverKey, 8);
+    }
+  }
+
+  const autosyncDiagnostics: Record<string, unknown> = {};
+  if (deps.autoSyncService) {
+    const serverRecords = deps.workspaceRegistry.getAllServers();
+    for (const server of serverRecords) {
+      autosyncDiagnostics[server.serverKey] = deps.autoSyncService.getDiagnostics(
+        server.serverKey,
+        server.config,
+      );
+    }
+  }
+
   const templates = deps.templateService.listScoped().map(t => ({
     template: t.template,
     scope: t.scope,
@@ -83,6 +101,7 @@ export function buildDashboardSyncStatePayload(deps: DashboardPanelDeps): Dashbo
     defaultDebugPort: config.get('defaults.debugPort', 5005),
     defaultJavaHome: config.get('defaults.javaHome', ''),
     showStatusInSidebar: config.get('ui.showStatusInSidebar', true),
+    localTelemetryEnabled: config.get('telemetry.localMetrics.enabled', false),
   };
 
   const workspaceTrusted = deps.trustGate?.isTrusted() ?? vscode.workspace.isTrusted;
@@ -92,6 +111,8 @@ export function buildDashboardSyncStatePayload(deps: DashboardPanelDeps): Dashbo
     runtimeStates,
     deploymentStates,
     deploymentHealth,
+    operationHistory,
+    autosyncDiagnostics,
     templates,
     capabilities,
     workspaceFolders,

@@ -19,7 +19,7 @@ import { makeCtx } from './serverLifecycleHelpers';
 export interface ServerLifecycleDeployDeps {
   deployService: Pick<
     DeploymentService,
-    'deployUndeployed' | 'fullRedeploy' | 'redeployAll' | 'runHealthChecksForServer' | 'sync' | 'undeploy'
+    'deployUndeployed' | 'fullRedeploy' | 'redeployAll' | 'rollback' | 'runHealthChecksForServer' | 'sync' | 'undeploy'
   >;
   logger: Logger;
   getOutputSink?: (serverKey: ServerId, serverName: string) => OutputSink;
@@ -136,7 +136,7 @@ async function runTargetedDeploymentOperation(
   server: ServerLifecycleDeployEntry,
   entry: QueueEntry,
   options: {
-    kind: 'DeployFull' | 'Undeploy';
+    kind: 'DeployFull' | 'DeployRollback' | 'Undeploy';
     timeoutMs: number;
     operationId: OperationContext['operationId'];
     cancel: OperationContext['cancel'];
@@ -193,6 +193,22 @@ export async function runDeployFullOperation(
     operationId,
     cancel,
     run: (ctx, config, deployment) => deps.deployService.fullRedeploy(ctx, config, deployment),
+  });
+}
+
+export async function runDeploymentRollbackOperation(
+  deps: ServerLifecycleDeployDeps,
+  server: ServerLifecycleDeployEntry,
+  entry: QueueEntry,
+  operationId: OperationContext['operationId'],
+  cancel: OperationContext['cancel'],
+): Promise<void> {
+  await runTargetedDeploymentOperation(deps, server, entry, {
+    kind: 'DeployRollback',
+    timeoutMs: 600_000,
+    operationId,
+    cancel,
+    run: (ctx, config, deployment) => deps.deployService.rollback(ctx, config, deployment),
   });
 }
 

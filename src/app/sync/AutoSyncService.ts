@@ -55,6 +55,38 @@ interface WatchRegistration {
   policy: AutosyncPolicy;
 }
 
+export type AutosyncDiagnosticState =
+  | 'disabled'
+  | 'manual'
+  | 'not-watchable'
+  | 'suspended'
+  | 'watching'
+  | 'cooldown'
+  | 'inactive';
+
+export interface AutosyncDeploymentDiagnostics {
+  deploymentId: DeploymentId;
+  deployName: string;
+  deploymentType: DeploymentConfig['type'];
+  syncMode: DeploymentConfig['syncMode'];
+  state: AutosyncDiagnosticState;
+  active: boolean;
+  watchKind?: WatchSpec['kind'];
+  watchPath?: string;
+  pendingFiles: number;
+  pendingBytes: number;
+  cooldownRemainingMs: number;
+  message: string;
+}
+
+export interface AutosyncServerDiagnostics {
+  enabled: boolean;
+  suspended: boolean;
+  watcherCount: number;
+  watcherCap: number;
+  deployments: AutosyncDeploymentDiagnostics[];
+}
+
 /**
  * AutoSync service (§10.4-§10.6).
  * Coordinates file watchers, debouncing, storm protection, and failure cooldown.
@@ -233,6 +265,57 @@ export class AutoSyncService {
     return [...this.watchers.keys()].filter(key => key.startsWith(prefix)).length;
   }
 
+  /**
+   * Derived, read-only operator diagnostics for the dashboard.
+   * This intentionally reports current watcher/runtime facts only; it is not persisted config.
+   */
+  getDiagnostics(serverId: ServerId, config: ServerConfig): AutosyncServerDiagnostics {
+    const suspended = this.suspended.has(serverId);
+
+    return {
+      enabled: config.autosync.enabled,
+      suspended,
+      watcherCount: this.getWatcherCount(serverId),
+      watcherCap: WATCHER_GLOBAL_CAP,
+      deployments: config.deployments.map(dep => {
+        const key = this.watchKey(serverId, dep.id);
+        const registration = this.watchers.get(key);
+        const spec = resolveAutosyncWatchSpec(config, dep);
+        const cooldownRemainingMs = this.remainingCooldownMs(serverId, dep.id);
+        const pendingFiles = this.pendingChanges.get(key)?.length ?? 0;
+        const pendingBytes = this.pendingBytes.get(key) ?? 0;
+        const active = registration !== undefined;
+        const effectiveSpec = registration?.spec ?? spec;
+        const watchPath = effectiveSpec
+          ? effectiveSpec.kind === 'tree' ? effectiveSpec.root : effectiveSpec.path
+          : undefined;
+        const state = this.diagnosticState({
+          autosyncEnabled: config.autosync.enabled,
+          syncMode: dep.syncMode,
+          hasSpec: spec !== undefined,
+          suspended,
+          active,
+          cooldownRemainingMs,
+        });
+
+        return {
+          deploymentId: dep.id,
+          deployName: dep.deployName,
+          deploymentType: dep.type,
+          syncMode: dep.syncMode,
+          state,
+          active,
+          watchKind: effectiveSpec?.kind,
+          watchPath,
+          pendingFiles,
+          pendingBytes,
+          cooldownRemainingMs,
+          message: this.diagnosticMessage(state),
+        };
+      }),
+    };
+  }
+
   /** Dispose all watchers and timers. */
   dispose(): void {
     for (const registration of this.watchers.values()) {
@@ -247,6 +330,7 @@ export class AutoSyncService {
     this.pendingBytes.clear();
     this.failures.clear();
     this.lastDispatchAt.clear();
+    this.suspended.clear();
   }
 
   // ── Internal ──────────────────────────────────────────────────────
@@ -258,6 +342,42 @@ export class AutoSyncService {
       maxBatchBytes: config.autosync.maxBatchBytes,
       stormBackoffMs: config.autosync.stormBackoffMs,
     };
+  }
+
+  private diagnosticState(args: {
+    autosyncEnabled: boolean;
+    syncMode: DeploymentConfig['syncMode'];
+    hasSpec: boolean;
+    suspended: boolean;
+    active: boolean;
+    cooldownRemainingMs: number;
+  }): AutosyncDiagnosticState {
+    if (!args.autosyncEnabled) return 'disabled';
+    if (args.syncMode !== 'auto') return 'manual';
+    if (!args.hasSpec) return 'not-watchable';
+    if (args.suspended) return 'suspended';
+    if (args.cooldownRemainingMs > 0) return 'cooldown';
+    if (args.active) return 'watching';
+    return 'inactive';
+  }
+
+  private diagnosticMessage(state: AutosyncDiagnosticState): string {
+    switch (state) {
+      case 'disabled':
+        return 'Auto-sync is disabled for this server.';
+      case 'manual':
+        return 'Deployment sync mode is manual.';
+      case 'not-watchable':
+        return 'Deployment type or source path cannot be watched.';
+      case 'suspended':
+        return 'Watchers are suspended while the server is not running.';
+      case 'watching':
+        return 'Watching for local source changes.';
+      case 'cooldown':
+        return 'Sync is cooling down after repeated failures.';
+      case 'inactive':
+        return 'Watcher is inactive until the server is running.';
+    }
   }
 
   private watchKey(serverId: ServerId, deploymentId: DeploymentId): string {

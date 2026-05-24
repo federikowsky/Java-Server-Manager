@@ -82,6 +82,7 @@ describe('SchemaValidator', () => {
 
   it('accepts a valid minimal config', () => {
     const data = {
+      version: 1,
       servers: [{
         id: '550e8400-e29b-41d4-a716-446655440000',
         name: 'Test',
@@ -107,6 +108,46 @@ describe('SchemaValidator', () => {
     };
     const result = validator.validate(data, 'workspace');
     expect(result.ok).toBe(true);
+  });
+
+  it('accepts a legacy unversioned workspace config', () => {
+    const data = {
+      servers: [{
+        id: '550e8400-e29b-41d4-a716-446655440000',
+        name: 'Test',
+        type: 'tomcat',
+        runtime: { id: 'r1', homePath: '/opt/tomcat' },
+        instancePath: '/tmp/base',
+        javaHome: '/usr/lib/jvm/java-17',
+        host: '127.0.0.1',
+        ports: { http: 8080, debug: 5005 },
+        run: { env: {}, vmArgs: [] },
+        debug: { enabled: true, bind: '127.0.0.1', attachDelayMs: 1000 },
+        deployments: [],
+        autosync: {
+          enabled: true,
+          debounceMs: 400,
+          maxBatchFiles: 200,
+          maxBatchBytes: 20000000,
+          stormBackoffMs: 2000,
+          ignoreGlobs: [],
+        },
+        hooks: [],
+      }],
+    };
+    const result = validator.validate(data, 'workspace');
+    expect(result.ok).toBe(true);
+  });
+
+  it('rejects unsupported workspace config versions', () => {
+    const data = {
+      version: 999,
+      servers: [],
+    };
+    const result = validator.validate(data, 'workspace');
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.details).toContain('version');
   });
 
   it('rejects config with invalid port number', () => {

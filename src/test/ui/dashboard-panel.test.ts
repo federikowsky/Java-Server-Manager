@@ -6,16 +6,19 @@ const mocked = vi.hoisted(() => ({
   buildDashboardSyncStatePayload: vi.fn(() => ({
     servers: [],
     runtimeStates: {},
-    deploymentStates: {},
-    templates: [],
-    capabilities: {},
+	    deploymentStates: {},
+	    templates: [],
+	    operationHistory: {},
+	    autosyncDiagnostics: {},
+	    capabilities: {},
     workspaceFolders: [],
     settings: {
       defaultHttpPort: 8080,
       defaultDebugPort: 5005,
-      defaultJavaHome: '',
-      showStatusInSidebar: true,
-    },
+	      defaultJavaHome: '',
+	      showStatusInSidebar: true,
+	      localTelemetryEnabled: false,
+	    },
     workspaceTrusted: true,
   })),
   buildServerFormSchema: vi.fn(() => ({ title: 'Server Form', sections: [] })),
@@ -106,6 +109,19 @@ vi.mock('vscode', () => ({
 vi.mock('@core/authoring', () => ({
   serverConfigToFormData: (...args: unknown[]) => mocked.serverConfigToFormData(...args),
   templateToServerFormData: (...args: unknown[]) => mocked.templateToServerFormData(...args),
+  validateHookList: (value: unknown) => {
+    const hook = Array.isArray(value) ? value[0] as Record<string, unknown> | undefined : undefined;
+    if (!hook || typeof hook['id'] !== 'string') {
+      return [{ field: 'hook[0].id', message: 'Hook ID is required.' }];
+    }
+    if ((hook['kind'] ?? 'command') === 'command') {
+      const command = hook['command'] as Record<string, unknown> | undefined;
+      if (!command || typeof command['line'] !== 'string' || command['line'].trim().length === 0) {
+        return [{ field: 'hook[0].command.line', message: 'Command line is required.' }];
+      }
+    }
+    return [];
+  },
 }));
 
 vi.mock('@ui/webviews/hookTaskOptions', () => ({
@@ -188,13 +204,16 @@ function makeDeps(trusted: boolean) {
     lifecycle: {
       getRuntime: vi.fn(() => undefined),
     },
-    templateService: {
-      get: vi.fn(),
-      listScoped: vi.fn(() => []),
-      save: vi.fn(async () => ({ ok: true })),
-      delete: vi.fn(async () => ({ ok: true })),
-    },
-    pluginRegistry: {
+	    templateService: {
+	      get: vi.fn(),
+	      listScoped: vi.fn(() => []),
+	      save: vi.fn(async () => ({ ok: true })),
+	      delete: vi.fn(async () => ({ ok: true })),
+	    },
+	    localTelemetry: {
+	      clear: vi.fn(async () => undefined),
+	    },
+	    pluginRegistry: {
       getSupportedTypes: vi.fn(() => []),
       get: vi.fn(() => undefined),
     },
@@ -263,16 +282,19 @@ describe('DashboardPanel host boundary', () => {
     mocked.buildDashboardSyncStatePayload.mockReturnValue({
       servers: [],
       runtimeStates: {},
-      deploymentStates: {},
-      templates: [],
+	      deploymentStates: {},
+	      operationHistory: {},
+	      autosyncDiagnostics: {},
+	      templates: [],
       capabilities: {},
       workspaceFolders: [],
       settings: {
         defaultHttpPort: 8080,
         defaultDebugPort: 5005,
-        defaultJavaHome: '',
-        showStatusInSidebar: true,
-      },
+	        defaultJavaHome: '',
+	        showStatusInSidebar: true,
+	        localTelemetryEnabled: false,
+	      },
       workspaceTrusted: true,
     });
     mocked.buildServerFormSchema.mockReturnValue({ title: 'Server Form', sections: [] });
@@ -343,6 +365,22 @@ describe('DashboardPanel host boundary', () => {
     );
   });
 
+  it('clears local telemetry when the opt-in setting is disabled', async () => {
+    const { deps, panel } = setupPanel(true);
+
+    const result = await (panel as any).handleSettingsSave({
+      localTelemetryEnabled: false,
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(mocked.configUpdate).toHaveBeenCalledWith(
+      'telemetry.localMetrics.enabled',
+      false,
+      1,
+    );
+    expect(deps.localTelemetry.clear).toHaveBeenCalledOnce();
+  });
+
   it('queues navigation until ready, then resets form state and flushes host messages', async () => {
     const { panel } = setupPanel();
     panel.show({ type: 'server', id: 'srv-1' });
@@ -404,6 +442,225 @@ describe('DashboardPanel host boundary', () => {
       ok: true,
       message: 'completed',
       data: { serverId: 'srv-1' },
+    }));
+  });
+
+  it('allows deployment log commands from the dashboard boundary', async () => {
+    const { panel } = setupPanel();
+    panel.show();
+    await flushPromises();
+
+    mocked.executeCommand.mockResolvedValue({ ok: true });
+
+    await emitWebviewMessage({
+      v: WEBVIEW_PROTOCOL_VERSION,
+      command: 'executeCommand',
+      id: 'jsm.deployment.openLogs',
+      args: [{
+        serverId: 'srv-1',
+        serverKey: 'file:///ws::srv-1',
+        workspaceFolderUri: 'file:///ws',
+        deploymentId: 'dep-1',
+      }],
+      requestId: 'req-logs',
+    });
+
+    expect(mocked.executeCommand).toHaveBeenCalledWith('jsm.deployment.openLogs', {
+      serverId: 'srv-1',
+      serverKey: 'file:///ws::srv-1',
+      workspaceFolderUri: 'file:///ws',
+      deploymentId: 'dep-1',
+    });
+    expect(mocked.postMessage).toHaveBeenCalledWith(expect.objectContaining({
+      command: 'commandResult',
+      requestId: 'req-logs',
+      ok: true,
+    }));
+  });
+
+  it('allows deployment rollback commands from the dashboard boundary', async () => {
+    const { panel } = setupPanel();
+    panel.show();
+    await flushPromises();
+
+    mocked.executeCommand.mockResolvedValue({ ok: true });
+
+    await emitWebviewMessage({
+      v: WEBVIEW_PROTOCOL_VERSION,
+      command: 'executeCommand',
+      id: 'jsm.deployment.rollback',
+      args: [{
+        serverId: 'srv-1',
+        serverKey: 'file:///ws::srv-1',
+        workspaceFolderUri: 'file:///ws',
+        deploymentId: 'dep-1',
+      }],
+      requestId: 'req-rollback',
+    });
+
+    expect(mocked.executeCommand).toHaveBeenCalledWith('jsm.deployment.rollback', {
+      serverId: 'srv-1',
+      serverKey: 'file:///ws::srv-1',
+      workspaceFolderUri: 'file:///ws',
+      deploymentId: 'dep-1',
+    });
+    expect(mocked.postMessage).toHaveBeenCalledWith(expect.objectContaining({
+      command: 'commandResult',
+      requestId: 'req-rollback',
+      ok: true,
+    }));
+  });
+
+  it('allows validated hook test commands from the dashboard boundary', async () => {
+    const { panel } = setupPanel();
+    panel.show();
+    await flushPromises();
+
+    mocked.executeCommand.mockResolvedValue({ ok: true, message: 'Hook "hook-1" completed.' });
+
+    const arg = {
+      serverId: 'srv-1',
+      serverKey: 'file:///ws::srv-1',
+      workspaceFolderUri: 'file:///ws',
+      hook: {
+        id: 'hook-1',
+        enabled: true,
+        phase: 'pre',
+        event: 'lifecycle.start',
+        kind: 'command',
+        timeoutMs: 60000,
+        continueOnError: false,
+        command: { mode: 'shell', line: 'echo hook' },
+      },
+    };
+
+    await emitWebviewMessage({
+      v: WEBVIEW_PROTOCOL_VERSION,
+      command: 'executeCommand',
+      id: 'jsm.hook.test',
+      args: [arg],
+      requestId: 'req-hook-test',
+    });
+
+    expect(mocked.executeCommand).toHaveBeenCalledWith('jsm.hook.test', arg);
+    expect(mocked.postMessage).toHaveBeenCalledWith(expect.objectContaining({
+      command: 'commandResult',
+      requestId: 'req-hook-test',
+      ok: true,
+      message: 'Hook "hook-1" completed.',
+    }));
+  });
+
+  it('rejects invalid hook test payloads before they can execute commands', async () => {
+    const { panel } = setupPanel();
+    panel.show();
+    await flushPromises();
+
+    await emitWebviewMessage({
+      v: WEBVIEW_PROTOCOL_VERSION,
+      command: 'executeCommand',
+      id: 'jsm.hook.test',
+      args: [{
+        serverId: 'srv-1',
+        serverKey: 'file:///ws::srv-1',
+        workspaceFolderUri: 'file:///ws',
+        hook: {
+          id: 'hook-1',
+          enabled: true,
+          phase: 'pre',
+          event: 'lifecycle.start',
+          kind: 'command',
+          timeoutMs: 60000,
+          continueOnError: false,
+          command: { mode: 'shell', line: '' },
+        },
+      }],
+      requestId: 'req-hook-invalid',
+    });
+
+    expect(mocked.executeCommand).not.toHaveBeenCalledWith('jsm.hook.test', expect.anything());
+    expect(mocked.postMessage).toHaveBeenCalledWith(expect.objectContaining({
+      command: 'commandResult',
+      requestId: 'req-hook-invalid',
+      ok: false,
+      message: 'Invalid arguments for dashboard command.',
+    }));
+  });
+
+  it('allows dashboard refresh without arguments', async () => {
+    const { panel } = setupPanel();
+    panel.show();
+    await flushPromises();
+
+    mocked.executeCommand.mockResolvedValue(undefined);
+
+    await emitWebviewMessage({
+      v: WEBVIEW_PROTOCOL_VERSION,
+      command: 'executeCommand',
+      id: 'jsm.view.refresh',
+      args: [],
+      requestId: 'req-refresh',
+    });
+
+    expect(mocked.executeCommand).toHaveBeenCalledWith('jsm.view.refresh');
+    expect(mocked.postMessage).toHaveBeenCalledWith(expect.objectContaining({
+      command: 'commandResult',
+      requestId: 'req-refresh',
+      ok: true,
+    }));
+  });
+
+  it('allows port assistant requests from the dashboard boundary', async () => {
+    const { panel } = setupPanel();
+    panel.show();
+    await flushPromises();
+
+    mocked.executeCommand.mockResolvedValue({
+      ok: true,
+      message: 'Port 8080 is available on 127.0.0.1.',
+      data: { field: 'httpPort', port: 8080, free: true },
+    });
+
+    await emitWebviewMessage({
+      v: WEBVIEW_PROTOCOL_VERSION,
+      command: 'executeCommand',
+      id: 'jsm.port.suggest',
+      args: [{ field: 'httpPort', port: 8080, host: '127.0.0.1' }],
+      requestId: 'req-port',
+    });
+
+    expect(mocked.executeCommand).toHaveBeenCalledWith('jsm.port.suggest', {
+      field: 'httpPort',
+      port: 8080,
+      host: '127.0.0.1',
+    });
+    expect(mocked.postMessage).toHaveBeenCalledWith(expect.objectContaining({
+      command: 'commandResult',
+      requestId: 'req-port',
+      ok: true,
+      message: 'Port 8080 is available on 127.0.0.1.',
+    }));
+  });
+
+  it('rejects malformed port assistant requests before command execution', async () => {
+    const { panel } = setupPanel();
+    panel.show();
+    await flushPromises();
+
+    await emitWebviewMessage({
+      v: WEBVIEW_PROTOCOL_VERSION,
+      command: 'executeCommand',
+      id: 'jsm.port.suggest',
+      args: [{ field: 'httpPort', port: 70000, host: '127.0.0.1' }],
+      requestId: 'req-port-invalid',
+    });
+
+    expect(mocked.executeCommand).not.toHaveBeenCalledWith('jsm.port.suggest', expect.anything());
+    expect(mocked.postMessage).toHaveBeenCalledWith(expect.objectContaining({
+      command: 'commandResult',
+      requestId: 'req-port-invalid',
+      ok: false,
+      message: 'Invalid arguments for dashboard command.',
     }));
   });
 
@@ -512,6 +769,62 @@ describe('DashboardPanel host boundary', () => {
     expect((panel as any).currentFormId).toBe('jsm.serverForm');
     expect((panel as any).currentFormTargetId).toBe('srv-1');
     expect((panel as any).currentFormTargetWorkspaceFolderUri).toBe('file:///ws');
+  });
+
+  it('does not open built-in gallery templates in edit mode', async () => {
+    const { deps, panel } = setupPanel();
+    deps.templateService.listScoped.mockReturnValue([{
+      key: 'gallery:gallery.tomcat.local-dev',
+      scope: 'gallery',
+      template: {
+        id: 'gallery.tomcat.local-dev',
+        name: 'Tomcat Local Dev',
+        pluginType: 'tomcat',
+        serverDefaults: {},
+      },
+    }]);
+
+    panel.show();
+    await flushPromises();
+    mocked.postMessage.mockClear();
+
+    await emitWebviewMessage({
+      v: WEBVIEW_PROTOCOL_VERSION,
+      command: 'executeCommand',
+      id: 'jsm.internal.requestTemplateSchema',
+      args: ['edit', 'gallery.tomcat.local-dev'],
+    });
+
+    expect(mocked.buildTemplateFormSchema).not.toHaveBeenCalled();
+    expect(mocked.postMessage).toHaveBeenCalledWith(expect.objectContaining({
+      command: 'error',
+      message: 'Built-in gallery templates cannot be edited.',
+    }));
+    expect((panel as any).currentFormId).toBeUndefined();
+    expect((panel as any).currentFormTargetScope).toBeUndefined();
+  });
+
+  it('does not delete built-in gallery templates', async () => {
+    const { deps, panel } = setupPanel();
+    deps.templateService.listScoped.mockReturnValue([{
+      key: 'gallery:gallery.tomcat.local-dev',
+      scope: 'gallery',
+      template: {
+        id: 'gallery.tomcat.local-dev',
+        name: 'Tomcat Local Dev',
+        pluginType: 'tomcat',
+        serverDefaults: {},
+      },
+    }]);
+
+    const result = await (panel as any).handleTemplateDelete('gallery.tomcat.local-dev');
+
+    expect(result).toEqual({
+      ok: false,
+      message: 'Built-in gallery templates cannot be deleted.',
+    });
+    expect(mocked.showWarningMessage).not.toHaveBeenCalled();
+    expect(deps.templateService.delete).not.toHaveBeenCalled();
   });
 
   it('always posts submitFinished even when submit handling throws', async () => {

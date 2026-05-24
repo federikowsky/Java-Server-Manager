@@ -115,11 +115,25 @@
         onSelect: () => handleAction('jsm.deployment.redeploy', dep),
       },
       {
+        id: 'rollback',
+        label: 'Roll back',
+        icon: 'history',
+        disabled: deploying,
+        onSelect: () => handleAction('jsm.deployment.rollback', dep),
+      },
+      {
         id: 'reveal',
         label: 'Reveal source',
         icon: 'download',
         disabled: deploying,
         onSelect: () => handleAction('jsm.deployment.revealSource', dep),
+      },
+      {
+        id: 'logs',
+        label: 'Open logs',
+        icon: 'terminal',
+        disabled: deploying,
+        onSelect: () => handleAction('jsm.deployment.openLogs', dep),
       },
       {
         id: 'remove',

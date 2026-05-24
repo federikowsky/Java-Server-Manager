@@ -138,6 +138,43 @@ describe('ServerProvisioningService', () => {
     expect(configService.addServer).not.toHaveBeenCalled();
   });
 
+  it('plans a duplicate without writing managed instance files or inventory', async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'jsm-plan-'));
+    const plannedPath = path.join(tmpDir, 'planned-only');
+    pathResolver.resolve.mockReturnValue(plannedPath);
+    const source = makeServer('srv-source', 'Imported Tomcat');
+
+    const result = await service.planDuplicateServer(source, { keepName: true });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.id).not.toBe(source.id);
+    expect(result.value.runtime.id).not.toBe(source.runtime.id);
+    expect(result.value.name).toBe('Imported Tomcat');
+    expect(result.value.instancePath).toBe(plannedPath);
+    expect(pathResolver.resolve).toHaveBeenCalledWith(result.value.id);
+    expect(configService.addServer).not.toHaveBeenCalled();
+    await expect(fs.stat(path.join(plannedPath, '.jsm-managed-instance'))).rejects.toBeDefined();
+  });
+
+  it('applies a planned duplicate using the planned identity and instance path', async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'jsm-planned-'));
+    const plannedPath = path.join(tmpDir, 'planned-instance');
+    const source = makeServer('srv-source', 'Imported Tomcat');
+    const planned = {
+      ...makeServer('srv-planned', 'Imported Tomcat'),
+      instancePath: plannedPath,
+      runtime: { id: 'rt-planned', homePath: source.runtime.homePath, version: '10.1' },
+    };
+
+    const result = await service.provisionPlannedDuplicate(source, planned);
+
+    expect(result.ok).toBe(true);
+    expect(configService.addServer).toHaveBeenCalledWith(planned);
+    await expect(fs.readFile(path.join(plannedPath, '.jsm-managed-instance'), 'utf8'))
+      .resolves.toContain('srv-planned');
+  });
+
   it('blocks removeServer before config or filesystem cleanup when workspace is untrusted', async () => {
     trustGate.isTrusted.mockReturnValue(false);
 

@@ -362,6 +362,26 @@ export function registerDeploymentCommands(
       );
     }],
 
+    ['jsm.deployment.rollback', async (arg: unknown) => {
+      const resolvedArg = requireDeploymentArg(arg, 'Rolling back a deployment');
+      if (!resolvedArg) return;
+      const context = requireDeploymentContext(resolvedArg);
+      if (!context) return;
+      const answer = await vscode.window.showWarningMessage(
+        `Roll back deployment "${context.deployment.deployName}" to the latest retained artifact backup?`,
+        { modal: true },
+        'Roll Back',
+      );
+      if (answer !== 'Roll Back') return;
+
+      await runQueuedDeploymentAction(
+        resolvedArg.serverKey,
+        `Rolling back ${context.deployment.deployName}...`,
+        () => lifecycle.enqueueDeploymentRollback(resolvedArg.serverKey, resolvedArg.deploymentId),
+        `Rollback completed for "${context.deployment.deployName}".`,
+      );
+    }],
+
     // §8.2 — jsm.deployment.undeploy
     ['jsm.deployment.undeploy', async (arg: unknown) => {
       const resolvedArg = requireDeploymentArg(arg, 'Undeploying a deployment');

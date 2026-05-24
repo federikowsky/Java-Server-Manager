@@ -39,6 +39,7 @@ import { STARTUP_CALLBACK_DEBOUNCE_MS } from '../../constants';
 import { makeCtx, probeAfterStartupEvent, sleep, waitForHttpReadiness } from './serverLifecycleHelpers';
 import {
   runDeploymentHealthChecksOperation,
+  runDeploymentRollbackOperation,
   runDeployFullOperation,
   runDeploySyncOperation,
   runDeployUndeployedOperation,
@@ -190,6 +191,14 @@ export class ServerLifecycle {
     });
   }
 
+  /** Enqueue rollback to the latest deployment backup for one deployment. */
+  enqueueDeploymentRollback(serverId: ServerId, deploymentId: DeploymentId): Result<void, JsmError> {
+    return this.enqueueTrustedOperation(serverId, {
+      kind: 'DeployRollback',
+      targetDeploymentId: deploymentId,
+    });
+  }
+
   /** Enqueue undeploy for one deployment. */
   enqueueUndeploy(serverId: ServerId, deploymentId: DeploymentId): Result<void, JsmError> {
     return this.enqueueTrustedOperation(serverId, {
@@ -321,6 +330,7 @@ export class ServerLifecycle {
       serverId,
       operationId,
       kind,
+      targetDeploymentId: entry.targetDeploymentId,
     });
 
     try {
@@ -344,6 +354,9 @@ export class ServerLifecycle {
           break;
         case 'DeployFull':
           await this.doDeployFull(server, entry, operationId, cancellation.token);
+          break;
+        case 'DeployRollback':
+          await this.doDeploymentRollback(server, entry, operationId, cancellation.token);
           break;
         case 'Undeploy':
           await this.doUndeploy(server, entry, operationId, cancellation.token);
@@ -370,6 +383,7 @@ export class ServerLifecycle {
         serverId,
         operationId,
         kind,
+        targetDeploymentId: entry.targetDeploymentId,
       });
     } catch (cause) {
       const error = cause instanceof JsmError
@@ -380,6 +394,7 @@ export class ServerLifecycle {
         serverId,
         operationId,
         kind,
+        targetDeploymentId: entry.targetDeploymentId,
         error,
       });
       throw error;
@@ -796,6 +811,15 @@ export class ServerLifecycle {
     cancel: OperationContext['cancel'],
   ): Promise<void> {
     await runDeployFullOperation(this.deps, server, entry, busOperationId, cancel);
+  }
+
+  private async doDeploymentRollback(
+    server: ServerEntry,
+    entry: QueueEntry,
+    busOperationId: OperationContext['operationId'],
+    cancel: OperationContext['cancel'],
+  ): Promise<void> {
+    await runDeploymentRollbackOperation(this.deps, server, entry, busOperationId, cancel);
   }
 
   private async doUndeploy(

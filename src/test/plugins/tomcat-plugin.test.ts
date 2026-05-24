@@ -1436,6 +1436,47 @@ describe('TomcatPlugin — deployFull', () => {
     expect(content).toBe('PK-fake-war-content');
   });
 
+  it('retains the previous artifact and rolls back to it', async () => {
+    const instancePath = path.join(tmpDir, 'instance');
+    const webapps = path.join(instancePath, 'webapps');
+    await fs.mkdir(webapps, { recursive: true });
+
+    const sourcePath = path.join(tmpDir, 'app-new.war');
+    await fs.writeFile(sourcePath, 'new-war-content');
+
+    const config = fakeConfig(path.join(tmpDir, 'home'), instancePath);
+    const dep: DeploymentConfig = {
+      id: 'dep-rollback' as DeploymentConfig['id'],
+      type: 'war',
+      sourcePath,
+      deployName: 'myapp',
+      syncMode: 'manual',
+      hotReload: false,
+      ignoreGlobs: [],
+      hooks: [],
+    };
+    const plan = {
+      targetRoot: webapps,
+      targetPath: path.join(webapps, 'myapp.war'),
+      strategy: 'copy-war' as const,
+      notes: [],
+    };
+
+    await fs.writeFile(plan.targetPath, 'old-war-content');
+
+    const deployResult = await plugin.deployFull(dummyCtx(), config, dep, plan);
+    expect(deployResult.ok).toBe(true);
+    await expect(fs.readFile(plan.targetPath, 'utf-8')).resolves.toBe('new-war-content');
+
+    const backupEntries = (await fs.readdir(webapps)).filter(entry => entry.startsWith('myapp.war.backup.'));
+    expect(backupEntries).toHaveLength(1);
+    await expect(fs.readFile(path.join(webapps, backupEntries[0]), 'utf-8')).resolves.toBe('old-war-content');
+
+    const rollbackResult = await plugin.rollbackDeploy(dummyCtx(), config, dep, plan);
+    expect(rollbackResult.ok).toBe(true);
+    await expect(fs.readFile(plan.targetPath, 'utf-8')).resolves.toBe('old-war-content');
+  });
+
   it('returns error when source does not exist', async () => {
     const config = fakeConfig(path.join(tmpDir, 'home'), path.join(tmpDir, 'instance'));
     const dep: DeploymentConfig = {

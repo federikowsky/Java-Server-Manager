@@ -36,9 +36,9 @@ export interface EventMap {
   // Deployment runtime
   DeploymentStateChanged: { serverId: ServerId; deploymentId: DeploymentId; state: DeploymentState };
   // Operations
-  OperationStarted:       { serverId: ServerId; operationId: OperationId; kind: OperationKind };
-  OperationCompleted:     { serverId: ServerId; operationId: OperationId; kind: OperationKind };
-  OperationFailed:        { serverId: ServerId; operationId: OperationId; kind: OperationKind; error: JsmError };
+  OperationStarted:       { serverId: ServerId; operationId: OperationId; kind: OperationKind; targetDeploymentId?: DeploymentId };
+  OperationCompleted:     { serverId: ServerId; operationId: OperationId; kind: OperationKind; targetDeploymentId?: DeploymentId };
+  OperationFailed:        { serverId: ServerId; operationId: OperationId; kind: OperationKind; targetDeploymentId?: DeploymentId; error: JsmError };
   // Workspace
   WorkspaceLoaded:        { serverCount: number };
   ConfigChanged:          { source: 'user' | 'migration' | 'wizard' | 'external'; workspaceFolderUri: string };

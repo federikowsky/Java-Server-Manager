@@ -6,7 +6,7 @@ import { writable } from 'svelte/store';
 import type { DashboardNavigationTarget, FormSchema, SpaServerRecord, SpaSettings } from '../protocol';
 
 /** Mirrors `syncState` payload in protocol (host → webview). */
-export type SpaTemplateRow = { template: unknown; scope: 'global' | 'workspace' };
+export type SpaTemplateRow = { template: unknown; scope: 'global' | 'workspace' | 'gallery' };
 
 /** The form schema sent by the host on init. */
 export const schema = writable<FormSchema | null>(null);
@@ -48,6 +48,10 @@ export const spaState = writable<{
   deploymentStates: Record<string, Record<string, string>>; // serverKey -> deploymentId -> state
   /** From host syncState; HTTP health probe results per deployment (when configured). */
   deploymentHealth: Record<string, Record<string, { ok: boolean; latencyMs?: number }>>;
+  /** From host syncState; derived recent operation timeline per server. */
+  operationHistory: Record<string, unknown[]>;
+  /** From host syncState; derived autosync watcher status per server. */
+  autosyncDiagnostics: Record<string, unknown>;
   templates: SpaTemplateRow[];
   capabilities: Record<string, unknown>;
   workspaceFolders: Array<{ uri: string; name: string }>;
@@ -70,6 +74,8 @@ export const spaState = writable<{
   runtimeStates: {},
   deploymentStates: {},
   deploymentHealth: {},
+  operationHistory: {},
+  autosyncDiagnostics: {},
   templates: [],
   capabilities: {},
   workspaceFolders: [],

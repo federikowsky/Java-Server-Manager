@@ -18,3 +18,9 @@ tools/tomcat-startup-listener/build/
 .DS_Store
 TODO
 docs/dev/*
+docs/execution/BACKLOG.md
+docs/execution/DECISIONS.md
+docs/execution/HANDOFF.md
+docs/execution/STATUS.md
+docs/execution/VALIDATION.md
+docs/execution/WORKLOG.md

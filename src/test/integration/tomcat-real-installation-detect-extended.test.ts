@@ -9,8 +9,8 @@ import type { Logger } from '@core/types/logger';
 import * as fsSync from 'fs';
 import * as path from 'path';
 
-/** Must match `user-tomcat-jdk-paths-sanity.test.ts` (user Inputs). */
-const USER_TOMCAT_HOME = '/Users/federicofilippi/Desktop/apache-tomcat-9.0.105';
+/** Must match `user-tomcat-jdk-paths-sanity.test.ts` (user Inputs); CI can override with env. */
+const USER_TOMCAT_HOME = process.env.JSM_TEST_TOMCAT_HOME || '/Users/federicofilippi/Desktop/apache-tomcat-9.0.105';
 
 function mockKeyValueStore(): KeyValueStore {
   const data = new Map<string, unknown>();

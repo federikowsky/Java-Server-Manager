@@ -128,6 +128,19 @@ export class ServerProvisioningService {
     source: ServerConfig,
     options?: { keepName?: boolean },
   ): Promise<Result<ServerConfig, JsmError>> {
+    const planResult = await this.planDuplicateServer(source, options);
+    if (!planResult.ok) return planResult;
+
+    return this.provisionPlannedDuplicate(source, planResult.value);
+  }
+
+  /**
+   * Build and validate the cloned config for a duplicate/import without writing files or inventory.
+   */
+  async planDuplicateServer(
+    source: ServerConfig,
+    options?: { keepName?: boolean },
+  ): Promise<Result<ServerConfig, JsmError>> {
     const trustResult = requireWorkspaceTrust(this.trustGate, 'provision managed servers');
     if (!trustResult.ok) return trustResult;
 
@@ -146,51 +159,66 @@ export class ServerProvisioningService {
       }));
     }
 
-    const newId = uuid();
-    const instancePath = this.pathResolver.resolve(newId);
-    const cloned: ServerConfig = {
-      ...source,
-      id: newId,
-      name: keepName ? source.name : `${source.name} (Copy)`,
-      runtime: {
-        ...source.runtime,
-        id: uuid(),
-      },
-      instancePath,
-      deployments: source.deployments.map(d => ({ ...d, id: uuid() })),
-      hooks: source.hooks.map(h => ({ ...h })),
-      autosync: { ...source.autosync },
-      pluginConfig: source.pluginConfig ? { ...source.pluginConfig } : undefined,
-    };
+    const cloned = this.buildDuplicateServerConfig(source, keepName);
 
     const validateResult = await plugin.validateConfig(cloned);
     if (!validateResult.ok) {
       return validateResult;
     }
 
-    const markerResult = await this.writeManagedInstanceMarker(cloned.instancePath, cloned.id);
+    return ok(cloned);
+  }
+
+  /** Apply a previously validated duplicate/import plan. */
+  async provisionPlannedDuplicate(
+    source: ServerConfig,
+    planned: ServerConfig,
+  ): Promise<Result<ServerConfig, JsmError>> {
+    const trustResult = requireWorkspaceTrust(this.trustGate, 'provision managed servers');
+    if (!trustResult.ok) return trustResult;
+
+    const plugin = this.pluginRegistry.get(source.type);
+    if (!plugin) {
+      return err(new JsmError({
+        code: ErrorCode.Unsupported,
+        message: `No plugin registered for server type '${source.type}'`,
+      }));
+    }
+    if (!plugin.initializeInstancePath) {
+      return err(new JsmError({
+        code: ErrorCode.Unsupported,
+        message: `Plugin '${source.type}' does not support managed instance provisioning`,
+      }));
+    }
+
+    const validateResult = await plugin.validateConfig(planned);
+    if (!validateResult.ok) {
+      return validateResult;
+    }
+
+    const markerResult = await this.writeManagedInstanceMarker(planned.instancePath, planned.id);
     if (!markerResult.ok) {
       return markerResult;
     }
 
     const initResult = await plugin.initializeInstancePath(
       source.runtime.homePath,
-      cloned.instancePath,
-      cloned,
+      planned.instancePath,
+      planned,
     );
     if (!initResult.ok) {
-      await this.cleanupManagedInstance(cloned.instancePath);
+      await this.cleanupManagedInstance(planned.instancePath);
       return initResult;
     }
 
-    const saveResult = await this.configService.addServer(cloned);
+    const saveResult = await this.configService.addServer(planned);
     if (!saveResult.ok) {
-      await this.cleanupManagedInstance(cloned.instancePath);
+      await this.cleanupManagedInstance(planned.instancePath);
       return err(saveResult.error);
     }
 
-    this.logger.info(`ServerProvisioningService: duplicated server '${source.name}' as '${cloned.name}'`);
-    return ok(cloned);
+    this.logger.info(`ServerProvisioningService: duplicated server '${source.name}' as '${planned.name}'`);
+    return ok(planned);
   }
 
   async removeServer(serverId: string): Promise<Result<void, JsmError>> {
@@ -265,6 +293,24 @@ export class ServerProvisioningService {
       },
       hooks: request.hooks ?? [],
       pluginConfig: request.pluginConfig ?? defaults.pluginConfig,
+    };
+  }
+
+  private buildDuplicateServerConfig(source: ServerConfig, keepName: boolean): ServerConfig {
+    const newId = uuid();
+    return {
+      ...source,
+      id: newId,
+      name: keepName ? source.name : `${source.name} (Copy)`,
+      runtime: {
+        ...source.runtime,
+        id: uuid(),
+      },
+      instancePath: this.pathResolver.resolve(newId),
+      deployments: source.deployments.map(d => ({ ...d, id: uuid() })),
+      hooks: source.hooks.map(h => ({ ...h })),
+      autosync: { ...source.autosync },
+      pluginConfig: source.pluginConfig ? { ...source.pluginConfig } : undefined,
     };
   }
 

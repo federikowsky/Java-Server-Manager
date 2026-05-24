@@ -3,6 +3,7 @@ import type {
   ServerId,
 } from '@core/types';
 import type { ServerRuntimeState } from '@core/types/runtime';
+import type { LocalTelemetrySnapshot } from '@app/telemetry';
 
 // ── Log Redaction (§12.6) ──────────────────────────────────────────────────
 
@@ -30,6 +31,7 @@ export interface DiagnosticsBundle {
     config: Omit<ServerConfig, 'run'> & { run: { env: Record<string, string>; vmArgs: string[] } };
     runtimeState: ServerRuntimeState | undefined;
   }>;
+  localTelemetry?: LocalTelemetrySnapshot;
   logs: string;
 }
 
@@ -42,17 +44,20 @@ export class DiagnosticsService {
   private readonly getConfigs: () => ServerConfig[];
   private readonly getRuntimeState: (serverId: ServerId) => ServerRuntimeState | undefined;
   private readonly getLogBuffer: () => string;
+  private readonly getLocalTelemetrySnapshot?: () => LocalTelemetrySnapshot | undefined;
 
   constructor(deps: {
     extensionVersion: string;
     getConfigs: () => ServerConfig[];
     getRuntimeState: (serverId: ServerId) => ServerRuntimeState | undefined;
     getLogBuffer: () => string;
+    getLocalTelemetrySnapshot?: () => LocalTelemetrySnapshot | undefined;
   }) {
     this.extensionVersion = deps.extensionVersion;
     this.getConfigs = deps.getConfigs;
     this.getRuntimeState = deps.getRuntimeState;
     this.getLogBuffer = deps.getLogBuffer;
+    this.getLocalTelemetrySnapshot = deps.getLocalTelemetrySnapshot;
   }
 
   /**
@@ -68,12 +73,17 @@ export class DiagnosticsService {
 
     const logs = this.redactString(this.getLogBuffer());
 
-    return {
+    const bundle: DiagnosticsBundle = {
       timestamp: new Date().toISOString(),
       extensionVersion: this.extensionVersion,
       servers,
       logs,
     };
+    const localTelemetry = this.getLocalTelemetrySnapshot?.();
+    if (localTelemetry) {
+      bundle.localTelemetry = localTelemetry;
+    }
+    return bundle;
   }
 
   /**

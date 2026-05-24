@@ -120,6 +120,7 @@ function mockHookRunner() {
 function mockDeployService() {
   return {
     fullRedeploy: vi.fn(async () => ok(undefined)),
+    rollback: vi.fn(async () => ok(undefined)),
     undeploy: vi.fn(async () => ok(undefined)),
     redeployAll: vi.fn(async () => {}),
     deployUndeployed: vi.fn(async () => {}),
@@ -1343,6 +1344,26 @@ describe('ServerLifecycle', () => {
         }),
       }));
       expect(deployService.fullRedeploy).not.toHaveBeenCalled();
+    });
+
+    it('dispatches DeployRollback with resolved deployment context', async () => {
+      const { config, executor } = registerWithDeployment();
+
+      await executor({ kind: 'DeployRollback', targetDeploymentId: 'dep-1' });
+
+      expect(deployService.rollback).toHaveBeenCalledWith(
+        expect.objectContaining({
+          serverId: 'srv-1',
+          kind: 'DeployRollback',
+          targetDeploymentId: 'dep-1',
+        }),
+        config,
+        config.deployments[0],
+      );
+      expect(bus.emit).toHaveBeenCalledWith('OperationCompleted', expect.objectContaining({
+        serverId: 'srv-1',
+        kind: 'DeployRollback',
+      }));
     });
 
     it('dispatches Undeploy with resolved deployment context', async () => {

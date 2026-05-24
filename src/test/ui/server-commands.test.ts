@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { DeploymentConfig, ServerConfig } from '@core/types/domain';
+import type { DeploymentConfig, HookConfig, ServerConfig } from '@core/types/domain';
 import { ok, err } from '@core/result';
 import { JsmError } from '@core/errors/JsmError';
 import { ErrorCode } from '@core/errors/codes';
@@ -81,6 +81,7 @@ vi.mock('vscode', () => ({
 const { registerServerCommands } = await import('@ui/commands/server-commands');
 const { ServerNode } = await import('@ui/tree/ServerTreeViewProvider');
 const { makeWorkspaceServerKey } = await import('@app/config');
+const { CURRENT_WORKSPACE_CONFIG_VERSION } = await import('@infra/fs/ConfigRepo');
 
 function makeServer(id = 'srv-1', name = 'My Tomcat'): ServerConfig {
   return {
@@ -110,6 +111,20 @@ function makeDeployment(id = 'dep-1', name = 'myapp'): DeploymentConfig {
     hotReload: false,
     ignoreGlobs: [],
     hooks: [],
+  };
+}
+
+function makeHook(overrides: Partial<HookConfig> = {}): HookConfig {
+  return {
+    id: 'hook-1',
+    enabled: true,
+    phase: 'pre',
+    event: 'lifecycle.start',
+    kind: 'command',
+    timeoutMs: 60_000,
+    continueOnError: false,
+    command: { mode: 'shell', line: 'echo hook' },
+    ...overrides,
   };
 }
 
@@ -173,7 +188,20 @@ function mockDeps() {
       generateBundleText: vi.fn(() => 'diag'),
     },
     logChannel: {
+      getChannel: vi.fn(() => ({
+        append: vi.fn(),
+        appendLine: vi.fn(),
+        clear: vi.fn(),
+      })),
       showLogs: vi.fn(),
+    },
+    hookRunner: {
+      runHooks: vi.fn(async () => ok({
+        executed: 1,
+        skipped: 0,
+        failed: 0,
+        errors: [],
+      })),
     },
     treeProvider: {
       requestRefresh: vi.fn(),
@@ -306,6 +334,81 @@ describe('Server Commands', () => {
       expect(deps.logChannel.showLogs).not.toHaveBeenCalled();
       expect(mockShowErrorMessage).toHaveBeenCalledWith(
         expect.stringContaining('requires a server selected'),
+      );
+    });
+  });
+
+  describe('jsm.hook.test', () => {
+    it('runs a validated hook against the selected workspace server after confirmation', async () => {
+      const srv = makeServer('srv-1', 'Hookable Tomcat');
+      deps.workspaceRegistry.getServer.mockReturnValue(srv);
+      mockShowWarningMessage.mockResolvedValue('Run Hook');
+
+      const result = await invoke('jsm.hook.test', {
+        serverId: 'srv-1',
+        serverKey: 'file:///ws::srv-1',
+        workspaceFolderUri: 'file:///ws',
+        hook: makeHook({ enabled: false }),
+      });
+
+      expect(mockShowWarningMessage).toHaveBeenCalledWith(
+        expect.stringContaining('Run hook "hook-1"'),
+        { modal: true },
+        'Run Hook',
+      );
+      expect(deps.logChannel.showLogs).toHaveBeenCalledWith('file:///ws::srv-1', 'Hookable Tomcat');
+      expect(deps.hookRunner.runHooks).toHaveBeenCalledWith(expect.objectContaining({
+        phase: 'pre',
+        event: 'lifecycle.start',
+        hooks: [expect.objectContaining({ id: 'hook-1', enabled: true })],
+      }));
+      expect(result).toEqual({
+        ok: true,
+        message: 'Hook "hook-1" completed.',
+      });
+    });
+
+    it('fails closed before confirmation when the hook payload is invalid', async () => {
+      const result = await invoke('jsm.hook.test', {
+        serverId: 'srv-1',
+        serverKey: 'file:///ws::srv-1',
+        workspaceFolderUri: 'file:///ws',
+        hook: makeHook({ command: { mode: 'shell', line: '' } }),
+      });
+
+      expect(mockShowWarningMessage).not.toHaveBeenCalled();
+      expect(deps.hookRunner.runHooks).not.toHaveBeenCalled();
+      expect(mockShowErrorMessage).toHaveBeenCalledWith(
+        expect.stringContaining('Hook cannot be tested until it is valid'),
+      );
+      expect(result).toEqual({
+        ok: false,
+        message: 'Invalid hook test request.',
+      });
+    });
+
+    it('surfaces hook runner errors without hiding workspace trust failures', async () => {
+      const srv = makeServer('srv-1', 'Hookable Tomcat');
+      deps.workspaceRegistry.getServer.mockReturnValue(srv);
+      mockShowWarningMessage.mockResolvedValue('Run Hook');
+      deps.hookRunner.runHooks.mockResolvedValue(err(new JsmError({
+        code: ErrorCode.WorkspaceUntrusted,
+        message: 'Hooks are disabled in untrusted workspaces.',
+      })));
+
+      const result = await invoke('jsm.hook.test', {
+        serverId: 'srv-1',
+        serverKey: 'file:///ws::srv-1',
+        workspaceFolderUri: 'file:///ws',
+        hook: makeHook(),
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        message: 'Hooks are disabled in untrusted workspaces.',
+      });
+      expect(mockShowErrorMessage).toHaveBeenCalledWith(
+        expect.stringContaining('Hooks are disabled in untrusted workspaces.'),
       );
     });
   });
@@ -628,7 +731,7 @@ describe('Server Commands', () => {
       await invoke('jsm.server.export');
       expect(mockWriteFile).toHaveBeenCalledWith(
         '/out/export.json',
-        JSON.stringify({ servers: [server] }, null, 2),
+        JSON.stringify({ version: CURRENT_WORKSPACE_CONFIG_VERSION, servers: [server] }, null, 2),
         'utf8',
       );
       expect(mockShowInfoMessage).toHaveBeenCalledWith(expect.stringContaining('exported to'));
@@ -694,43 +797,104 @@ describe('Server Commands', () => {
       expect(deps.workspaceRegistry.getEntry).not.toHaveBeenCalled();
     });
 
-    it('calls duplicateServer for each server and refreshes', async () => {
+    it('previews the import plan, applies planned duplicates after confirmation, and refreshes', async () => {
       const server = makeServer('srv-1', 'My Tomcat');
+      const planned = { ...server, id: 'srv-2', instancePath: '/new' };
       mockShowOpenDialog.mockResolvedValue([{ fsPath: '/f.json' }]);
       mockReadFile.mockResolvedValue(JSON.stringify({ servers: [server] }));
       deps.schemaValidator.validate.mockReturnValue(ok(undefined));
       mockShowQuickPick.mockResolvedValue({ scope: { uri: 'file:///ws', name: 'ws', fsPath: '/ws' } });
-      const mockDuplicate = vi.fn(async () => ok({ ...server, id: 'srv-2', instancePath: '/new' }));
-      deps.workspaceRegistry.getEntry.mockReturnValue({ provisioningService: { duplicateServer: mockDuplicate } });
+      mockShowWarningMessage.mockResolvedValue('Import');
+      const mockPlan = vi.fn(async () => ok(planned));
+      const mockProvision = vi.fn(async () => ok(planned));
+      const mockValidateCandidates = vi.fn(() => ok(undefined));
+      deps.workspaceRegistry.getEntry.mockReturnValue({
+        provisioningService: {
+          planDuplicateServer: mockPlan,
+          provisionPlannedDuplicate: mockProvision,
+        },
+        configService: {
+          validateServerCandidates: mockValidateCandidates,
+        },
+      });
       await invoke('jsm.server.import');
-      expect(mockDuplicate).toHaveBeenCalledTimes(1);
-      expect(mockDuplicate).toHaveBeenCalledWith(server, { keepName: true });
+      expect(mockPlan).toHaveBeenCalledTimes(1);
+      expect(mockPlan).toHaveBeenCalledWith(server, { keepName: true });
+      expect(mockValidateCandidates).toHaveBeenCalledWith([planned]);
+      expect(mockShowWarningMessage).toHaveBeenCalledWith(
+        expect.stringContaining('Import 1 server(s)'),
+        expect.objectContaining({
+          modal: true,
+          detail: expect.stringContaining('Existing servers are not modified'),
+        }),
+        'Import',
+      );
+      expect(mockProvision).toHaveBeenCalledWith(server, planned);
       expect(mockShowInfoMessage).toHaveBeenCalledWith(expect.stringContaining('Imported 1 server(s)'));
       expect(deps.treeProvider.requestRefresh).toHaveBeenCalled();
     });
 
-    it('shows a partial-success warning when import stops after some servers were duplicated', async () => {
+    it('does not provision when the dry-run plan has inventory conflicts', async () => {
       const first = makeServer('srv-1', 'Server One');
       const second = makeServer('srv-2', 'Server Two');
       mockShowOpenDialog.mockResolvedValue([{ fsPath: '/f.json' }]);
       mockReadFile.mockResolvedValue(JSON.stringify({ servers: [first, second] }));
       deps.schemaValidator.validate.mockReturnValue(ok(undefined));
       mockShowQuickPick.mockResolvedValue({ scope: { uri: 'file:///ws', name: 'ws', fsPath: '/ws' } });
-      const mockDuplicate = vi.fn()
-        .mockResolvedValueOnce(ok({ ...first, id: 'dup-1', instancePath: '/new-1' }))
-        .mockResolvedValueOnce(err(new JsmError({ code: ErrorCode.InvalidConfig, message: 'Second import failed' })));
-      deps.workspaceRegistry.getEntry.mockReturnValue({ provisioningService: { duplicateServer: mockDuplicate } });
+      const plannedFirst = { ...first, id: 'dup-1', instancePath: '/new-1' };
+      const plannedSecond = { ...second, id: 'dup-2', instancePath: '/new-2' };
+      const mockPlan = vi.fn()
+        .mockResolvedValueOnce(ok(plannedFirst))
+        .mockResolvedValueOnce(ok(plannedSecond));
+      const mockProvision = vi.fn(async () => ok(plannedFirst));
+      const mockValidateCandidates = vi.fn(() => err(new JsmError({
+        code: ErrorCode.InvalidConfig,
+        message: 'Port 8080 conflicts',
+      })));
+      deps.workspaceRegistry.getEntry.mockReturnValue({
+        provisioningService: {
+          planDuplicateServer: mockPlan,
+          provisionPlannedDuplicate: mockProvision,
+        },
+        configService: {
+          validateServerCandidates: mockValidateCandidates,
+        },
+      });
 
       await invoke('jsm.server.import');
 
-      expect(mockShowWarningMessage).toHaveBeenCalledWith(
-        expect.stringContaining('Imported 1 server(s)'),
-      );
-      expect(mockShowWarningMessage).toHaveBeenCalledWith(
-        expect.stringContaining('Second import failed'),
-      );
+      expect(mockPlan).toHaveBeenCalledTimes(2);
+      expect(mockValidateCandidates).toHaveBeenCalledWith([plannedFirst, plannedSecond]);
+      expect(mockProvision).not.toHaveBeenCalled();
+      expect(mockShowErrorMessage).toHaveBeenCalledWith(expect.stringContaining('Port 8080 conflicts'));
       expect(mockShowInfoMessage).not.toHaveBeenCalledWith(expect.stringContaining('Imported 1 server(s)'));
-      expect(deps.treeProvider.requestRefresh).toHaveBeenCalled();
+      expect(deps.treeProvider.requestRefresh).not.toHaveBeenCalled();
+    });
+
+    it('does not provision when the user cancels the dry-run confirmation', async () => {
+      const server = makeServer('srv-1', 'My Tomcat');
+      const planned = { ...server, id: 'srv-2', instancePath: '/new' };
+      mockShowOpenDialog.mockResolvedValue([{ fsPath: '/f.json' }]);
+      mockReadFile.mockResolvedValue(JSON.stringify({ servers: [server] }));
+      deps.schemaValidator.validate.mockReturnValue(ok(undefined));
+      mockShowQuickPick.mockResolvedValue({ scope: { uri: 'file:///ws', name: 'ws', fsPath: '/ws' } });
+      mockShowWarningMessage.mockResolvedValue(undefined);
+      const mockProvision = vi.fn(async () => ok(planned));
+      deps.workspaceRegistry.getEntry.mockReturnValue({
+        provisioningService: {
+          planDuplicateServer: vi.fn(async () => ok(planned)),
+          provisionPlannedDuplicate: mockProvision,
+        },
+        configService: {
+          validateServerCandidates: vi.fn(() => ok(undefined)),
+        },
+      });
+
+      await invoke('jsm.server.import');
+
+      expect(mockProvision).not.toHaveBeenCalled();
+      expect(mockShowInfoMessage).not.toHaveBeenCalledWith(expect.stringContaining('Imported 1 server(s)'));
+      expect(deps.treeProvider.requestRefresh).not.toHaveBeenCalled();
     });
   });
 

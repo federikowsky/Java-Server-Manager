@@ -305,6 +305,68 @@ describe('ConfigService', () => {
     });
   });
 
+  describe('validateServerCandidates', () => {
+    it('validates prospective servers without saving or emitting events', () => {
+      repo._seed(makeServer('srv-1', 'Primary'));
+      const candidate = {
+        ...makeServer('srv-2', 'Import Candidate'),
+        instancePath: '/tmp/import-candidate',
+        ports: { http: 9080, debug: 6006 },
+        pluginConfig: { type: 'tomcat' as const, shutdownPort: 8105, disableAjp: true },
+      };
+
+      const result = service.validateServerCandidates([candidate]);
+
+      expect(result.ok).toBe(true);
+      expect(validator.validate).toHaveBeenCalledWith(candidate, 'server-config');
+      expect(repo.save).not.toHaveBeenCalled();
+      expect(bus.emit).not.toHaveBeenCalled();
+    });
+
+    it('rejects prospective servers that would conflict with existing inventory', () => {
+      repo._seed(makeServer('srv-1', 'Primary'));
+      const candidate = {
+        ...makeServer('srv-2', 'Import Candidate'),
+        instancePath: '/tmp/import-candidate',
+        ports: { http: 8080, debug: 6006 },
+        pluginConfig: { type: 'tomcat' as const, shutdownPort: 8105, disableAjp: true },
+      };
+
+      const result = service.validateServerCandidates([candidate]);
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe(ErrorCode.InvalidConfig);
+        expect(result.error.message).toContain('Port 8080');
+      }
+      expect(repo.save).not.toHaveBeenCalled();
+    });
+
+    it('rejects conflicts between candidates in the same dry-run batch', () => {
+      const first = {
+        ...makeServer('srv-1', 'First Import'),
+        instancePath: '/tmp/import-1',
+        ports: { http: 9080, debug: 6006 },
+        pluginConfig: { type: 'tomcat' as const, shutdownPort: 8105, disableAjp: true },
+      };
+      const second = {
+        ...makeServer('srv-2', 'Second Import'),
+        instancePath: '/tmp/import-2',
+        ports: { http: 9080, debug: 6106 },
+        pluginConfig: { type: 'tomcat' as const, shutdownPort: 8205, disableAjp: true },
+      };
+
+      const result = service.validateServerCandidates([first, second]);
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe(ErrorCode.InvalidConfig);
+        expect(result.error.message).toContain('Port 9080');
+      }
+      expect(repo.save).not.toHaveBeenCalled();
+    });
+  });
+
   describe('trust enforcement', () => {
     beforeEach(() => {
       trustGate.isTrusted.mockReturnValue(false);

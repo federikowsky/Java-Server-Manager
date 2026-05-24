@@ -11,6 +11,7 @@ const PRIORITY: Record<OperationKind, number> = {
   LifecycleRestart:   2,
   LifecycleStart:     2,
   DeployFull:         3,
+  DeployRollback:     3,
   DeployIncremental:  3,
   DeploySync:         3,
   DeployHotReload:    3,

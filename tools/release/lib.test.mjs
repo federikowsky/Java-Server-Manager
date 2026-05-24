@@ -70,6 +70,10 @@ test('buildRetryDelaySchedule uses bounded exponential backoff', () => {
   assert.deepEqual(buildRetryDelaySchedule(4, 1000), [1000, 2000, 4000]);
 });
 
+test('buildRetryDelaySchedule caps exponential backoff delays', () => {
+  assert.deepEqual(buildRetryDelaySchedule(6, 1000, 2500), [1000, 2000, 2500, 2500, 2500]);
+});
+
 test('buildOpenVsxVersionsUrl composes the versions endpoint', () => {
   assert.equal(
     buildOpenVsxVersionsUrl('publisher', 'extension'),

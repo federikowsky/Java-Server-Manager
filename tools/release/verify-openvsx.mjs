@@ -38,6 +38,10 @@ async function main() {
   const version = process.env.RELEASE_VERSION?.trim();
   const attempts = Number.parseInt(process.env.OPENVSX_VERIFY_ATTEMPTS ?? '6', 10);
   const baseDelayMs = Number.parseInt(process.env.OPENVSX_VERIFY_BASE_DELAY_MS ?? '10000', 10);
+  const maxDelayMs = Number.parseInt(
+    process.env.OPENVSX_VERIFY_MAX_DELAY_MS ?? String(Number.MAX_SAFE_INTEGER),
+    10,
+  );
   const registryUrl = process.env.OPENVSX_REGISTRY_URL?.trim() || OPENVSX_REGISTRY_URL;
 
   if (!publisher || !extensionName || !version) {
@@ -45,7 +49,7 @@ async function main() {
   }
 
   const extensionId = `${publisher}.${extensionName}`;
-  const delaySchedule = buildRetryDelaySchedule(attempts, baseDelayMs);
+  const delaySchedule = buildRetryDelaySchedule(attempts, baseDelayMs, maxDelayMs);
   let lastSeenVersions = [];
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {

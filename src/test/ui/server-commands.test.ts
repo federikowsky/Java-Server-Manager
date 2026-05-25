@@ -156,6 +156,8 @@ function mockDeps() {
       start: vi.fn(() => ok(undefined)),
       stop: vi.fn(() => ok(undefined)),
       restart: vi.fn(() => ok(undefined)),
+      attachDebug: vi.fn(() => ok(undefined)),
+      detachDebug: vi.fn(() => ok(undefined)),
       cancel: vi.fn(),
       enqueueDeployUndeployed: vi.fn(() => ok(undefined)),
       enqueueRedeployAll: vi.fn(() => ok(undefined)),
@@ -239,6 +241,35 @@ describe('Server Commands', () => {
 
   it('registers the Tomcat config command', () => {
     expect(registeredHandlers['jsm.server.openConfig']).toBeDefined();
+  });
+
+  it('registers every server command surface exposed by the command module', () => {
+    const expected = [
+      'jsm.server.add',
+      'jsm.hook.test',
+      'jsm.server.startRun',
+      'jsm.server.startDebug',
+      'jsm.server.stop',
+      'jsm.server.restartRun',
+      'jsm.server.restartDebug',
+      'jsm.server.attachDebug',
+      'jsm.server.detachDebug',
+      'jsm.server.cancelOperation',
+      'jsm.server.showLogs',
+      'jsm.server.edit',
+      'jsm.server.duplicate',
+      'jsm.server.remove',
+      'jsm.server.openFolder',
+      'jsm.server.openConfig',
+      'jsm.server.redeployAll',
+      'jsm.view.refresh',
+      'jsm.server.export',
+      'jsm.server.import',
+    ];
+
+    for (const id of expected) {
+      expect(registeredHandlers[id], `Missing: ${id}`).toBeDefined();
+    }
   });
 
   it('opens the only available Tomcat config file directly', async () => {
@@ -498,6 +529,83 @@ describe('Server Commands', () => {
         expect.stringContaining('requires a server selected'),
       );
     });
+
+    it('jsm.server.restartRun enqueues a run restart for SPA-shaped args', async () => {
+      const srv = makeServer('srv-1', 'Tom');
+      deps.workspaceRegistry.getServer.mockReturnValue(srv);
+
+      await invoke('jsm.server.restartRun', {
+        serverId: 'srv-1',
+        workspaceFolderUri: 'file:///ws',
+      });
+
+      expect(deps.lifecycle.restart).toHaveBeenCalledWith(
+        makeWorkspaceServerKey('file:///ws', 'srv-1'),
+        'run',
+      );
+      expect(mockWithProgress).toHaveBeenCalledWith(
+        expect.objectContaining({ title: 'Restarting Tom...' }),
+        expect.any(Function),
+      );
+    });
+
+    it('jsm.server.restartDebug enqueues a debug restart for SPA-shaped args', async () => {
+      const srv = makeServer('srv-1', 'Tom');
+      deps.workspaceRegistry.getServer.mockReturnValue(srv);
+
+      await invoke('jsm.server.restartDebug', {
+        serverId: 'srv-1',
+        workspaceFolderUri: 'file:///ws',
+      });
+
+      expect(deps.lifecycle.restart).toHaveBeenCalledWith(
+        makeWorkspaceServerKey('file:///ws', 'srv-1'),
+        'debug',
+      );
+      expect(mockWithProgress).toHaveBeenCalledWith(
+        expect.objectContaining({ title: 'Restarting Tom (debug)...' }),
+        expect.any(Function),
+      );
+    });
+
+    it('jsm.server.attachDebug delegates to lifecycle and surfaces success', async () => {
+      const srv = makeServer('srv-1', 'Tom');
+      deps.workspaceRegistry.getServer.mockReturnValue(srv);
+
+      await invoke('jsm.server.attachDebug', {
+        serverId: 'srv-1',
+        workspaceFolderUri: 'file:///ws',
+      });
+
+      expect(deps.lifecycle.attachDebug).toHaveBeenCalledWith(makeWorkspaceServerKey('file:///ws', 'srv-1'));
+      expect(mockShowInfoMessage).toHaveBeenCalledWith('Debugger attached.');
+    });
+
+    it('jsm.server.detachDebug delegates to lifecycle and surfaces failures', async () => {
+      const srv = makeServer('srv-1', 'Tom');
+      deps.workspaceRegistry.getServer.mockReturnValue(srv);
+      deps.lifecycle.detachDebug.mockReturnValue(err(new JsmError({
+        code: ErrorCode.NotRunning,
+        message: 'No debug session is attached.',
+      })));
+
+      await invoke('jsm.server.detachDebug', {
+        serverId: 'srv-1',
+        workspaceFolderUri: 'file:///ws',
+      });
+
+      expect(deps.lifecycle.detachDebug).toHaveBeenCalledWith(makeWorkspaceServerKey('file:///ws', 'srv-1'));
+      expect(mockShowErrorMessage).toHaveBeenCalledWith(expect.stringContaining('No debug session is attached.'));
+    });
+
+    it('jsm.server.cancelOperation cancels the workspace-scoped queue', () => {
+      invoke('jsm.server.cancelOperation', {
+        serverId: 'srv-1',
+        workspaceFolderUri: 'file:///ws',
+      });
+
+      expect(deps.lifecycle.cancel).toHaveBeenCalledWith(makeWorkspaceServerKey('file:///ws', 'srv-1'));
+    });
   });
 
   describe('dashboard entry points', () => {
@@ -689,6 +797,78 @@ describe('Server Commands', () => {
       expect(mockShowErrorMessage).toHaveBeenCalledWith(
         expect.stringContaining('workspace registry'),
       );
+    });
+  });
+
+  describe('jsm.server.remove', () => {
+    it('removes through provisioning cleanup after confirmation', async () => {
+      const removeServer = vi.fn(async () => ok(undefined));
+      deps.workspaceRegistry.getEntry.mockReturnValue({
+        provisioningService: { removeServer },
+      });
+      mockShowWarningMessage.mockResolvedValue('Remove');
+      const node = createServerNodeWithWorkspace('file:///ws', makeServer('srv-1', 'Removable'));
+
+      await invoke('jsm.server.remove', node);
+
+      expect(mockShowWarningMessage).toHaveBeenCalledWith(
+        expect.stringContaining('Remove server "Removable"'),
+        { modal: true },
+        'Remove',
+      );
+      expect(removeServer).toHaveBeenCalledWith('srv-1');
+      expect(deps.treeProvider.requestRefresh).toHaveBeenCalled();
+    });
+
+    it('does not remove when the user cancels confirmation', async () => {
+      const removeServer = vi.fn(async () => ok(undefined));
+      deps.workspaceRegistry.getEntry.mockReturnValue({
+        provisioningService: { removeServer },
+      });
+      mockShowWarningMessage.mockResolvedValue(undefined);
+
+      await invoke('jsm.server.remove', createServerNodeWithWorkspace('file:///ws'));
+
+      expect(removeServer).not.toHaveBeenCalled();
+      expect(deps.treeProvider.requestRefresh).not.toHaveBeenCalled();
+    });
+
+    it('surfaces a workspace lookup failure instead of silently dropping removal', async () => {
+      deps.workspaceRegistry.getEntry.mockReturnValue(undefined);
+      mockShowWarningMessage.mockResolvedValue('Remove');
+
+      await invoke('jsm.server.remove', createServerNodeWithWorkspace('file:///missing'));
+
+      expect(mockShowErrorMessage).toHaveBeenCalledWith(expect.stringContaining('Workspace not found'));
+      expect(deps.treeProvider.requestRefresh).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('jsm.server.redeployAll', () => {
+    it('enqueues redeploy all for servers with configured deployments', async () => {
+      const srv = makeServer('srv-1', 'Tom');
+      srv.deployments = [makeDeployment()];
+      deps.workspaceRegistry.getServer.mockReturnValue(srv);
+
+      await invoke('jsm.server.redeployAll', {
+        serverId: 'srv-1',
+        workspaceFolderUri: 'file:///ws',
+      });
+
+      const serverKey = makeWorkspaceServerKey('file:///ws', 'srv-1');
+      expect(deps.lifecycle.enqueueRedeployAll).toHaveBeenCalledWith(serverKey);
+      expect(mockShowInfoMessage).toHaveBeenCalledWith(expect.stringContaining('Redeploy All completed'));
+    });
+
+    it('does not enqueue redeploy all when no deployments exist', async () => {
+      deps.workspaceRegistry.getServer.mockReturnValue(makeServer('srv-1', 'Tom'));
+
+      await invoke('jsm.server.redeployAll', {
+        serverId: 'srv-1',
+        workspaceFolderUri: 'file:///ws',
+      });
+
+      expect(deps.lifecycle.enqueueRedeployAll).not.toHaveBeenCalled();
     });
   });
 

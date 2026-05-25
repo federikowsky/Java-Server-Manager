@@ -29,4 +29,11 @@ describe('E2E launch scripts', () => {
     expect(src).toContain('`--extensionDevelopmentPath=${options.extensionDevelopmentPath}`');
     expect(src).toMatch(/options\.workspacePath,\s*\]/);
   });
+
+  it('retries temporary VS Code profile cleanup for delayed filesystem writes', () => {
+    const src = readScript('run-vscode-extension-tests.mjs');
+    expect(src).toContain('removeTempDir');
+    expect(src).toContain('maxRetries');
+    expect(src).toContain('retryDelay');
+  });
 });

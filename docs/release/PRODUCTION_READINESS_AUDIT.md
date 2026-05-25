@@ -91,7 +91,7 @@ SHA-256: `10ff1e9e2425636a2f0e40fc938acb4ac20124127d4d50864bbcd9a69c09b6ba`
 
 Date: 2026-05-25
 Branch: `codex/full-feature-test-discovery`
-Version audited: `0.1.6`
+Version audited: `0.1.7`
 
 ### Scope
 
@@ -133,7 +133,7 @@ Detailed matrix: `docs/testing/FEATURE_DISCOVERY_TEST_MATRIX.md`.
 - `npm run vscode:prepublish` - pass.
 - `npm run test:e2e` - pass.
 - `npm run test:e2e:full` - pass.
-- `npx --yes @vscode/vsce@3.6.2 package --out <temp>/java-server-manager-0.1.6-test.vsix` - pass, 214.53 KB, SHA-256 `985a622c3302d7bfc7770c81886a0ed04800cbe0beedce085070b8ceb4dfa2c9`.
+- `npx --yes @vscode/vsce@3.6.2 package --pre-release --out <temp>/java-server-manager-0.1.7-beta.vsix` - pass, 215.08 KB, SHA-256 `cebdd2689b9038d1007cda4844bcd16fcaf0681219c4a263dfb192c18dcc7296`.
 - `npm run release:preflight` - expected local block: `Repository variable JSM_MARKETPLACE_PUBLISHER is required.` This is supplied by the GitHub release workflow variables, not by local development shells.
 
 ### Status

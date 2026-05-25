@@ -10,6 +10,40 @@ The format follows Keep a Changelog and this project adheres to Semantic Version
 
 - ongoing improvements toward stable readiness
 
+## [0.1.7] - 2026-05-25
+
+### Summary
+
+- Seventh beta patch focused on full feature-surface discovery, release regression coverage, and operator-safety hardening.
+- Adds an executable feature/test matrix for manifest commands, dashboard command routing, tree operations, deployments, hooks, trust boundaries, e2e execution, and release gates.
+- Fixes command and E2E edge cases found while validating the complete local release path.
+
+### Beta Disclaimer
+
+- this is a beta prerelease intended for validation and feedback.
+- behavior and feature surface may change before stable.
+
+### Known Limitations
+
+- only Tomcat is supported in this release.
+- some advanced workflows and hardening tasks are still in progress.
+
+### Fixed
+
+- Remove Server now fails closed with a visible workspace error when the owning workspace entry cannot be resolved after confirmation, instead of silently doing nothing.
+- VS Code E2E runs now retry temporary profile cleanup, preventing successful extension tests from being reported as failed because of delayed filesystem writes.
+- The Deployment Rollback action now resolves its `history` icon in the dashboard overflow menu.
+
+### Tests
+
+- Added manifest-to-registration and menu command parity tests for the VS Code extension command surface.
+- Added dashboard command allowlist/handler contract tests so webview actions cannot drift into missing or unsafe host commands.
+- Added webview icon contract coverage for static component icon usage.
+- Expanded server command tests for restart, attach/detach debug, cancel, remove, and redeploy-all behavior.
+- Expanded deployment command tests for reveal-source success and empty-source handling.
+- Added E2E runner cleanup regression coverage.
+- Documented the full feature discovery and detailed regression matrix in `docs/testing/FEATURE_DISCOVERY_TEST_MATRIX.md`.
+
 ## [0.1.6] - 2026-05-24
 
 ### Summary

@@ -2,7 +2,7 @@
 
 Date: 2026-05-25
 Branch: `codex/full-feature-test-discovery`
-Version audited: `0.1.6`
+Version audited: `0.1.7`
 
 ## Discovery Inputs
 

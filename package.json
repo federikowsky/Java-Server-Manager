@@ -3,7 +3,7 @@
   "publisher": "federikowsky",
   "displayName": "Java Server Manager",
   "description": "Tomcat-first VS Code extension for managing local Java application servers.",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "license": "MIT",
   "repository": {
     "type": "git",

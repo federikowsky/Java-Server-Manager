@@ -84,3 +84,58 @@ Production-ready for local installation and external publication once marketplac
 Artifact: `java-server-manager-0.1.3.vsix`
 
 SHA-256: `10ff1e9e2425636a2f0e40fc938acb4ac20124127d4d50864bbcd9a69c09b6ba`
+
+---
+
+## Full Feature Discovery Addendum
+
+Date: 2026-05-25
+Branch: `codex/full-feature-test-discovery`
+Version audited: `0.1.7`
+
+### Scope
+
+Follow-up audit focused on exhaustive feature discovery, detailed test-case mapping, and regression prevention for the full JSM feature surface: manifest commands, tree operations, dashboard command protocol, server lifecycle commands, deployment commands, hooks editor state, webview icons, e2e runner reliability, packaging, and release workflow local equivalents.
+
+Detailed matrix: `docs/testing/FEATURE_DISCOVERY_TEST_MATRIX.md`.
+
+### Findings
+
+- High: `jsm.server.remove` silently no-oped after confirmation when the owning workspace entry could not be resolved. Fixed by failing closed with a visible `Workspace not found` error.
+- Medium: VS Code E2E runner could fail after successful extension tests because temporary profile cleanup hit delayed filesystem writes (`ENOTEMPTY`). Fixed with retrying cleanup.
+- Low: deployment rollback menu referenced an undeclared `history` icon. Fixed and guarded with a webview icon contract test.
+
+### Fixes
+
+- Added manifest/register/menu parity tests for contributed commands.
+- Added dashboard client `executeCommand` allowlist and handler/registration contract tests.
+- Added webview icon contract tests.
+- Expanded server command tests for registration, restart run/debug, attach/detach debug, cancel, remove, and redeploy-all.
+- Expanded deployment command tests for reveal-source success and empty-source warning.
+- Hardened server removal workspace lookup behavior.
+- Hardened E2E temporary VS Code profile cleanup with retry handling.
+- Documented feature discovery and detailed regression cases in `docs/testing/FEATURE_DISCOVERY_TEST_MATRIX.md`.
+
+### Commands
+
+- `npm ci` - pass, 0 vulnerabilities.
+- `npm audit --json` - pass, 0 vulnerabilities.
+- `npm audit --omit=dev --json` - pass, 0 vulnerabilities.
+- `npm run check-types` - pass.
+- `npm run lint` - pass.
+- `npm test` - pass, 72 files, 911 passing, 1 skipped.
+- `npm run test:smoke` - pass, 40 passing.
+- `npm run test:release` - pass, 12 passing.
+- `npm run compile:e2e` - pass.
+- `npm run compile` - pass.
+- `npm run package` - pass.
+- `npm run build` - pass.
+- `npm run vscode:prepublish` - pass.
+- `npm run test:e2e` - pass.
+- `npm run test:e2e:full` - pass.
+- `npx --yes @vscode/vsce@3.6.2 package --pre-release --out <temp>/java-server-manager-0.1.7-beta.vsix` - pass, 215.08 KB, SHA-256 `cebdd2689b9038d1007cda4844bcd16fcaf0681219c4a263dfb192c18dcc7296`.
+- `npm run release:preflight` - expected local block: `Repository variable JSM_MARKETPLACE_PUBLISHER is required.` This is supplied by the GitHub release workflow variables, not by local development shells.
+
+### Status
+
+Production readiness gates pass locally except release preflight, which is correctly CI/release-environment gated by repository variables. No temporary package artifacts were left in the workspace.

@@ -762,10 +762,23 @@ export function registerServerCommands(
       );
       if (answer !== 'Remove') return;
 
-      const result = workspaceRegistry
-        ? await workspaceRegistry.getEntry(context.arg.workspaceFolderUri)?.provisioningService.removeServer(context.arg.serverId)
-        : await provisioningService?.removeServer(context.arg.serverId);
-      if (!result) return;
+      let result;
+      if (workspaceRegistry) {
+        const entry = getWorkspaceEntry(context.arg.workspaceFolderUri);
+        if (!entry) {
+          return;
+        }
+        result = await entry.provisioningService.removeServer(context.arg.serverId);
+      } else {
+        result = await provisioningService?.removeServer(context.arg.serverId);
+      }
+      if (!result) {
+        showErr(new JsmError({
+          code: ErrorCode.InvalidConfig,
+          message: 'Remove server is not available in this session.',
+        }));
+        return;
+      }
       if (!result.ok) { showErr(result.error); return; }
       showSuccess(`Server "${context.label}" removed.`);
       treeProvider.requestRefresh();

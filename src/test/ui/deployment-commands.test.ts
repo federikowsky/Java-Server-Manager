@@ -385,6 +385,34 @@ describe('Deployment Commands', () => {
       expect(deps.configService.removeDeployment).toHaveBeenCalledWith('srv-1', 'dep-1');
       expect(deps.treeProvider.requestRefresh).toHaveBeenCalled();
     });
+
+    it('jsm.deployment.revealSource should reveal the deployment source path', async () => {
+      const dep = makeDeployment('dep-1', 'auto', 'exploded');
+      dep.sourcePath = '/src/my app';
+      const server = makeServer();
+      server.deployments = [dep];
+      deps.configService.getServer.mockReturnValue(server);
+
+      await invoke('jsm.deployment.revealSource', createDeploymentNode('srv-1', dep));
+
+      expect(mockExecuteCommand).toHaveBeenCalledWith(
+        'revealInExplorer',
+        expect.objectContaining({ fsPath: '/src/my app' }),
+      );
+    });
+
+    it('jsm.deployment.revealSource should warn instead of revealing an empty source path', async () => {
+      const dep = makeDeployment('dep-1', 'auto', 'exploded');
+      dep.sourcePath = '   ';
+      const server = makeServer();
+      server.deployments = [dep];
+      deps.configService.getServer.mockReturnValue(server);
+
+      await invoke('jsm.deployment.revealSource', createDeploymentNode('srv-1', dep));
+
+      expect(mockShowWarningMessage).toHaveBeenCalledWith('JSM: No source path to reveal.');
+      expect(mockExecuteCommand).not.toHaveBeenCalledWith('revealInExplorer', expect.anything());
+    });
   });
 
   /* ── Toggle Autosync Cycling ─────────────────────────────────────────── */

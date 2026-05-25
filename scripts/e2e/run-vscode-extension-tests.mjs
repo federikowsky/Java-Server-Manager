@@ -32,9 +32,29 @@ export async function runVsCodeExtensionTests(options) {
     return await runProcess(vscodeCliPath, args, options.extensionTestsEnv);
   } finally {
     await Promise.all([
-      fs.rm(userDataDir, { recursive: true, force: true }),
-      fs.rm(extensionsDir, { recursive: true, force: true }),
+      removeTempDir(userDataDir),
+      removeTempDir(extensionsDir),
     ]);
+  }
+}
+
+async function removeTempDir(dir) {
+  const retryableCodes = new Set(['ENOTEMPTY', 'EBUSY', 'EPERM']);
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      await fs.rm(dir, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 100,
+      });
+      return;
+    } catch (error) {
+      if (!retryableCodes.has(error?.code) || attempt === 4) {
+        throw error;
+      }
+      await new Promise(resolve => setTimeout(resolve, 150 * (attempt + 1)));
+    }
   }
 }
 

@@ -6,6 +6,28 @@ The format follows Keep a Changelog and this project adheres to Semantic Version
 
 ## [Unreleased]
 
+### Planned
+
+- ongoing improvements toward stable readiness
+
+## [0.1.8] - 2026-05-26
+
+### Summary
+
+- Eighth beta patch focused on moving managed server inventory out of workspace `.vscode` and into VS Code workspace storage.
+- Preserves workspace-scoped inventory authority while aligning inventory files with the extension-owned storage model already used for managed server files.
+- Adds migration and fail-closed coverage so legacy workspace inventory files cannot become a second source of truth.
+
+### Beta Disclaimer
+
+- this is a beta prerelease intended for validation and feedback.
+- behavior and feature surface may change before stable.
+
+### Known Limitations
+
+- only Tomcat is supported in this release.
+- some advanced workflows and hardening tasks are still in progress.
+
 ### Changed
 
 - Managed server inventory is now stored in VS Code workspace storage instead of writing `jsm.servers.json` directly under workspace `.vscode`.

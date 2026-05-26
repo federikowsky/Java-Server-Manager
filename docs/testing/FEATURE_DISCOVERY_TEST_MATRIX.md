@@ -1,8 +1,8 @@
 # Feature Discovery And Test Matrix
 
 Date: 2026-05-26
-Branch: `codex/full-feature-test-discovery`
-Version audited: `0.1.7`
+Branch: `codex/fix-dashboard-regressions`
+Version audited: `0.1.8`
 
 ## Discovery Inputs
 

@@ -411,8 +411,9 @@ describe('Extension Activation', () => {
 
     expect(mockConfigRepoCtorArgs).toHaveLength(1);
     const repoOptions = mockConfigRepoCtorArgs[0][2] as { storageRoot?: string };
-    expect(repoOptions.storageRoot).toMatch(/^\/vscode\/storage\/workspaces\/[a-f0-9]{12}\/inventory$/);
-    expect(repoOptions.storageRoot).not.toContain('/test/workspace/.vscode');
+    const normalizedStorageRoot = repoOptions.storageRoot?.replace(/\\/g, '/');
+    expect(normalizedStorageRoot).toMatch(/^\/vscode\/storage\/workspaces\/[a-f0-9]{12}\/inventory$/);
+    expect(normalizedStorageRoot).not.toContain('/test/workspace/.vscode');
   });
 
   function setupWorkspaceScope() {

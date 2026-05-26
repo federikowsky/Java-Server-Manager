@@ -348,6 +348,15 @@
           <Icon name="debug" size={14} />
           <span>Doctor</span>
         </button>
+        <button
+          type="button"
+          class="action-btn"
+          title="Plan explicit lifecycle recovery"
+          onclick={() => handleAction('jsm.server.recover')}
+        >
+          <Icon name="history" size={14} />
+          <span>Recover</span>
+        </button>
         {#if runtimeState?.state === 'error'}
           <button class="action-btn primary" onclick={() => handleAction('jsm.server.startRun')}>
             <Icon name="play" size={14} />

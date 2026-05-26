@@ -11,6 +11,7 @@ import { JsmError } from '@core/errors/JsmError';
 import { ErrorCode } from '@core/errors/codes';
 import { createCancellationTokenSource } from '@core/ops';
 import type { ServerLifecycle } from '@app/server/ServerLifecycle';
+import type { LifecycleRecoveryPlan } from '@app/server/ServerLifecycle';
 import type { ServerDiscoveryService } from '@app/server/ServerDiscoveryService';
 import type { HookRunner } from '@app/hooks';
 import type { ServerDoctorReport, ServerDoctorService } from '@app/doctor';
@@ -526,6 +527,33 @@ export function registerServerCommands(
     return lines.join('\n');
   };
 
+  const formatRecoveryPlan = (plan: LifecycleRecoveryPlan): string => {
+    const lines = [
+      `[JSM] Lifecycle Recovery plan for ${plan.serverName}`,
+      `[JSM] Runtime state: ${plan.runtimeState}${plan.pid !== undefined ? ` (PID ${plan.pid})` : ''}`,
+      '',
+      '[JSM] Findings',
+    ];
+
+    for (const finding of plan.findings) {
+      lines.push(`[${finding.severity.toUpperCase()}] ${finding.message}`);
+      if (finding.details) {
+        lines.push(`  Details: ${finding.details}`);
+      }
+    }
+
+    lines.push('', '[JSM] Available actions');
+    if (plan.actions.length === 0) {
+      lines.push('No recovery actions available.');
+    } else {
+      for (const action of plan.actions) {
+        lines.push(`- ${action.title}: ${action.description}`);
+      }
+    }
+
+    return lines.join('\n');
+  };
+
   return registerMany([
     ['jsm.server.add', async (arg: unknown) => {
       if (arg && typeof arg === 'object' && 'workspaceFolderUri' in arg) {
@@ -772,6 +800,51 @@ export function registerServerCommands(
         showSuccess(`JSM: ${message}`);
       }
       return { ok: report.summary.errors === 0, message };
+    }],
+
+    ['jsm.server.recover', async (arg: unknown) => {
+      const resolvedArg = requireServerCommandArg(arg, 'Planning lifecycle recovery');
+      if (!resolvedArg) {
+        return { ok: false, message: 'Invalid server context.' };
+      }
+
+      const context = createContext(resolvedArg);
+      const planResult = await lifecycle.inspectRecovery(context.serverKey);
+      if (!planResult.ok) {
+        showErr(planResult.error);
+        return { ok: false, message: planResult.error.message };
+      }
+
+      const plan = planResult.value;
+      logChannel.appendLine(context.serverKey, context.label, formatRecoveryPlan(plan));
+      logChannel.showLogs(context.serverKey, context.label);
+
+      if (plan.actions.length === 0) {
+        const message = plan.findings[0]?.message ?? 'No lifecycle recovery action is currently needed.';
+        void vscode.window.showInformationMessage(`JSM: ${message}`);
+        return { ok: true, message };
+      }
+
+      const selected = await vscode.window.showWarningMessage(
+        `JSM: ${plan.actions.length} recovery action(s) available for ${plan.serverName}. Review the server log output before applying one.`,
+        { modal: true },
+        ...plan.actions.map(action => action.title),
+      );
+      const action = plan.actions.find(candidate => candidate.title === selected);
+      if (!action) {
+        return { ok: false, message: 'Lifecycle recovery cancelled.' };
+      }
+
+      const applyResult = await lifecycle.applyRecoveryAction(context.serverKey, action.id);
+      if (!applyResult.ok) {
+        showErr(applyResult.error);
+        return { ok: false, message: applyResult.error.message };
+      }
+
+      treeProvider.requestRefresh();
+      const message = `Recovery action '${action.title}' applied.`;
+      showSuccess(message);
+      return { ok: true, message };
     }],
 
     ['jsm.server.showLogs', (arg: unknown) => {

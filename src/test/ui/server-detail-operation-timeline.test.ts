@@ -23,4 +23,11 @@ describe('server detail operation timeline', () => {
     expect(src).toContain("handleAction('jsm.server.doctor')");
     expect(src).toContain('Doctor');
   });
+
+  it('exposes explicit Lifecycle Recovery from server detail actions', () => {
+    const src = readSource('src/ui/webviews/client/components/spa/ServerDetail.svelte');
+
+    expect(src).toContain("handleAction('jsm.server.recover')");
+    expect(src).toContain('Recover');
+  });
 });

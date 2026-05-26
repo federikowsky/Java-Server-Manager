@@ -1862,6 +1862,48 @@ describe('ServerLifecycle', () => {
     });
   });
 
+  /* ── lifecycle recovery ──────────────────────────────────────────────── */
+
+  describe('lifecycle recovery', () => {
+    it('plans explicit recovery when runtime PID is no longer alive', async () => {
+      const queue = mockQueue();
+      const runtime = lifecycle.register('srv-1', makeServer(), queue as never);
+      runtime.forceState('running', { pid: 321 });
+      pidManager.isProcessAlive.mockReturnValue(false);
+
+      const result = await lifecycle.inspectRecovery('srv-1');
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value.actions).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          id: 'clearStalePidAndMarkStopped',
+          title: 'Clear stale PID and mark stopped',
+        }),
+      ]));
+      expect(result.value.findings).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          severity: 'warning',
+          message: expect.stringContaining('no longer alive'),
+        }),
+      ]));
+    });
+
+    it('applies stale PID recovery only through an explicit action', async () => {
+      const queue = mockQueue();
+      const runtime = lifecycle.register('srv-1', makeServer(), queue as never);
+      runtime.forceState('running', { pid: 321 });
+      pidManager.isProcessAlive.mockReturnValue(false);
+
+      const result = await lifecycle.applyRecoveryAction('srv-1', 'clearStalePidAndMarkStopped');
+
+      expect(result.ok).toBe(true);
+      expect(pidManager.clearPid).toHaveBeenCalledWith('srv-1');
+      expect(debugAttacher.detach).toHaveBeenCalledWith('srv-1');
+      expect(runtime.state).toBe('stopped');
+    });
+  });
+
   /* ── TrustGate (§12.8) ──────────────────────────────────────────── */
 
   describe('TrustGate', () => {

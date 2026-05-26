@@ -485,6 +485,7 @@ export class DashboardPanel implements vscode.Disposable {
 
       case 'jsm.server.showLogs':
       case 'jsm.server.doctor':
+      case 'jsm.server.recover':
       case 'jsm.server.startRun':
       case 'jsm.server.stop':
         return this.validateTuple(args, value =>

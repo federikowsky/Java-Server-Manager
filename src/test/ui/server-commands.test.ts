@@ -167,6 +167,23 @@ function mockDeps() {
       refreshStatus: vi.fn(() => ok(undefined)),
       getRuntime: vi.fn(() => undefined),
       getServerKeysInState: vi.fn(() => []),
+      inspectRecovery: vi.fn(async () => ok({
+        serverId: 'file:///ws::srv-1',
+        serverName: 'My Tomcat',
+        runtimeState: 'running',
+        pid: 321,
+        findings: [{
+          severity: 'warning',
+          message: 'Runtime PID 321 is no longer alive.',
+        }],
+        actions: [{
+          id: 'clearStalePidAndMarkStopped',
+          title: 'Clear stale PID and mark stopped',
+          description: 'Remove stale PID evidence and mark stopped.',
+          confirmation: 'Clear stale PID evidence and mark stopped?',
+        }],
+      })),
+      applyRecoveryAction: vi.fn(async () => ok(undefined)),
     },
     pluginRegistry: {
       get: vi.fn(() => ({
@@ -270,6 +287,7 @@ describe('Server Commands', () => {
       'jsm.server.detachDebug',
       'jsm.server.cancelOperation',
       'jsm.server.doctor',
+      'jsm.server.recover',
       'jsm.server.showLogs',
       'jsm.server.edit',
       'jsm.server.duplicate',
@@ -430,6 +448,64 @@ describe('Server Commands', () => {
         message: 'Server Doctor is not available.',
       });
       expect(mockShowErrorMessage).toHaveBeenCalledWith(expect.stringContaining('Server Doctor is not available'));
+    });
+  });
+
+  describe('jsm.server.recover', () => {
+    it('shows an explicit recovery plan, confirms the selected action, and applies it', async () => {
+      const srv = makeServer('srv-1', 'Recoverable Tomcat');
+      deps.workspaceRegistry.getServer.mockReturnValue(srv);
+      mockShowWarningMessage.mockResolvedValue('Clear stale PID and mark stopped');
+
+      const result = await invoke('jsm.server.recover', {
+        serverId: 'srv-1',
+        serverKey: 'file:///ws::srv-1',
+        workspaceFolderUri: 'file:///ws',
+      });
+
+      expect(deps.lifecycle.inspectRecovery).toHaveBeenCalledWith('file:///ws::srv-1');
+      expect(deps.logChannel.appendLine).toHaveBeenCalledWith(
+        'file:///ws::srv-1',
+        'Recoverable Tomcat',
+        expect.stringContaining('Lifecycle Recovery plan for My Tomcat'),
+      );
+      expect(mockShowWarningMessage).toHaveBeenCalledWith(
+        expect.stringContaining('1 recovery action'),
+        { modal: true },
+        'Clear stale PID and mark stopped',
+      );
+      expect(deps.lifecycle.applyRecoveryAction).toHaveBeenCalledWith(
+        'file:///ws::srv-1',
+        'clearStalePidAndMarkStopped',
+      );
+      expect(result).toEqual({
+        ok: true,
+        message: "Recovery action 'Clear stale PID and mark stopped' applied.",
+      });
+    });
+
+    it('does not mutate state when no recovery action is available', async () => {
+      deps.workspaceRegistry.getServer.mockReturnValue(makeServer());
+      deps.lifecycle.inspectRecovery.mockResolvedValue(ok({
+        serverId: 'file:///ws::srv-1',
+        serverName: 'My Tomcat',
+        runtimeState: 'stopped',
+        findings: [{ severity: 'info', message: 'No lifecycle recovery action is currently needed.' }],
+        actions: [],
+      }));
+
+      const result = await invoke('jsm.server.recover', {
+        serverId: 'srv-1',
+        serverKey: 'file:///ws::srv-1',
+        workspaceFolderUri: 'file:///ws',
+      });
+
+      expect(deps.lifecycle.applyRecoveryAction).not.toHaveBeenCalled();
+      expect(mockShowInfoMessage).toHaveBeenCalledWith(expect.stringContaining('No lifecycle recovery action'));
+      expect(result).toEqual({
+        ok: true,
+        message: 'No lifecycle recovery action is currently needed.',
+      });
     });
   });
 

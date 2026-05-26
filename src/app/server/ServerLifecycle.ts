@@ -13,6 +13,7 @@ import type {
 } from '@core/types';
 import { spawnSync } from 'child_process';
 import * as os from 'os';
+import * as path from 'path';
 import type { FileChangeBatch } from '@core/types/events';
 import type { Result } from '@core/result';
 import { ok, err } from '@core/result';
@@ -75,6 +76,35 @@ interface ServerEntry {
 }
 
 type ServerEntryGuard = (entry: ServerEntry) => Result<void, JsmError>;
+
+export type LifecycleRecoveryActionId = 'clearStalePidAndMarkStopped';
+export type LifecycleRecoverySeverity = 'info' | 'warning' | 'error';
+
+export interface LifecycleRecoveryFinding {
+  severity: LifecycleRecoverySeverity;
+  message: string;
+  details?: string;
+}
+
+export interface LifecycleRecoveryAction {
+  id: LifecycleRecoveryActionId;
+  title: string;
+  description: string;
+  confirmation: string;
+}
+
+export interface LifecycleRecoveryPlan {
+  serverId: ServerId;
+  serverName: string;
+  runtimeState: ServerState;
+  pid?: number;
+  findings: LifecycleRecoveryFinding[];
+  actions: LifecycleRecoveryAction[];
+}
+
+function normalizePathForIdentity(value: string): string {
+  return path.resolve(value);
+}
 
 /**
  * Server lifecycle orchestration (§9.1–§9.9).
@@ -160,6 +190,143 @@ export class ServerLifecycle {
   /** Enqueue a status refresh operation (§9). */
   refreshStatus(serverId: ServerId): Result<void, JsmError> {
     return this.enqueueForServer(serverId, { kind: 'StatusRefresh' });
+  }
+
+  async inspectRecovery(serverId: ServerId): Promise<Result<LifecycleRecoveryPlan, JsmError>> {
+    const entry = this.servers.get(serverId);
+    if (!entry) return this.notFound(serverId);
+
+    const { config, runtime } = entry;
+    const state = runtime.getState();
+    const findings: LifecycleRecoveryFinding[] = [];
+    const actions: LifecycleRecoveryAction[] = [];
+    const addClearStalePidAction = () => {
+      if (actions.some(action => action.id === 'clearStalePidAndMarkStopped')) {
+        return;
+      }
+      actions.push({
+        id: 'clearStalePidAndMarkStopped',
+        title: 'Clear stale PID and mark stopped',
+        description: 'Remove JSM PID evidence, detach debug state, and mark this server stopped. It does not kill any process.',
+        confirmation: `Clear stale PID evidence and mark '${config.name}' stopped?`,
+      });
+    };
+
+    const record = await this.deps.pidManager.readPidRecord(serverId);
+    if (record) {
+      const matchesServer = record.serverKey === String(serverId)
+        && normalizePathForIdentity(record.instancePath) === normalizePathForIdentity(config.instancePath)
+        && normalizePathForIdentity(record.runtimeHomePath) === normalizePathForIdentity(config.runtime.homePath);
+      const current = matchesServer && this.deps.pidManager.isPidRecordCurrent(record);
+      if (current) {
+        findings.push({
+          severity: 'info',
+          message: `PID ${record.pid} is current for this managed server.`,
+        });
+      } else {
+        findings.push({
+          severity: 'warning',
+          message: `Stored PID ${record.pid} is stale or no longer belongs to this managed server.`,
+        });
+        addClearStalePidAction();
+      }
+    } else {
+      const legacyPid = await this.deps.pidManager.readPid(serverId);
+      if (legacyPid) {
+        findings.push({
+          severity: 'warning',
+          message: `Legacy PID ${legacyPid} cannot be trusted for recovery.`,
+        });
+        addClearStalePidAction();
+      }
+    }
+
+    if (state.pid !== undefined && !this.deps.pidManager.isProcessAlive(state.pid)) {
+      findings.push({
+        severity: 'warning',
+        message: `Runtime PID ${state.pid} is no longer alive.`,
+      });
+      addClearStalePidAction();
+    } else if ((state.state === 'running' || state.state === 'error') && state.pid === undefined) {
+      findings.push({
+        severity: 'warning',
+        message: `Runtime state is '${state.state}' without a trusted PID.`,
+      });
+      addClearStalePidAction();
+    }
+
+    if (state.state !== 'running') {
+      try {
+        const portListening = await this.deps.portScanner.probe(config.ports.http, config.host);
+        if (portListening) {
+          findings.push({
+            severity: 'warning',
+            message: `HTTP port ${config.ports.http} is listening while JSM does not have a trusted running server state.`,
+            details: 'JSM will not kill an unattributed process. Stop it externally or edit the server port.',
+          });
+        }
+      } catch (cause) {
+        findings.push({
+          severity: 'warning',
+          message: 'Could not probe HTTP port while planning recovery.',
+          details: cause instanceof Error ? cause.message : String(cause),
+        });
+      }
+    }
+
+    if (findings.length === 0) {
+      findings.push({
+        severity: 'info',
+        message: 'No lifecycle recovery action is currently needed.',
+      });
+    }
+
+    return ok({
+      serverId,
+      serverName: config.name,
+      runtimeState: state.state,
+      pid: state.pid,
+      findings,
+      actions,
+    });
+  }
+
+  async applyRecoveryAction(
+    serverId: ServerId,
+    actionId: LifecycleRecoveryActionId,
+  ): Promise<Result<void, JsmError>> {
+    if (!this.checkTrust()) return this.untrustedErr();
+
+    const entry = this.servers.get(serverId);
+    if (!entry) return this.notFound(serverId);
+
+    const planResult = await this.inspectRecovery(serverId);
+    if (!planResult.ok) return planResult;
+    if (!planResult.value.actions.some(action => action.id === actionId)) {
+      return err(new JsmError({
+        code: ErrorCode.InvalidConfig,
+        message: `Recovery action '${actionId}' is not currently available for '${entry.config.name}'.`,
+      }));
+    }
+
+    switch (actionId) {
+      case 'clearStalePidAndMarkStopped':
+        await this.deps.pidManager.clearPid(serverId);
+        try {
+          await this.deps.debugAttacher.detach(serverId);
+        } catch (cause) {
+          this.deps.logger.warn(`ServerLifecycle: recovery detach failed for '${entry.config.name}'`, cause);
+        }
+        entry.runtime.setDebugAttached(false);
+        entry.runtime.forceState('stopped');
+        this.deps.logger.warn(`ServerLifecycle: recovery marked '${entry.config.name}' stopped after clearing stale PID evidence`);
+        return ok(undefined);
+      default:
+        return err(new JsmError({
+          code: ErrorCode.InvalidConfig,
+          message: `Unknown recovery action '${actionId}'.`,
+        }));
+    }
   }
 
   /**

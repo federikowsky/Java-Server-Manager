@@ -90,6 +90,11 @@
         "icon": "$(debug-alt)"
       },
       {
+        "command": "jsm.server.recover",
+        "title": "Plan Lifecycle Recovery",
+        "icon": "$(tools)"
+      },
+      {
         "command": "jsm.server.showLogs",
         "title": "Show Server Logs",
         "icon": "$(output)"
@@ -303,6 +308,11 @@
           "command": "jsm.server.doctor",
           "when": "view == javaServerManagerView && viewItem =~ /jsm\\.server\\..*/",
           "group": "troubleshooting@1.5"
+        },
+        {
+          "command": "jsm.server.recover",
+          "when": "view == javaServerManagerView && viewItem =~ /jsm\\.server\\..*/",
+          "group": "troubleshooting@1.75"
         },
         {
           "command": "jsm.server.showLogs",

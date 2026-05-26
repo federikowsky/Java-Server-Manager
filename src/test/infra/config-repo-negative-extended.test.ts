@@ -39,6 +39,26 @@ describe('ConfigRepo negative paths (extended)', () => {
     }
   });
 
+  it('does not fall back to legacy workspace inventory when authoritative VS Code storage is corrupt', async () => {
+    const storageRoot = path.join(tmpDir, 'vscode-storage', 'inventory');
+    await fs.mkdir(storageRoot, { recursive: true });
+    await fs.writeFile(path.join(storageRoot, 'jsm.servers.json'), '{broken', 'utf-8');
+    await fs.writeFile(
+      path.join(tmpDir, '.vscode', 'jsm.servers.json'),
+      JSON.stringify({ servers: [{ id: 'srv-legacy', name: 'Legacy' }] }),
+      'utf-8',
+    );
+
+    const repo = new ConfigRepo(tmpDir, mockLogger(), { storageRoot });
+    const result = await repo.load();
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(ErrorCode.ConfigReadFailed);
+    }
+    expect(repo.getAll()).toEqual([]);
+  });
+
   it('rejects duplicate server ids before mutating the live cache', async () => {
     const configPath = path.join(tmpDir, '.vscode', 'jsm.servers.json');
     await fs.writeFile(configPath, JSON.stringify({

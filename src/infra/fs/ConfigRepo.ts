@@ -23,21 +23,43 @@ export interface ParsedWorkspaceConfig {
   servers: ServerConfig[];
 }
 
+export interface ConfigRepoOptions {
+  /** Directory that owns the authoritative inventory file. In production this is VS Code workspace storage. */
+  storageRoot?: string;
+  /** Workspace folder that may still contain the pre-storage `.vscode/jsm.servers.json` inventory. */
+  legacyWorkspaceFolder?: string;
+  /** Disable legacy workspace inventory migration, primarily for tests. */
+  migrateLegacyWorkspaceConfig?: boolean;
+}
+
 /**
- * Config file repository for `.vscode/jsm.servers.json`.
+ * Managed server inventory repository.
  * - In-memory Map cache
  * - Serialized write queue (§5.5)
  * - External change detection delegated to caller via `isDirty()`
+ * - Optional one-way migration from legacy `.vscode/jsm.servers.json`
  */
 export class ConfigRepo {
   private readonly configPath: string;
+  private readonly legacyConfigPath?: string;
   private readonly logger: Logger;
   private cache: Map<string, ServerConfig> = new Map();
   private writeQueue: Promise<void> = Promise.resolve();
   private lastKnownContent = '';
 
-  constructor(workspaceFolder: string, logger: Logger) {
-    this.configPath = path.join(workspaceFolder, WORKSPACE_CONFIG_DIR, WORKSPACE_CONFIG_FILENAME);
+  constructor(workspaceFolder: string, logger: Logger, options: ConfigRepoOptions = {}) {
+    const legacyPath = path.join(
+      options.legacyWorkspaceFolder ?? workspaceFolder,
+      WORKSPACE_CONFIG_DIR,
+      WORKSPACE_CONFIG_FILENAME,
+    );
+    this.configPath = options.storageRoot
+      ? path.join(options.storageRoot, WORKSPACE_CONFIG_FILENAME)
+      : legacyPath;
+    this.legacyConfigPath =
+      options.storageRoot && options.migrateLegacyWorkspaceConfig !== false && legacyPath !== this.configPath
+        ? legacyPath
+        : undefined;
     this.logger = logger;
   }
 
@@ -45,14 +67,22 @@ export class ConfigRepo {
     return this.configPath;
   }
 
-  /** Read and parse workspace config without mutating the live cache. */
+  /** Read and parse inventory without mutating the live cache. May migrate a legacy workspace file to storage. */
   async readWorkspace(): Promise<Result<ParsedWorkspaceConfig, JsmError>> {
     const fileExists = await exists(this.configPath);
-    if (!fileExists) {
-      return ok({ content: '', version: CURRENT_WORKSPACE_CONFIG_VERSION, servers: [] });
+    if (fileExists) {
+      return this.readConfigFile(this.configPath);
     }
 
-    const readResult = await readFileSafe(this.configPath);
+    if (this.legacyConfigPath && await exists(this.legacyConfigPath)) {
+      return this.migrateLegacyConfig();
+    }
+
+    return ok({ content: '', version: CURRENT_WORKSPACE_CONFIG_VERSION, servers: [] });
+  }
+
+  private async readConfigFile(filePath: string): Promise<Result<ParsedWorkspaceConfig, JsmError>> {
+    const readResult = await readFileSafe(filePath);
     if (!readResult.ok) return readResult;
 
     try {
@@ -94,6 +124,26 @@ export class ConfigRepo {
         cause,
       }));
     }
+  }
+
+  private async migrateLegacyConfig(): Promise<Result<ParsedWorkspaceConfig, JsmError>> {
+    if (!this.legacyConfigPath) {
+      return ok({ content: '', version: CURRENT_WORKSPACE_CONFIG_VERSION, servers: [] });
+    }
+
+    const legacyResult = await this.readConfigFile(this.legacyConfigPath);
+    if (!legacyResult.ok) return legacyResult;
+
+    const content = serializeWorkspaceConfig(legacyResult.value.servers);
+    const writeResult = await atomicWrite(this.configPath, content);
+    if (!writeResult.ok) return writeResult;
+
+    this.logger.info(`ConfigRepo: migrated legacy workspace inventory to ${this.configPath}`);
+    return ok({
+      ...legacyResult.value,
+      content,
+      version: CURRENT_WORKSPACE_CONFIG_VERSION,
+    });
   }
 
   /** Replace the in-memory cache from an already-validated workspace snapshot. */
@@ -162,11 +212,7 @@ export class ConfigRepo {
       const nextCache = new Map(this.cache);
       mutate(nextCache);
 
-      const data: WorkspaceConfig = {
-        version: CURRENT_WORKSPACE_CONFIG_VERSION,
-        servers: [...nextCache.values()],
-      };
-      const content = JSON.stringify(data, null, 2);
+      const content = serializeWorkspaceConfig([...nextCache.values()]);
       const result = await atomicWrite(this.configPath, content);
       if (result.ok) {
         this.cache = nextCache;
@@ -180,6 +226,14 @@ export class ConfigRepo {
     this.writeQueue = pendingWrite.then(() => undefined, () => undefined);
     return pendingWrite;
   }
+}
+
+function serializeWorkspaceConfig(servers: readonly ServerConfig[]): string {
+  const data: WorkspaceConfig = {
+    version: CURRENT_WORKSPACE_CONFIG_VERSION,
+    servers: [...servers],
+  };
+  return JSON.stringify(data, null, 2);
 }
 
 function parseWorkspaceConfigVersion(

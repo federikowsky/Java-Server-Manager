@@ -6,9 +6,15 @@ The format follows Keep a Changelog and this project adheres to Semantic Version
 
 ## [Unreleased]
 
-### Planned
+### Changed
 
-- ongoing improvements toward stable readiness
+- Managed server inventory is now stored in VS Code workspace storage instead of writing `jsm.servers.json` directly under workspace `.vscode`.
+- Existing legacy `.vscode/jsm.servers.json` files are migrated one time into storage when no storage inventory exists; after migration, VS Code storage remains the sole authority.
+
+### Tests
+
+- Added ConfigRepo coverage for storage-backed persistence, legacy migration, storage-over-legacy authority, and corrupt-storage fail-closed behavior.
+- Added activation coverage proving the extension wires inventory storage under `ctx.storageUri` beside managed server files.
 
 ## [0.1.7] - 2026-05-25
 

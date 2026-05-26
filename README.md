@@ -52,7 +52,7 @@ Open the folder in VS Code and press **F5** to launch the **Extension Developmen
 
 ## Configuration note
 
-Prefer the extension UI and registered commands for server and deployment changes. Manually editing workspace `jsm.servers.json` is not a supported way to keep lifecycle, watchers, and UI state consistent.
+Prefer the extension UI and registered commands for server and deployment changes. JSM stores the managed server inventory in VS Code workspace storage; legacy `.vscode/jsm.servers.json` files are migrated once when storage is empty. Manual edits to inventory files are not a supported way to keep lifecycle, watchers, and UI state consistent.
 
 ## Documentation
 

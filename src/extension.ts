@@ -56,7 +56,9 @@ function workspaceStorageId(workspaceFolderUri: string): string {
 
 function workspaceFolderUriString(folder: vscode.WorkspaceFolder): string {
   const uri = folder.uri as { toString?: () => string; fsPath?: string };
-  return typeof uri?.toString === 'function' ? uri.toString() : uri?.fsPath ?? '';
+  return typeof uri?.toString === 'function' && uri.toString !== Object.prototype.toString
+    ? uri.toString()
+    : uri?.fsPath ?? '';
 }
 
 type LoadedServerRegistration = {
@@ -421,7 +423,14 @@ function buildWorkspaceServiceEntry(params: WorkspaceEntryFactoryParams): Worksp
     name: folder.name,
     fsPath: folder.uri.fsPath,
   };
-  const configRepo = new ConfigRepo(folder.uri.fsPath, logger);
+  const workspaceStorageRoot = path.join(
+    baseManagedStorageRoot,
+    'workspaces',
+    workspaceStorageId(scope.uri),
+  );
+  const configRepo = new ConfigRepo(folder.uri.fsPath, logger, {
+    storageRoot: path.join(workspaceStorageRoot, 'inventory'),
+  });
   const configService = new ConfigService({
     repo: configRepo,
     validator,
@@ -431,7 +440,7 @@ function buildWorkspaceServiceEntry(params: WorkspaceEntryFactoryParams): Worksp
     trustGate,
   });
   const managedInstancePathResolver = new ManagedInstancePathResolver(
-    path.join(baseManagedStorageRoot, 'workspaces', workspaceStorageId(scope.uri), 'instances'),
+    path.join(workspaceStorageRoot, 'instances'),
   );
   const provisioningService = new ServerProvisioningService({
     configService,
@@ -533,6 +542,7 @@ async function reconcileLoadedServers(params: ReconcileLoadedServersParams): Pro
 export type JsmExtensionE2EApi = {
   __e2eGetDeploySyncStartedCount: () => number;
   __e2eGetAutosyncWatcherCount: () => number;
+  __e2eGetLoadedServers: () => ServerConfig[];
 };
 
 export async function activate(ctx: vscode.ExtensionContext): Promise<JsmExtensionE2EApi | void> {
@@ -986,6 +996,7 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<JsmExtensi
     return {
       __e2eGetDeploySyncStartedCount: () => e2eDeploySyncStarted.count,
       __e2eGetAutosyncWatcherCount: () => autoSyncService.getWatcherCount(),
+      __e2eGetLoadedServers: () => loadedServers.map(server => server.config),
     };
   }
 }

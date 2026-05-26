@@ -88,6 +88,8 @@ This domain excludes:
 
 The workspace inventory document is versioned for safe forward migration. Missing `version` is interpreted as legacy v0 and rewritten as the current version by managed saves. Versioning protects the authoritative inventory format; it does not introduce a second configuration authority.
 
+The authoritative inventory is persisted in VS Code workspace storage under an extension-owned per-workspace folder. Legacy workspace files at `.vscode/jsm.servers.json` are migration input only: when storage has no inventory yet, JSM validates the legacy file, writes the current document into VS Code storage, and then treats storage as authoritative. Later edits to the legacy file are ignored.
+
 ### 5.2 User Preferences
 
 User preferences define:

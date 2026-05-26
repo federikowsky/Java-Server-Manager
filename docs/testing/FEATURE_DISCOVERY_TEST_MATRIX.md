@@ -1,6 +1,6 @@
 # Feature Discovery And Test Matrix
 
-Date: 2026-05-25
+Date: 2026-05-26
 Branch: `codex/full-feature-test-discovery`
 Version audited: `0.1.7`
 
@@ -22,7 +22,7 @@ Version audited: `0.1.7`
 | Manifest and command surface | Every contributed command is registered; every menu command is declared. | `extension-activation`, command module tests. | Added `webview-contracts.test.ts` manifest/register/menu parity. |
 | Tree operational control | Tree commands remain canonical for start, debug, stop, restart, cancel, edit, duplicate, remove, redeploy, logs, config. | `server-commands.test.ts`, `tree-view-provider.test.ts`, lifecycle tests. | Added registration parity plus direct tests for restart, attach/detach debug, cancel, remove, redeploy-all. |
 | Dashboard admin surface | Dashboard can author servers, deployments, templates, settings, and dispatch only allowlisted commands. | `dashboard-panel.test.ts`, `protocol-validation.test.ts`, source regression tests. | Added dashboard client executeCommand allowlist and handler/registration contract. |
-| Managed inventory authority | Existing server behavior comes from workspace inventory only. | `ConfigService`, `ConfigRepo`, `WorkspaceServiceRegistry`, integration lifecycle tests. | Documented as release gate; no drift found. |
+| Managed inventory authority | Existing server behavior comes from workspace-scoped managed inventory in VS Code storage only. | `ConfigService`, `ConfigRepo`, `WorkspaceServiceRegistry`, integration lifecycle tests. | Added storage-backed persistence, one-time legacy migration, storage-over-legacy authority, and corrupt-storage fail-closed coverage. |
 | Templates | Templates are one-way provisioning presets, not live authority. | `TemplateService.test.ts`, dashboard template CRUD tests. | No code change needed. |
 | Runtime state | Runtime/server/deployment state is derived and non-authoritative. | `ServerRuntime`, `ServerLifecycle`, deployment state tests. | No code change needed. |
 | Hooks | Hooks are parent-operation checkpoints and testable command/task configs, not standalone automation. | `HookRunner`, extension hook executor, hook editor regression, server hook command tests. | Kept hook editor regression in matrix; no architecture drift found. |
@@ -66,6 +66,10 @@ Version audited: `0.1.7`
 | JSM-TC-028 | Process safety | Process spawning and stop/cancel behavior. | No `shell: true`; process args are structured; cancellation/timeout is handled. | process spawner, lifecycle, CI shell audit |
 | JSM-TC-029 | Tomcat plugin | Detect, validate, start, stop, deploy, rollback, logs, SSL XML. | Behavior stays behind plugin methods. | Tomcat plugin/XML tests |
 | JSM-TC-030 | Release gates | Run CI-equivalent local checks and package checks. | Test, typecheck, lint, build, package, e2e, release helper checks pass. | Final validation commands |
+| JSM-TC-031 | Inventory storage | Save a managed server with VS Code storage available. | Writes `jsm.servers.json` under extension workspace storage, not workspace `.vscode`. | `config-repo.test.ts`, `extension-activation.test.ts` |
+| JSM-TC-032 | Legacy inventory migration | Storage inventory is absent and `.vscode/jsm.servers.json` exists. | Validates and copies legacy content into storage once while leaving legacy non-authoritative. | `config-repo.test.ts` |
+| JSM-TC-033 | Storage authority | Both storage and legacy inventories exist. | Reads storage only and ignores legacy edits. | `config-repo.test.ts` |
+| JSM-TC-034 | Corrupt storage fail-closed | Storage inventory is invalid while legacy inventory is valid. | Fails with config read error and does not fall back to legacy authority. | `config-repo-negative-extended.test.ts` |
 
 ## Manual/E2E Scenarios To Keep
 

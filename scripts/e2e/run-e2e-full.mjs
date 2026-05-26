@@ -51,9 +51,9 @@ async function main() {
 
   runMvnPackage(workspace);
 
-  const jsmConfig = path.join(workspace, '.vscode', 'jsm.servers.json');
-  if (!existsSync(jsmConfig)) {
-    console.error('[e2e-full] missing', jsmConfig);
+  const legacyMigrationSeed = path.join(workspace, '.vscode', 'jsm.servers.json');
+  if (!existsSync(legacyMigrationSeed)) {
+    console.error('[e2e-full] missing legacy migration seed', legacyMigrationSeed);
     process.exit(1);
   }
 

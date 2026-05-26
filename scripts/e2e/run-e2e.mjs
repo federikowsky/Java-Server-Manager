@@ -80,6 +80,7 @@ async function main() {
       instancePath,
       tomcatHome,
     });
+    // Seed the legacy inventory path so the extension exercises one-time migration into VS Code storage.
     await fs.writeFile(path.join(vscodeDir, 'jsm.servers.json'), `${JSON.stringify(cfg, null, 2)}\n`, 'utf8');
 
     exitCode = await runVsCodeExtensionTests({

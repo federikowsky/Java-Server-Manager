@@ -77,6 +77,75 @@ describe('ConfigRepo', () => {
     expect(result.value[0].name).toBe('Test Server');
   });
 
+  it('persists managed inventory in the provided VS Code storage root instead of workspace .vscode', async () => {
+    const storageRoot = path.join(tmpDir, 'vscode-storage', 'inventory');
+    const storageRepo = new ConfigRepo(tmpDir, mockLogger(), { storageRoot });
+    const server = minimalServer('s1', 'Storage Server');
+
+    const saveResult = await storageRepo.save(server);
+
+    expect(saveResult.ok).toBe(true);
+    const raw = await fs.readFile(path.join(storageRoot, 'jsm.servers.json'), 'utf-8');
+    expect(JSON.parse(raw).servers[0].name).toBe('Storage Server');
+    await expect(fs.access(path.join(tmpDir, '.vscode', 'jsm.servers.json'))).rejects.toThrow();
+
+    const reloadedRepo = new ConfigRepo(tmpDir, mockLogger(), { storageRoot });
+    const loadResult = await reloadedRepo.load();
+    expect(loadResult.ok).toBe(true);
+    if (!loadResult.ok) return;
+    expect(loadResult.value[0].name).toBe('Storage Server');
+  });
+
+  it('migrates an existing workspace .vscode inventory into VS Code storage when storage is empty', async () => {
+    const legacyServer = minimalServer('legacy', 'Legacy Workspace Server');
+    const legacyPath = path.join(tmpDir, '.vscode', 'jsm.servers.json');
+    const storageRoot = path.join(tmpDir, 'vscode-storage', 'inventory');
+    await fs.writeFile(
+      legacyPath,
+      JSON.stringify({ servers: [legacyServer] }, null, 2),
+      'utf-8',
+    );
+
+    const storageRepo = new ConfigRepo(tmpDir, mockLogger(), { storageRoot });
+    const loadResult = await storageRepo.load();
+
+    expect(loadResult.ok).toBe(true);
+    if (!loadResult.ok) return;
+    expect(loadResult.value).toHaveLength(1);
+    expect(loadResult.value[0].name).toBe('Legacy Workspace Server');
+
+    const migratedRaw = await fs.readFile(path.join(storageRoot, 'jsm.servers.json'), 'utf-8');
+    const migrated = JSON.parse(migratedRaw);
+    expect(migrated.version).toBe(CURRENT_WORKSPACE_CONFIG_VERSION);
+    expect(migrated.servers[0].id).toBe('legacy');
+
+    const legacyRaw = await fs.readFile(legacyPath, 'utf-8');
+    expect(JSON.parse(legacyRaw).servers[0].id).toBe('legacy');
+  });
+
+  it('treats VS Code storage inventory as authoritative when legacy workspace inventory also exists', async () => {
+    const storageRoot = path.join(tmpDir, 'vscode-storage', 'inventory');
+    const storageRepo = new ConfigRepo(tmpDir, mockLogger(), { storageRoot });
+    const saveResult = await storageRepo.save(minimalServer('storage', 'Storage Authority'));
+    expect(saveResult.ok).toBe(true);
+
+    await fs.writeFile(
+      path.join(tmpDir, '.vscode', 'jsm.servers.json'),
+      JSON.stringify({ servers: [minimalServer('legacy', 'Legacy Should Be Ignored')] }, null, 2),
+      'utf-8',
+    );
+
+    const reloadedRepo = new ConfigRepo(tmpDir, mockLogger(), { storageRoot });
+    const loadResult = await reloadedRepo.load();
+
+    expect(loadResult.ok).toBe(true);
+    if (!loadResult.ok) return;
+    expect(loadResult.value).toHaveLength(1);
+    expect(loadResult.value[0].id).toBe('storage');
+    expect(loadResult.value[0].name).toBe('Storage Authority');
+    expect(await reloadedRepo.isDirty()).toBe(false);
+  });
+
   it('delete removes a server', async () => {
     const s1 = minimalServer('s1', 'Server 1');
     const s2 = minimalServer('s2', 'Server 2');

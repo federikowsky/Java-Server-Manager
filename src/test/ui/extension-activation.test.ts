@@ -19,6 +19,7 @@ const mockAutoSyncRebindWatchers = vi.fn();
 const mockLifecycleUpdateConfig = vi.fn();
 const mockLifecycleUnregister = vi.fn();
 const mockPluginRegistryDispose = vi.fn(async () => {});
+const mockConfigRepoCtorArgs: unknown[][] = [];
 
 let mockLogChannelInstance: any = null;
 let mockChannelInstance: any = null;
@@ -123,7 +124,14 @@ vi.mock('@infra/logging', () => ({
 // ConfigRepo
 vi.mock('@infra/fs', () => ({
   ConfigRepo: class {
-    filePath = '/workspace/.vscode/jsm.servers.json';
+    filePath: string;
+    constructor(...args: unknown[]) {
+      mockConfigRepoCtorArgs.push(args);
+      const options = args[2] as { storageRoot?: string } | undefined;
+      this.filePath = options?.storageRoot
+        ? `${options.storageRoot}/jsm.servers.json`
+        : '/workspace/.vscode/jsm.servers.json';
+    }
     loadWorkspace = vi.fn();
     save = vi.fn();
   },
@@ -342,6 +350,7 @@ describe('Extension Activation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     eventHandlers.clear();
+    mockConfigRepoCtorArgs.length = 0;
     mockConfigServiceLoadWorkspace.mockResolvedValue({ ok: true, value: [] });
     mockLifecycleReconcile.mockResolvedValue(undefined);
     mockPluginRegistryDispose.mockResolvedValue(undefined);
@@ -359,6 +368,7 @@ describe('Extension Activation', () => {
         update: vi.fn(),
         keys: vi.fn(() => []),
       },
+      storageUri: { fsPath: '/vscode/storage' },
       subscriptions: [],
     };
   });
@@ -386,6 +396,23 @@ describe('Extension Activation', () => {
     expect(mockCreateOutputChannel).toHaveBeenCalled();
     expect(mockCreateTreeView).toHaveBeenCalled();
     expect(mockSchemaValidatorRegisterBuiltInSchemas).toHaveBeenCalledWith(expect.any(Object));
+  });
+
+  it('should create the managed inventory repo under VS Code workspace storage', async () => {
+    workspaceFolders = [{
+      name: 'Test Workspace',
+      uri: {
+        fsPath: '/test/workspace',
+        toString: () => 'file:///test/workspace',
+      },
+    } as any];
+
+    await activate(ctx);
+
+    expect(mockConfigRepoCtorArgs).toHaveLength(1);
+    const repoOptions = mockConfigRepoCtorArgs[0][2] as { storageRoot?: string };
+    expect(repoOptions.storageRoot).toMatch(/^\/vscode\/storage\/workspaces\/[a-f0-9]{12}\/inventory$/);
+    expect(repoOptions.storageRoot).not.toContain('/test/workspace/.vscode');
   });
 
   function setupWorkspaceScope() {

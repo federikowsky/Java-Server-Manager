@@ -23,6 +23,7 @@ export interface CreateServerRequest {
   httpPort?: number;
   debugPort?: number;
   debugBind?: string;
+  envProfileId?: string;
   vmArgs?: string[];
   hooks?: HookConfig[];
   pluginConfig?: PluginConfig;
@@ -37,6 +38,7 @@ export interface ServerAuthoringDraft {
   httpPort: number;
   debugPort?: number;
   debugBind: string;
+  envProfileId?: string;
   vmArgs: string[];
   hooks: HookConfig[];
   pluginConfig?: PluginConfig;

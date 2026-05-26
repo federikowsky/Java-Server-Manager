@@ -40,6 +40,34 @@ describe('SchemaValidator', () => {
     expect(result.ok).toBe(true);
   });
 
+  it('accepts explicit environment profile binding on server run config', () => {
+    const server = {
+      id: '550e8400-e29b-41d4-a716-446655440000',
+      name: 'Profiled',
+      type: 'tomcat',
+      runtime: { id: 'r1', homePath: '/opt/tomcat' },
+      instancePath: '/tmp/base',
+      javaHome: '/usr/lib/jvm/java-17',
+      host: '127.0.0.1',
+      ports: { http: 8080, debug: 5005 },
+      run: { env: {}, envProfileId: 'team-local', vmArgs: [] },
+      debug: { enabled: true, bind: '127.0.0.1', attachDelayMs: 1000 },
+      deployments: [],
+      autosync: {
+        enabled: true,
+        debounceMs: 400,
+        maxBatchFiles: 200,
+        maxBatchBytes: 20000000,
+        stormBackoffMs: 2000,
+        ignoreGlobs: [],
+      },
+      hooks: [],
+    };
+
+    const result = validator.validate(server, 'server-config');
+    expect(result.ok).toBe(true);
+  });
+
   it('accepts a shell-based hook config', () => {
     const server = {
       id: '550e8400-e29b-41d4-a716-446655440000',

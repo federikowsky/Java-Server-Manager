@@ -165,6 +165,7 @@ function mergeServerDraft(
     httpPort: overrides.httpPort ?? base.httpPort,
     debugPort: overrides.debugPort ?? base.debugPort,
     debugBind: overrides.debugBind ?? base.debugBind,
+    envProfileId: overrides.envProfileId ?? base.envProfileId,
     vmArgs: overrides.vmArgs !== undefined ? [...overrides.vmArgs] : [...base.vmArgs],
     hooks: overrides.hooks !== undefined ? normalizeHookList(overrides.hooks) : normalizeHookList(base.hooks),
     pluginConfig: overrides.pluginConfig !== undefined
@@ -190,6 +191,7 @@ export function createServerDraft(options?: {
     httpPort: defaults?.defaultHttpPort ?? DEFAULT_HTTP_PORT,
     debugPort: defaults?.defaultDebugPort ?? DEFAULT_DEBUG_PORT,
     debugBind: DEFAULT_DEBUG_BIND,
+    envProfileId: undefined,
     vmArgs: [],
     hooks: [],
     pluginConfig: undefined,
@@ -206,6 +208,7 @@ export function serverConfigToDraft(config: ServerConfig): ServerAuthoringDraft 
     httpPort: config.ports.http,
     debugPort: config.ports.debug,
     debugBind: config.debug.bind,
+    envProfileId: config.run.envProfileId,
     vmArgs: [...config.run.vmArgs],
     hooks: normalizeHookList(config.hooks),
     pluginConfig: cloneValue(config.pluginConfig),
@@ -222,6 +225,7 @@ export function serverDraftToFormData(draft: Partial<ServerAuthoringDraft>): Rec
     ...(draft.httpPort !== undefined ? { 'ports.http': draft.httpPort } : {}),
     ...(draft.debugPort !== undefined ? { 'ports.debug': draft.debugPort } : {}),
     ...(draft.debugBind !== undefined ? { 'debug.bind': draft.debugBind } : {}),
+    ...(draft.envProfileId !== undefined ? { 'run.envProfileId': draft.envProfileId } : {}),
     ...(draft.vmArgs !== undefined ? { 'run.vmArgs': [...draft.vmArgs] } : {}),
     ...(draft.hooks !== undefined ? { hooks: normalizeHookList(draft.hooks) } : {}),
     ...draftToPluginConfigRecord(draft),
@@ -301,6 +305,9 @@ export function formDataToServerDraft(
     httpPort: Number(data['ports.http'] ?? options?.existing?.ports.http ?? defaults?.defaultHttpPort ?? DEFAULT_HTTP_PORT),
     debugPort: optionalNumber(data, 'ports.debug'),
     debugBind: String(data['debug.bind'] ?? options?.existing?.debug.bind ?? DEFAULT_DEBUG_BIND).trim(),
+    envProfileId: 'run.envProfileId' in data
+      ? optionalString(data, 'run.envProfileId')
+      : options?.existing?.run.envProfileId,
     vmArgs: normalizeStringList(data['run.vmArgs'] ?? options?.existing?.run.vmArgs ?? []),
     hooks: normalizeHookList(data['hooks'] ?? options?.existing?.hooks ?? []),
     pluginConfig: buildTomcatPluginConfigFromRecord(
@@ -330,6 +337,7 @@ export function applyServerDraftToConfig(
     },
     run: {
       ...existing.run,
+      envProfileId: draft.envProfileId,
       vmArgs: [...draft.vmArgs],
     },
     debug: {
@@ -351,6 +359,7 @@ export function serverDraftToCreateServerRequest(draft: ServerAuthoringDraft): C
     httpPort: draft.httpPort,
     debugPort: draft.debugPort ?? DEFAULT_DEBUG_PORT,
     debugBind: draft.debugBind,
+    envProfileId: draft.envProfileId,
     vmArgs: [...draft.vmArgs],
     hooks: normalizeHookList(draft.hooks),
     pluginConfig: cloneValue(draft.pluginConfig),

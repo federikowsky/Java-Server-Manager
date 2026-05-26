@@ -79,6 +79,8 @@ export function buildDashboardSyncStatePayload(deps: DashboardPanelDeps): Dashbo
     scope: t.scope,
   }));
 
+  const environmentProfiles = deps.environmentProfileService?.listProfiles() ?? [];
+
   const capabilities: Record<string, unknown> = {};
   for (const type of deps.pluginRegistry.getSupportedTypes()) {
     const plugin = deps.pluginRegistry.get(type);
@@ -114,6 +116,7 @@ export function buildDashboardSyncStatePayload(deps: DashboardPanelDeps): Dashbo
     operationHistory,
     autosyncDiagnostics,
     templates,
+    environmentProfiles,
     capabilities,
     workspaceFolders,
     settings,

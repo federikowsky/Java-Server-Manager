@@ -98,6 +98,18 @@ export interface SpaServerRecord {
   workspaceFolderName: string;
 }
 
+export interface SpaEnvironmentProfileSummary {
+  id: string;
+  name: string;
+  description?: string;
+  variables: Record<string, {
+    secret: boolean;
+    required: boolean;
+    hasValue: boolean;
+    value?: string;
+  }>;
+}
+
 // ── Messages: Webview → Host ────────────────────────────────────────────────
 
 export type WebviewToHost =
@@ -146,6 +158,7 @@ export type HostToWebview =
       operationHistory: Record<string, unknown[]>;
       autosyncDiagnostics: Record<string, unknown>;
       templates: Array<{ template: unknown; scope: 'global' | 'workspace' | 'gallery' }>;
+      environmentProfiles: SpaEnvironmentProfileSummary[];
       capabilities: Record<string, unknown>;
       workspaceFolders: Array<{ uri: string; name: string }>;
       settings: SpaSettings;

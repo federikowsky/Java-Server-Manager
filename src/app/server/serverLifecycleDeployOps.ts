@@ -24,6 +24,9 @@ export interface ServerLifecycleDeployDeps {
   logger: Logger;
   getOutputSink?: (serverKey: ServerId, serverName: string) => OutputSink;
   resolveServerConfig?: (serverKey: ServerId) => ServerConfig | undefined;
+  environmentProfiles?: {
+    resolveForServer(config: ServerConfig): Promise<Result<ServerConfig, JsmError>>;
+  };
   onDeploySyncFailure?: (serverKey: ServerId, deploymentId: DeploymentId) => void;
 }
 
@@ -47,11 +50,19 @@ function appendDeploySyncFailure(
   ctx.output.appendLine(`Deploy sync failed for '${deployName}': ${error.message}`);
 }
 
-function resolveRunningConfig(
-  deps: Pick<ServerLifecycleDeployDeps, 'resolveServerConfig'>,
+async function resolveRunningConfig(
+  deps: Pick<ServerLifecycleDeployDeps, 'resolveServerConfig' | 'environmentProfiles'>,
   server: ServerLifecycleDeployEntry,
-): ServerConfig {
-  return deps.resolveServerConfig?.(server.serverKey) ?? server.config;
+): Promise<ServerConfig> {
+  const config = deps.resolveServerConfig?.(server.serverKey) ?? server.config;
+  const result = await deps.environmentProfiles?.resolveForServer(config);
+  if (!result) {
+    return config;
+  }
+  if (!result.ok) {
+    throw result.error;
+  }
+  return result.value;
 }
 
 function resolveTargetDeployment(
@@ -99,8 +110,8 @@ function requireTargetDeploymentId(entry: QueueEntry, operationName: string): De
   });
 }
 
-function createTargetedDeploymentOperationContext(
-  deps: Pick<ServerLifecycleDeployDeps, 'getOutputSink' | 'resolveServerConfig'>,
+async function createTargetedDeploymentOperationContext(
+  deps: Pick<ServerLifecycleDeployDeps, 'getOutputSink' | 'resolveServerConfig' | 'environmentProfiles'>,
   server: ServerLifecycleDeployEntry,
   options: {
     deploymentId: DeploymentId;
@@ -109,8 +120,8 @@ function createTargetedDeploymentOperationContext(
     cancel: OperationContext['cancel'];
     operationId: OperationContext['operationId'];
   },
-): TargetedDeploymentOperationContext {
-  const config = resolveRunningConfig(deps, server);
+): Promise<TargetedDeploymentOperationContext> {
+  const config = await resolveRunningConfig(deps, server);
   const deployment = resolveTargetDeployment(config, options.deploymentId);
   const ctx = makeDeployCtx(
     deps,
@@ -148,7 +159,7 @@ async function runTargetedDeploymentOperation(
   },
 ): Promise<void> {
   const deploymentId = requireTargetDeploymentId(entry, options.kind);
-  const context = createTargetedDeploymentOperationContext(deps, server, {
+  const context = await createTargetedDeploymentOperationContext(deps, server, {
     deploymentId,
     kind: options.kind,
     timeoutMs: options.timeoutMs,
@@ -234,7 +245,7 @@ export async function runRedeployAllOperation(
   operationId: OperationContext['operationId'],
   cancel: OperationContext['cancel'],
 ): Promise<void> {
-  const config = resolveRunningConfig(deps, server);
+  const config = await resolveRunningConfig(deps, server);
   const ctx = makeDeployCtx(deps, server, config, 'RedeployAll', 600_000, cancel, operationId);
   await deps.deployService.redeployAll(ctx, config);
 }
@@ -245,18 +256,18 @@ export async function runDeployUndeployedOperation(
   operationId: OperationContext['operationId'],
   cancel: OperationContext['cancel'],
 ): Promise<void> {
-  const config = resolveRunningConfig(deps, server);
+  const config = await resolveRunningConfig(deps, server);
   const ctx = makeDeployCtx(deps, server, config, 'DeployUndeployed', 600_000, cancel, operationId);
   await deps.deployService.deployUndeployed(ctx, config);
 }
 
 export async function runDeploymentHealthChecksOperation(
-  deps: Pick<ServerLifecycleDeployDeps, 'deployService' | 'resolveServerConfig'>,
+  deps: Pick<ServerLifecycleDeployDeps, 'deployService' | 'resolveServerConfig' | 'environmentProfiles'>,
   server: ServerLifecycleDeployEntry,
   cancel: OperationContext['cancel'],
 ): Promise<void> {
   throwIfCancelled(cancel, 'Deployment health checks cancelled.');
-  const config = resolveRunningConfig(deps, server);
+  const config = await resolveRunningConfig(deps, server);
   await deps.deployService.runHealthChecksForServer(server.serverKey, config);
 }
 
@@ -272,7 +283,7 @@ export async function runDeploySyncOperation(
 
   let context: TargetedDeploymentOperationContext;
   try {
-    context = createTargetedDeploymentOperationContext(deps, server, {
+    context = await createTargetedDeploymentOperationContext(deps, server, {
       deploymentId,
       kind: 'DeploySync',
       timeoutMs: 30_000,

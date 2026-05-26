@@ -63,6 +63,9 @@ export interface ServerLifecycleDeps {
   getOutputSink?: (serverKey: ServerId, serverName: string) => OutputSink;
   deployService: DeploymentService;
   resolveServerConfig?: (serverKey: ServerId) => ServerConfig | undefined;
+  environmentProfiles?: {
+    resolveForServer(config: ServerConfig): Promise<Result<ServerConfig, JsmError>>;
+  };
   onDeploySyncFailure?: (serverKey: ServerId, deploymentId: DeploymentId) => void;
 }
 
@@ -588,7 +591,8 @@ export class ServerLifecycle {
     cancel: OperationContext['cancel'],
     hookEvent?: HookEvent,
   ): Promise<void> {
-    const { config, runtime } = server;
+    const { config: inventoryConfig, runtime } = server;
+    const config = await this.resolveEnvironmentProfile(inventoryConfig);
     const plugin = this.getPlugin(config);
     const timeoutMs = this.getStartTimeoutMs(config, mode);
     let requiresFailedStartCleanup = false;
@@ -1093,6 +1097,17 @@ export class ServerLifecycle {
       });
     }
     return plugin;
+  }
+
+  private async resolveEnvironmentProfile(config: ServerConfig): Promise<ServerConfig> {
+    const result = await this.deps.environmentProfiles?.resolveForServer(config);
+    if (!result) {
+      return config;
+    }
+    if (!result.ok) {
+      throw result.error;
+    }
+    return result.value;
   }
 
   private notFound(serverId: ServerId): Result<never, JsmError> {

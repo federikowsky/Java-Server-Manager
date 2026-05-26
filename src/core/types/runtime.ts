@@ -122,6 +122,13 @@ export interface KeyValueStore {
   delete(key: string): Promise<void>;
 }
 
+/** Secret storage abstraction. Implemented by ui/adapters wrapping vscode.SecretStorage. */
+export interface SecretStore {
+  get(key: string): Promise<string | undefined>;
+  set(key: string, value: string): Promise<void>;
+  delete(key: string): Promise<void>;
+}
+
 // ── Operation Context ───────────────────────────────────────────────────────
 
 export interface OperationContext {

@@ -274,6 +274,7 @@ export class ServerProvisioningService {
       },
       run: {
         env: defaults.run?.env ?? {},
+        envProfileId: request.envProfileId,
         vmArgs: request.vmArgs ?? defaults.run?.vmArgs ?? [],
         cwd: defaults.run?.cwd,
       },

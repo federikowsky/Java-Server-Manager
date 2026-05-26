@@ -106,6 +106,7 @@ vi.mock('@plugins/tomcat/TomcatPlugin', () => ({
 vi.mock('@ui/adapters', () => ({
   OutputSinkAdapter: class {},
   MementoAdapter: class {},
+  SecretStorageAdapter: class {},
   DebugAdapter: class {
     onDidChangeSession = vi.fn(() => ({ dispose: vi.fn() }));
     dispose = vi.fn();
@@ -156,6 +157,7 @@ function makeContext() {
     storageUri: { fsPath: '/storage', path: '/storage' },
     globalState: {},
     workspaceState: {},
+    secrets: {},
     subscriptions: [],
   };
 }

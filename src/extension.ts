@@ -30,13 +30,14 @@ import { AutoSyncService } from '@app/sync';
 import { DiagnosticsService } from '@app/diagnostics';
 import { ServerDoctorService } from '@app/doctor';
 import { TeamSetupRecipeService } from '@app/recipes';
+import { EnvironmentProfileService } from '@app/env';
 import { TemplateService } from '@app/templates';
 import { OperationHistoryService } from '@app/operations';
 import { PortAssistantService } from '@app/network';
 import { LocalTelemetryService } from '@app/telemetry';
 import { HookRunner } from '@app/hooks';
 import type { HookExecutor, HookExecutionRequest } from '@app/hooks';
-import { OutputSinkAdapter, MementoAdapter, DebugAdapter, FileWatcherAdapter } from '@ui/adapters';
+import { OutputSinkAdapter, MementoAdapter, SecretStorageAdapter, DebugAdapter, FileWatcherAdapter } from '@ui/adapters';
 import { ServerLogChannel } from '@ui/channels';
 import { ServerTreeViewProvider } from '@ui/tree';
 import { DashboardPanel } from '@ui/webviews/panels/DashboardPanel';
@@ -567,6 +568,7 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<JsmExtensi
 
   const globalStore = new MementoAdapter(ctx.globalState);
   const workspaceStore = new MementoAdapter(ctx.workspaceState);
+  const secretStore = new SecretStorageAdapter(ctx.secrets);
   const processSpawner = new ProcessSpawner(logger);
   const portScanner = new PortScanner();
   const baseManagedStorageRoot = ctx.storageUri?.fsPath
@@ -641,6 +643,12 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<JsmExtensi
 
   const hookRunner = new HookRunner({ executor: hookExecutor, logger, trustGate });
   const buildRunner = new HookBackedDeploymentBuildRunner({ hookRunner });
+  const environmentProfileService = new EnvironmentProfileService({
+    metadataStore: workspaceStore,
+    secretStore,
+    logger,
+    trustGate,
+  });
 
   const workspaceServiceRegistry = new WorkspaceServiceRegistry(
     workspaceFolders.map(folder => buildWorkspaceServiceEntry({
@@ -687,6 +695,7 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<JsmExtensi
       },
     }),
     deployService,
+    environmentProfiles: environmentProfileService,
     resolveServerConfig: serverKey =>
       workspaceServiceRegistry.getServerRecordByKey(serverKey)?.config,
     onDeploySyncFailure: (serverKey, deploymentId) => {
@@ -813,6 +822,7 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<JsmExtensi
     operationHistory,
     autoSyncService,
     localTelemetry,
+    environmentProfileService,
     logger,
     bus: eventBus,
     trustGate,
@@ -835,6 +845,7 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<JsmExtensi
       hookRunner,
       doctorService,
       teamSetupRecipeService,
+      environmentProfileService,
       workspaceRegistry: workspaceServiceRegistry,
       discoveryService,
       treeProvider,

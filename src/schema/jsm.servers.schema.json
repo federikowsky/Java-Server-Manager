@@ -53,6 +53,7 @@
           "required": ["env", "vmArgs"],
           "properties": {
             "env": { "type": "object", "additionalProperties": { "type": "string" } },
+            "envProfileId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
             "vmArgs": { "type": "array", "items": { "type": "string" } },
             "cwd": { "type": "string" }
           },

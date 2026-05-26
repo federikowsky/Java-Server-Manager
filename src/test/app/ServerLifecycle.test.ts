@@ -291,6 +291,74 @@ describe('ServerLifecycle', () => {
       expect(postCall[0].parent).toBe(preCall[0].parent);
     });
 
+    it('resolves environment profile values for start without mutating inventory config', async () => {
+      const queue = mockQueue();
+      const inventoryConfig: ServerConfig = {
+        ...makeServer(),
+        run: {
+          env: { APP_ENV: 'inventory' },
+          envProfileId: 'team-local',
+          vmArgs: [],
+        },
+      };
+      const resolvedConfig: ServerConfig = {
+        ...inventoryConfig,
+        run: {
+          ...inventoryConfig.run,
+          env: {
+            APP_ENV: 'inventory',
+            JSM_MANAGER_PASS: 'resolved-secret',
+          },
+        },
+      };
+      const resolveForServer = vi.fn(async () => ok(resolvedConfig));
+      const pluginStart = vi.fn(async () => ok({
+        pid: 123,
+        httpUrl: 'http://127.0.0.1:8080',
+        hints: [],
+      }));
+
+      pluginRegistry.get.mockReturnValue({
+        start: pluginStart,
+        stop: vi.fn(),
+        getStatus: vi.fn(),
+        detect: vi.fn(),
+      });
+      portScanner.probe.mockResolvedValue(true);
+
+      lifecycle = new ServerLifecycle({
+        pluginRegistry: pluginRegistry as never,
+        bus: bus as never,
+        pidManager: pidManager as never,
+        portScanner: portScanner as never,
+        debugAttacher: debugAttacher as never,
+        logger,
+        hookRunner: hookRunner as never,
+        deployService: deployService as never,
+        environmentProfiles: { resolveForServer },
+      } as never);
+
+      lifecycle.register('srv-1', inventoryConfig, queue as never);
+      const executor = queue.setExecutor.mock.calls[0][0] as (entry: { kind: string; meta?: Record<string, unknown> }) => Promise<void>;
+
+      await executor({ kind: 'LifecycleStart', meta: { mode: 'run' } });
+
+      expect(resolveForServer).toHaveBeenCalledWith(inventoryConfig);
+      expect(pluginStart).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          run: expect.objectContaining({
+            env: {
+              APP_ENV: 'inventory',
+              JSM_MANAGER_PASS: 'resolved-secret',
+            },
+          }),
+        }),
+        'run',
+      );
+      expect(inventoryConfig.run.env).toEqual({ APP_ENV: 'inventory' });
+    });
+
     it('uses startupMonitor when provided and skips readiness probing', async () => {
       const queue = mockQueue();
       const runtime = lifecycle.register('srv-1', makeServer(), queue as never);
@@ -1387,6 +1455,63 @@ describe('ServerLifecycle', () => {
         serverId: 'srv-1',
         kind: 'DeployFull',
       }));
+    });
+
+    it('resolves environment profile values for deployment operations without mutating inventory config', async () => {
+      const queue = mockQueue();
+      const config: ServerConfig = {
+        ...makeServer(),
+        run: {
+          env: { APP_ENV: 'inventory' },
+          envProfileId: 'team-local',
+          vmArgs: [],
+        },
+        deployments: [makeDeploymentConfig()],
+      };
+      const resolvedConfig: ServerConfig = {
+        ...config,
+        run: {
+          ...config.run,
+          env: {
+            APP_ENV: 'inventory',
+            JSM_MANAGER_PASS: 'resolved-secret',
+          },
+        },
+      };
+      const resolveForServer = vi.fn(async () => ok(resolvedConfig));
+
+      lifecycle = new ServerLifecycle({
+        pluginRegistry: pluginRegistry as never,
+        bus: bus as never,
+        pidManager: pidManager as never,
+        portScanner: portScanner as never,
+        debugAttacher: debugAttacher as never,
+        logger: mockLogger(),
+        hookRunner: hookRunner as never,
+        deployService: deployService as never,
+        environmentProfiles: { resolveForServer },
+      } as never);
+
+      lifecycle.register('srv-1', config, queue as never);
+      const executor = queue.setExecutor.mock.calls[0][0] as (entry: {
+        kind: string;
+        targetDeploymentId?: string;
+        meta?: Record<string, unknown>;
+      }) => Promise<void>;
+
+      await executor({ kind: 'DeployFull', targetDeploymentId: 'dep-1' });
+
+      expect(resolveForServer).toHaveBeenCalledWith(config);
+      expect(deployService.fullRedeploy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          serverId: 'srv-1',
+          kind: 'DeployFull',
+          targetDeploymentId: 'dep-1',
+        }),
+        resolvedConfig,
+        resolvedConfig.deployments[0],
+      );
+      expect(config.run.env).toEqual({ APP_ENV: 'inventory' });
     });
 
     it('fails DeployFull when targetDeploymentId is missing', async () => {

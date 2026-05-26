@@ -22,6 +22,8 @@ const mockPluginRegistryDispose = vi.fn(async () => {});
 const mockConfigRepoCtorArgs: unknown[][] = [];
 const mockDeploymentServiceCtorArgs: unknown[][] = [];
 const mockBuildRunnerCtorArgs: unknown[][] = [];
+const mockLifecycleCtorArgs: unknown[][] = [];
+const mockRegisterServerCommandsArgs: unknown[] = [];
 
 let mockLogChannelInstance: any = null;
 let mockChannelInstance: any = null;
@@ -208,6 +210,9 @@ const mockLifecycleReconcile = vi.fn(async () => {});
 
 vi.mock('@app/server', () => ({
   ServerLifecycle: class {
+    constructor(...args: unknown[]) {
+      mockLifecycleCtorArgs.push(args);
+    }
     register = mockLifecycleRegister;
     updateConfig = mockLifecycleUpdateConfig;
     unregister = mockLifecycleUnregister;
@@ -282,6 +287,9 @@ vi.mock('@ui/adapters', () => ({
   MementoAdapter: class {
     get = vi.fn(); set = vi.fn(); 'delete' = vi.fn();
   },
+  SecretStorageAdapter: class {
+    get = vi.fn(); set = vi.fn(); 'delete' = vi.fn();
+  },
   DebugAdapter: class {
     onDidChangeSession = vi.fn(() => ({ dispose: vi.fn() }));
     dispose = vi.fn();
@@ -316,7 +324,10 @@ vi.mock('@ui/tree', () => ({
 
 // Commands
 vi.mock('@ui/commands', () => ({
-  registerServerCommands: vi.fn(() => [{ dispose: vi.fn() }]),
+  registerServerCommands: vi.fn((args: unknown) => {
+    mockRegisterServerCommandsArgs.push(args);
+    return [{ dispose: vi.fn() }];
+  }),
   registerDeploymentCommands: vi.fn(() => [{ dispose: vi.fn() }]),
 }));
 
@@ -363,6 +374,8 @@ describe('Extension Activation', () => {
     mockConfigRepoCtorArgs.length = 0;
     mockDeploymentServiceCtorArgs.length = 0;
     mockBuildRunnerCtorArgs.length = 0;
+    mockLifecycleCtorArgs.length = 0;
+    mockRegisterServerCommandsArgs.length = 0;
     mockConfigServiceLoadWorkspace.mockResolvedValue({ ok: true, value: [] });
     mockLifecycleReconcile.mockResolvedValue(undefined);
     mockPluginRegistryDispose.mockResolvedValue(undefined);
@@ -379,6 +392,11 @@ describe('Extension Activation', () => {
         get: vi.fn(),
         update: vi.fn(),
         keys: vi.fn(() => []),
+      },
+      secrets: {
+        get: vi.fn(),
+        store: vi.fn(),
+        delete: vi.fn(),
       },
       storageUri: { fsPath: '/vscode/storage' },
       subscriptions: [],
@@ -440,6 +458,19 @@ describe('Extension Activation', () => {
     expect(buildRunnerDeps.hookRunner).toBeDefined();
     expect(deploymentServiceDeps.hookRunner).toBe(buildRunnerDeps.hookRunner);
     expect(deploymentServiceDeps.buildRunner).toBeDefined();
+  });
+
+  it('should wire environment profiles into lifecycle and server commands', async () => {
+    workspaceFolders = [{ uri: { fsPath: '/test/workspace' } }];
+
+    await activate(ctx);
+
+    expect(mockLifecycleCtorArgs).toHaveLength(1);
+    const lifecycleDeps = mockLifecycleCtorArgs[0][0] as { environmentProfiles?: unknown };
+    expect(lifecycleDeps.environmentProfiles).toBeDefined();
+    expect(mockRegisterServerCommandsArgs).toHaveLength(1);
+    expect((mockRegisterServerCommandsArgs[0] as { environmentProfileService?: unknown }).environmentProfileService)
+      .toBe(lifecycleDeps.environmentProfiles);
   });
 
   function setupWorkspaceScope() {

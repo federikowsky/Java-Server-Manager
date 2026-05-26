@@ -41,6 +41,7 @@
   let creationMode = $state<'scratch' | 'template'>('scratch');
   let selectedTemplateId = $state('');
   let availableTemplates = $derived(state.templates || []);
+  let environmentProfiles = $derived(state.environmentProfiles || []);
 
   $effect(() => {
     if (creationMode === 'template' && availableTemplates.length === 0) {
@@ -57,6 +58,7 @@
   let httpPort = $state(8080);
   let debugPort = $state<number | undefined>(undefined);
   let host = $state('127.0.0.1');
+  let selectedEnvProfileId = $state('');
   let vmArgs = $state<string[]>([]);
   let vmArgDraft = $state('');
   let debugBind = $state('127.0.0.1');
@@ -116,6 +118,7 @@
     httpPort: number;
     debugPort?: number;
     debugBind: string;
+    envProfileId?: string;
     vmArgs: string[];
     hooks: unknown[];
     pluginConfig?: PluginConfig;
@@ -128,6 +131,7 @@
     httpPort = draft.httpPort;
     debugPort = draft.debugPort;
     debugBind = draft.debugBind;
+    selectedEnvProfileId = draft.envProfileId ?? '';
     vmArgs = [...draft.vmArgs];
     hooks = cloneValue(draft.hooks);
     draftPluginConfig = cloneValue(draft.pluginConfig);
@@ -153,6 +157,7 @@
       httpPort,
       debugPort,
       debugBind: debugBind.trim(),
+      envProfileId: selectedEnvProfileId || undefined,
       vmArgs: [...vmArgs],
       hooks: cloneValue(hooks),
       pluginConfig: cloneValue(draftPluginConfig),
@@ -171,6 +176,7 @@
       httpPort,
       ...(debugPort !== undefined ? { debugPort } : {}),
       host,
+      selectedEnvProfileId,
       vmArgs: [...vmArgs],
       vmArgDraft,
       debugBind,
@@ -190,6 +196,7 @@
     httpPort = snapshot.httpPort;
     debugPort = snapshot.debugPort;
     host = snapshot.host;
+    selectedEnvProfileId = snapshot.selectedEnvProfileId;
     vmArgs = [...snapshot.vmArgs];
     vmArgDraft = snapshot.vmArgDraft;
     debugBind = snapshot.debugBind;
@@ -853,6 +860,17 @@
             </select>
             <p class="field-help">Must be a loopback address for security.</p>
           </div>
+        </div>
+
+        <div class="form-field">
+          <label class="field-label" for="env-profile">Environment Profile</label>
+          <select id="env-profile" class="field-input" bind:value={selectedEnvProfileId}>
+            <option value="">None</option>
+            {#each environmentProfiles as profile}
+              <option value={profile.id}>{profile.name}</option>
+            {/each}
+          </select>
+          <p class="field-help">Stores only the profile binding as run.envProfileId; secret values stay in VS Code storage.</p>
         </div>
 
         <div class="form-field">

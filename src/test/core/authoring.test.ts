@@ -135,6 +135,35 @@ describe('authoring adapters', () => {
     });
   });
 
+  it('round-trips explicit environment profile binding through server authoring', () => {
+    const existing = {
+      ...makeServer(),
+      run: {
+        env: { APP_ENV: 'local' },
+        envProfileId: 'team-local',
+        vmArgs: ['-Xmx512m'],
+      },
+    };
+
+    const data = serverConfigToFormData(existing);
+    expect(data['run.envProfileId']).toBe('team-local');
+
+    const draft = formDataToServerDraft({
+      ...data,
+      'run.envProfileId': 'staging-local',
+    }, { existing });
+    const request = serverDraftToCreateServerRequest(draft);
+    const updated = applyServerDraftToConfig(draft, existing);
+
+    expect(draft.envProfileId).toBe('staging-local');
+    expect(request.envProfileId).toBe('staging-local');
+    expect(updated.run).toEqual({
+      env: { APP_ENV: 'local' },
+      envProfileId: 'staging-local',
+      vmArgs: ['-Xmx512m'],
+    });
+  });
+
   it('converts deployment draft form data into deployment config', () => {
     const draft = formDataToDeploymentDraft({
       type: 'exploded',

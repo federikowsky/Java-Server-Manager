@@ -199,6 +199,24 @@
     });
   }
 
+  function handleExportEnvironmentProfiles() {
+    postToHost({
+      v: WEBVIEW_PROTOCOL_VERSION,
+      command: 'executeCommand',
+      id: 'jsm.envProfile.export',
+      args: [],
+    });
+  }
+
+  function handleImportEnvironmentProfiles() {
+    postToHost({
+      v: WEBVIEW_PROTOCOL_VERSION,
+      command: 'executeCommand',
+      id: 'jsm.envProfile.import',
+      args: [],
+    });
+  }
+
   function handleBrowseJava() {
     postToHost({
       v: WEBVIEW_PROTOCOL_VERSION,
@@ -316,6 +334,20 @@
         <button type="button" class="btn btn-secondary" onclick={handleImportRecipe}>
           <Icon name="upload" size={16} />
           <span>Import Recipe</span>
+        </button>
+      </div>
+    </SectionBlock>
+
+    <SectionBlock title="Environment Profiles">
+      <p class="section-lead">Import local env profiles into VS Code storage and export safe metadata without secret values</p>
+      <div class="btn-row">
+        <button type="button" class="btn btn-secondary" onclick={handleExportEnvironmentProfiles}>
+          <Icon name="download" size={16} />
+          <span>Export Profiles</span>
+        </button>
+        <button type="button" class="btn btn-secondary" onclick={handleImportEnvironmentProfiles}>
+          <Icon name="upload" size={16} />
+          <span>Import Profiles</span>
         </button>
       </div>
     </SectionBlock>

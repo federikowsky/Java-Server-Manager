@@ -175,6 +175,16 @@
         "icon": "$(import)"
       },
       {
+        "command": "jsm.envProfile.export",
+        "title": "Export Environment Profiles",
+        "icon": "$(export)"
+      },
+      {
+        "command": "jsm.envProfile.import",
+        "title": "Import Environment Profiles",
+        "icon": "$(import)"
+      },
+      {
         "command": "jsm.deployment.openLogs",
         "title": "Deployment Logs",
         "icon": "$(output)"

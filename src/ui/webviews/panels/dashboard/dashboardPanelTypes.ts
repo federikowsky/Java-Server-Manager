@@ -10,6 +10,7 @@ import type { TrustGate } from '@core/types/runtime';
 import type { OperationHistoryService } from '@app/operations';
 import type { AutoSyncService } from '@app/sync/AutoSyncService';
 import type { LocalTelemetryService } from '@app/telemetry';
+import type { EnvironmentProfileService } from '@app/env';
 
 export type CommandExecutionResult = {
   ok: boolean;
@@ -31,6 +32,7 @@ export interface DashboardPanelDeps {
   operationHistory?: OperationHistoryService;
   autoSyncService?: Pick<AutoSyncService, 'getDiagnostics'>;
   localTelemetry?: Pick<LocalTelemetryService, 'clear'>;
+  environmentProfileService?: Pick<EnvironmentProfileService, 'listProfiles'>;
   logger: Logger;
   bus: EventBus;
   trustGate?: TrustGate;

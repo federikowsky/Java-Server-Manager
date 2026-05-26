@@ -27,6 +27,9 @@ function makeDeps() {
     templateService: {
       listScoped: vi.fn(() => []),
     },
+    environmentProfileService: {
+      listProfiles: vi.fn(() => []),
+    },
     pluginRegistry: {
       getSupportedTypes: vi.fn(() => []),
       get: vi.fn(() => undefined),
@@ -126,6 +129,30 @@ describe('buildDashboardSyncStatePayload', () => {
       'ws1::s1': { enabled: true, watcherCount: 1, watcherCap: 64, deployments: [] },
     });
     expect(deps.autoSyncService.getDiagnostics).toHaveBeenCalledWith('ws1::s1', config);
+  });
+
+  it('populates redacted environment profile summaries when available', async () => {
+    const deps = makeDeps();
+    deps.environmentProfileService.listProfiles.mockReturnValue([{
+      id: 'team-local',
+      name: 'Team Local',
+      variables: {
+        APP_ENV: { secret: false, value: 'local', hasValue: true, required: false },
+        JSM_MANAGER_PASS: { secret: true, hasValue: true, required: true },
+      },
+    }]);
+
+    const payload = buildDashboardSyncStatePayload(deps as any);
+
+    expect(payload.environmentProfiles).toEqual([{
+      id: 'team-local',
+      name: 'Team Local',
+      variables: {
+        APP_ENV: { secret: false, value: 'local', hasValue: true, required: false },
+        JSM_MANAGER_PASS: { secret: true, hasValue: true, required: true },
+      },
+    }]);
+    expect(JSON.stringify(payload)).not.toContain('super-secret');
   });
 
   it('redacts secret server config values before syncing state to the webview', () => {

@@ -238,6 +238,21 @@ function mockDeps() {
       })),
       importRecipe: vi.fn(async () => ok({ importedTemplates: 1 })),
     },
+    environmentProfileService: {
+      exportProfiles: vi.fn(async () => ok({
+        kind: 'jsm.environmentProfiles',
+        version: 1,
+        profiles: [{
+          id: 'team-local',
+          name: 'Team Local',
+          variables: {
+            APP_ENV: { secret: false, value: 'local' },
+            JSM_MANAGER_PASS: { secret: true, hasSecretValue: true },
+          },
+        }],
+      })),
+      importProfiles: vi.fn(async () => ok({ importedProfiles: 1 })),
+    },
     hookRunner: {
       runHooks: vi.fn(async () => ok({
         executed: 1,
@@ -310,6 +325,8 @@ describe('Server Commands', () => {
       'jsm.server.import',
       'jsm.recipe.export',
       'jsm.recipe.import',
+      'jsm.envProfile.export',
+      'jsm.envProfile.import',
     ];
 
     for (const id of expected) {
@@ -561,6 +578,54 @@ describe('Server Commands', () => {
         message: 'Imported 1 template(s) from team setup recipe.',
       });
       expect(mockShowInfoMessage).toHaveBeenCalledWith(expect.stringContaining('Imported 1 template'));
+    });
+  });
+
+  describe('environment profile commands', () => {
+    it('exports environment profiles without secret values', async () => {
+      mockShowSaveDialog.mockResolvedValue({ fsPath: '/ws/jsm.environment-profiles.json' });
+
+      await invoke('jsm.envProfile.export');
+
+      expect(deps.environmentProfileService.exportProfiles).toHaveBeenCalled();
+      expect(mockWriteFile).toHaveBeenCalledWith(
+        '/ws/jsm.environment-profiles.json',
+        expect.stringContaining('"kind": "jsm.environmentProfiles"'),
+        'utf8',
+      );
+      const exported = String(mockWriteFile.mock.calls[0][1]);
+      expect(exported).toContain('"hasSecretValue": true');
+      expect(exported).not.toContain('super-secret');
+      expect(mockShowInfoMessage).toHaveBeenCalledWith(expect.stringContaining('Environment profiles exported'));
+    });
+
+    it('imports environment profiles from a local JSON file', async () => {
+      mockShowOpenDialog.mockResolvedValue([{ fsPath: '/ws/jsm.environment-profiles.json' }]);
+      mockReadFile.mockResolvedValue(JSON.stringify({
+        kind: 'jsm.environmentProfiles',
+        version: 1,
+        profiles: [{
+          id: 'team-local',
+          name: 'Team Local',
+          variables: {
+            APP_ENV: { secret: false, value: 'local' },
+            JSM_MANAGER_PASS: { secret: true, value: 'super-secret' },
+          },
+        }],
+      }));
+      mockShowWarningMessage.mockResolvedValue('Import Profiles');
+
+      const result = await invoke('jsm.envProfile.import');
+
+      expect(deps.environmentProfileService.importProfiles).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'jsm.environmentProfiles',
+        version: 1,
+      }));
+      expect(result).toEqual({
+        ok: true,
+        message: 'Imported 1 environment profile(s). Secret values were stored locally in VS Code secret storage.',
+      });
+      expect(mockShowInfoMessage).toHaveBeenCalledWith(expect.stringContaining('Imported 1 environment profile'));
     });
   });
 

@@ -105,4 +105,12 @@ describe('settings dirty payload', () => {
     expect(src).toContain("id: 'jsm.recipe.export'");
     expect(src).toContain("id: 'jsm.recipe.import'");
   });
+
+  it('exposes environment profile import and export from settings', () => {
+    const src = readSource('src/ui/webviews/client/components/spa/SettingsView.svelte');
+
+    expect(src).toContain('Environment Profiles');
+    expect(src).toContain("id: 'jsm.envProfile.export'");
+    expect(src).toContain("id: 'jsm.envProfile.import'");
+  });
 });

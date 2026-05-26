@@ -16,6 +16,7 @@ import type { ServerDiscoveryService } from '@app/server/ServerDiscoveryService'
 import type { HookRunner } from '@app/hooks';
 import type { ServerDoctorReport, ServerDoctorService } from '@app/doctor';
 import type { TeamSetupRecipeService } from '@app/recipes';
+import type { EnvironmentProfileService } from '@app/env';
 import { makeWorkspaceServerKey, type WorkspaceServiceRegistry, type WorkspaceScope } from '@app/config';
 import type { WorkspaceServiceEntry } from '@app/config';
 import type { PluginRegistry } from '@plugins/registry/PluginRegistry';
@@ -79,6 +80,7 @@ export interface ServerCommandsDeps {
   discoveryService?: ServerDiscoveryService;
   doctorService?: ServerDoctorService;
   teamSetupRecipeService?: TeamSetupRecipeService;
+  environmentProfileService?: EnvironmentProfileService;
   treeProvider: ServerTreeViewProvider;
   schemaValidator?: SchemaValidator;
   openDashboard?: (target?: DashboardNavigationTarget) => void;
@@ -355,6 +357,7 @@ export function registerServerCommands(
     provisioningService,
     doctorService,
     teamSetupRecipeService,
+    environmentProfileService,
     treeProvider,
     schemaValidator,
     openDashboard,
@@ -1147,6 +1150,88 @@ export function registerServerCommands(
       }
 
       const message = `Imported ${importResult.value.importedTemplates} template(s) from team setup recipe.`;
+      treeProvider.requestRefresh();
+      void vscode.window.showInformationMessage(`JSM: ${message}`);
+      return { ok: true, message };
+    }],
+
+    ['jsm.envProfile.export', async () => {
+      if (!environmentProfileService) {
+        const error = new JsmError({
+          code: ErrorCode.InvalidConfig,
+          message: 'Environment profile export is not available in this session.',
+        });
+        showErr(error);
+        return { ok: false, message: error.message };
+      }
+
+      const exportResult = await environmentProfileService.exportProfiles();
+      if (!exportResult.ok) {
+        showErr(exportResult.error);
+        return { ok: false, message: exportResult.error.message };
+      }
+
+      const defaultUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+      const saveUri = await vscode.window.showSaveDialog({
+        filters: { JSON: ['json'] },
+        defaultUri: defaultUri ? vscode.Uri.joinPath(defaultUri, 'jsm.environment-profiles.json') : undefined,
+      });
+      if (!saveUri) {
+        return { ok: false, message: 'Environment profile export cancelled.' };
+      }
+
+      const writeResult = await writeJsonFile(saveUri.fsPath, exportResult.value);
+      if (!writeResult.ok) {
+        showErr(writeResult.error);
+        return { ok: false, message: writeResult.error.message };
+      }
+
+      const message = `Environment profiles exported to ${saveUri.fsPath}. Secret values were not included.`;
+      void vscode.window.showInformationMessage(`JSM: ${message}`);
+      return { ok: true, message };
+    }],
+
+    ['jsm.envProfile.import', async () => {
+      if (!environmentProfileService) {
+        const error = new JsmError({
+          code: ErrorCode.InvalidConfig,
+          message: 'Environment profile import is not available in this session.',
+        });
+        showErr(error);
+        return { ok: false, message: error.message };
+      }
+
+      const picks = await vscode.window.showOpenDialog({
+        filters: { JSON: ['json'] },
+        canSelectMany: false,
+      });
+      const file = picks?.[0];
+      if (!file) {
+        return { ok: false, message: 'Environment profile import cancelled.' };
+      }
+
+      const profileResult = await readJsonFile(file.fsPath);
+      if (!profileResult.ok) {
+        showErr(profileResult.error);
+        return { ok: false, message: profileResult.error.message };
+      }
+
+      const answer = await vscode.window.showWarningMessage(
+        'Import environment profiles into local VS Code storage? Secret values in the selected file will be stored in VS Code secret storage and will not be exported later.',
+        { modal: true },
+        'Import Profiles',
+      );
+      if (answer !== 'Import Profiles') {
+        return { ok: false, message: 'Environment profile import cancelled.' };
+      }
+
+      const importResult = await environmentProfileService.importProfiles(profileResult.value);
+      if (!importResult.ok) {
+        showErr(importResult.error);
+        return { ok: false, message: importResult.error.message };
+      }
+
+      const message = `Imported ${importResult.value.importedProfiles} environment profile(s). Secret values were stored locally in VS Code secret storage.`;
       treeProvider.requestRefresh();
       void vscode.window.showInformationMessage(`JSM: ${message}`);
       return { ok: true, message };

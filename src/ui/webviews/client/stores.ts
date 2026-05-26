@@ -3,7 +3,7 @@
  */
 
 import { writable } from 'svelte/store';
-import type { DashboardNavigationTarget, FormSchema, SpaServerRecord, SpaSettings } from '../protocol';
+import type { DashboardNavigationTarget, FormSchema, SpaEnvironmentProfileSummary, SpaServerRecord, SpaSettings } from '../protocol';
 import type {
   DeploymentBuildConfig,
   DeploymentReadinessGateConfig,
@@ -60,6 +60,7 @@ export const spaState = writable<{
   /** From host syncState; derived autosync watcher status per server. */
   autosyncDiagnostics: Record<string, unknown>;
   templates: SpaTemplateRow[];
+  environmentProfiles: SpaEnvironmentProfileSummary[];
   capabilities: Record<string, unknown>;
   workspaceFolders: Array<{ uri: string; name: string }>;
   currentFormSchema?: import('../protocol').FormSchema;
@@ -84,6 +85,7 @@ export const spaState = writable<{
   operationHistory: {},
   autosyncDiagnostics: {},
   templates: [],
+  environmentProfiles: [],
   capabilities: {},
   workspaceFolders: [],
   hookTaskOptions: [],
@@ -130,6 +132,7 @@ export interface ServerWizardDraftSnapshot {
   httpPort: number;
   debugPort?: number;
   host: string;
+  selectedEnvProfileId: string;
   vmArgs: string[];
   vmArgDraft: string;
   debugBind: string;

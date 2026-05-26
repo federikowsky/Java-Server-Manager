@@ -40,6 +40,7 @@ export type {
   ProgressSink,
   DebugAttacher,
   KeyValueStore,
+  SecretStore,
   OperationContext,
 } from './runtime';
 export type {

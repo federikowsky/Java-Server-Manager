@@ -461,6 +461,8 @@ export class DashboardPanel implements vscode.Disposable {
       case 'jsm.server.export':
       case 'jsm.recipe.import':
       case 'jsm.recipe.export':
+      case 'jsm.envProfile.import':
+      case 'jsm.envProfile.export':
       case 'jsm.view.refresh':
         return this.validateTuple(args, value => value.length === 0);
 

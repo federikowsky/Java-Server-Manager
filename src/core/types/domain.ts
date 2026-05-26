@@ -177,6 +177,8 @@ export interface ServerConfig {
   run: {
     /** Non-secret environment variables. */
     env: Record<string, string>;
+    /** Optional local VS Code environment profile id resolved only at operation time. */
+    envProfileId?: string;
     /** JVM arguments (split array, not string). */
     vmArgs: string[];
     /** Optional working directory override. */

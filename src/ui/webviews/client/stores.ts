@@ -4,7 +4,13 @@
 
 import { writable } from 'svelte/store';
 import type { DashboardNavigationTarget, FormSchema, SpaServerRecord, SpaSettings } from '../protocol';
-import type { DeploymentBuildConfig, HookConfig, PluginConfig, ServerType } from '@core/types';
+import type {
+  DeploymentBuildConfig,
+  DeploymentReadinessGateConfig,
+  HookConfig,
+  PluginConfig,
+  ServerType,
+} from '@core/types';
 
 /** Mirrors `syncState` payload in protocol (host → webview). */
 export type SpaTemplateRow = { template: unknown; scope: 'global' | 'workspace' | 'gallery' };
@@ -147,6 +153,7 @@ export interface DeploymentWizardDraftSnapshot {
   ignoreGlobDraft: string;
   build?: DeploymentBuildConfig;
   buildEnvDraft: string;
+  readinessGate?: DeploymentReadinessGateConfig;
   hooks: HookConfig[];
   lastInferredName: string;
   deployNameUserEdited: boolean;

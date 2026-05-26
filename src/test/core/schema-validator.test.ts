@@ -301,6 +301,93 @@ describe('SchemaValidator', () => {
     expect(result.ok).toBe(true);
   });
 
+  it('accepts deployment readiness gate when explicitly configured with a health path', () => {
+    const data = {
+      servers: [{
+        id: '550e8400-e29b-41d4-a716-446655440000',
+        name: 'Test',
+        type: 'tomcat',
+        runtime: { id: 'r1', homePath: '/opt/tomcat' },
+        instancePath: '/tmp/base',
+        javaHome: '/usr/lib/jvm/java-17',
+        host: '127.0.0.1',
+        ports: { http: 8080, debug: 5005 },
+        run: { env: {}, vmArgs: [] },
+        debug: { enabled: true, bind: '127.0.0.1', attachDelayMs: 1000 },
+        deployments: [{
+          id: '550e8400-e29b-41d4-a716-446655440001',
+          type: 'war',
+          sourcePath: '/app/target/app.war',
+          deployName: 'app',
+          syncMode: 'manual',
+          hotReload: false,
+          ignoreGlobs: [],
+          healthCheckPath: '/app/health',
+          readinessGate: {
+            enabled: true,
+            trigger: 'postDeployAndStart',
+          },
+          hooks: [],
+        }],
+        autosync: {
+          enabled: true,
+          debounceMs: 400,
+          maxBatchFiles: 200,
+          maxBatchBytes: 20000000,
+          stormBackoffMs: 2000,
+          ignoreGlobs: [],
+        },
+        hooks: [],
+      }],
+    };
+
+    const result = validator.validate(data, 'workspace');
+    expect(result.ok).toBe(true);
+  });
+
+  it('rejects enabled readiness gate without a health path', () => {
+    const data = {
+      servers: [{
+        id: '550e8400-e29b-41d4-a716-446655440000',
+        name: 'Test',
+        type: 'tomcat',
+        runtime: { id: 'r1', homePath: '/opt/tomcat' },
+        instancePath: '/tmp/base',
+        javaHome: '/usr/lib/jvm/java-17',
+        host: '127.0.0.1',
+        ports: { http: 8080, debug: 5005 },
+        run: { env: {}, vmArgs: [] },
+        debug: { enabled: true, bind: '127.0.0.1', attachDelayMs: 1000 },
+        deployments: [{
+          id: '550e8400-e29b-41d4-a716-446655440001',
+          type: 'war',
+          sourcePath: '/app/target/app.war',
+          deployName: 'app',
+          syncMode: 'manual',
+          hotReload: false,
+          ignoreGlobs: [],
+          readinessGate: {
+            enabled: true,
+            trigger: 'postDeploy',
+          },
+          hooks: [],
+        }],
+        autosync: {
+          enabled: true,
+          debounceMs: 400,
+          maxBatchFiles: 200,
+          maxBatchBytes: 20000000,
+          stormBackoffMs: 2000,
+          ignoreGlobs: [],
+        },
+        hooks: [],
+      }],
+    };
+
+    const result = validator.validate(data, 'workspace');
+    expect(result.ok).toBe(false);
+  });
+
   it('rejects command build config without a command line', () => {
     const data = {
       servers: [{

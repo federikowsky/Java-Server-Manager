@@ -19,6 +19,8 @@ export type {
   DeploymentBuildTrigger,
   DeploymentBuildKind,
   DeploymentBuildConfig,
+  DeploymentReadinessGateTrigger,
+  DeploymentReadinessGateConfig,
   DeploymentConfig,
   ServerConfig,
   ServerTemplate,

@@ -114,6 +114,13 @@ export interface DeploymentBuildConfig {
   };
 }
 
+export type DeploymentReadinessGateTrigger = 'postDeploy' | 'postStart' | 'postDeployAndStart';
+
+export interface DeploymentReadinessGateConfig {
+  enabled: boolean;
+  trigger: DeploymentReadinessGateTrigger;
+}
+
 export interface DeploymentConfig {
   id: DeploymentId;
   type: DeploymentType;
@@ -128,6 +135,7 @@ export interface DeploymentConfig {
   /** Per-deployment ignore patterns, merged with server-level autosync.ignoreGlobs. */
   ignoreGlobs: string[];
   build?: DeploymentBuildConfig;
+  readinessGate?: DeploymentReadinessGateConfig;
   hooks: HookConfig[];
   /** Optional health check path (e.g. "/myapp/health", "/actuator/health"). GET http://host:port{healthCheckPath}. */
   healthCheckPath?: string;

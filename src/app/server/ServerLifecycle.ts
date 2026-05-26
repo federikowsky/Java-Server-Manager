@@ -617,6 +617,13 @@ export class ServerLifecycle {
 
     throwIfCancelled(ctx.cancel, `Start operation for '${config.name}' was cancelled before deployment health checks.`);
     await this.deps.deployService.runHealthChecksForServer(server.serverKey, config);
+
+    throwIfCancelled(ctx.cancel, `Start operation for '${config.name}' was cancelled before readiness gates.`);
+    const gateResult = await this.deps.deployService.runReadinessGatesForServer(server.serverKey, config);
+    if (!gateResult.ok) {
+      runtime.transition('error', { error: gateResult.error });
+      throw gateResult.error;
+    }
   }
 
   private async attachDebuggerAfterStart(

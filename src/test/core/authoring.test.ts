@@ -12,6 +12,7 @@ import {
   serverConfigToDraft,
   serverDraftToCreateServerRequest,
   templateToServerDraftDefaults,
+  validateDeploymentForm,
 } from '@core/authoring';
 import type { DeploymentConfig, HookConfig, HookEvent, ServerConfig, ServerTemplate } from '@core/types';
 
@@ -144,6 +145,10 @@ describe('authoring adapters', () => {
       ignoreGlobs: ['**/*.tmp'],
       healthCheckPath: '/health',
       healthCheckTimeoutMs: 7500,
+      readinessGate: {
+        enabled: true,
+        trigger: 'postDeployAndStart',
+      },
       hooks: [makeHook('hook-3', 'deploy.full')],
     }, { id: 'dep-1' });
     const config = deploymentDraftToConfig(draft, 'dep-1');
@@ -159,7 +164,32 @@ describe('authoring adapters', () => {
       hooks: [makeHook('hook-3', 'deploy.full')],
       healthCheckPath: '/health',
       healthCheckTimeoutMs: 7500,
+      readinessGate: {
+        enabled: true,
+        trigger: 'postDeployAndStart',
+      },
     });
+  });
+
+  it('rejects enabled deployment readiness gate without a health check path', () => {
+    const errors = validateDeploymentForm({
+      type: 'war',
+      sourcePath: '/workspace/app.war',
+      deployName: 'myapp',
+      syncMode: 'manual',
+      hotReload: false,
+      readinessGate: {
+        enabled: true,
+        trigger: 'postDeploy',
+      },
+    });
+
+    expect(errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        field: 'readinessGate',
+        message: 'Readiness gate requires a health check path.',
+      }),
+    ]));
   });
 
   it('round-trips explicit deployment build config through authoring', () => {

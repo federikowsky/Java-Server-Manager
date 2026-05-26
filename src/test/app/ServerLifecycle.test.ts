@@ -125,6 +125,7 @@ function mockDeployService() {
     redeployAll: vi.fn(async () => {}),
     deployUndeployed: vi.fn(async () => {}),
     runHealthChecksForServer: vi.fn(async () => {}),
+    runReadinessGatesForServer: vi.fn(async () => ok(undefined)),
     sync: vi.fn(async () => ok(undefined)),
     getDeploymentState: vi.fn(() => 'undeployed' as const),
     getDeploymentHealth: vi.fn(),
@@ -614,6 +615,67 @@ describe('ServerLifecycle', () => {
 
       expect(runtime.state).toBe('running');
       expect(runtimeStateAtDeploymentHealthCheck).toBe('running');
+    });
+
+    it('runs opt-in readiness gates after observational deployment health checks', async () => {
+      const queue = mockQueue();
+      lifecycle.register('srv-1', makeServer(), queue as never);
+
+      pluginRegistry.get.mockReturnValue({
+        start: vi.fn(async () => ok({
+          pid: 123,
+          httpUrl: 'http://127.0.0.1:8080',
+          hints: [],
+        })),
+        stop: vi.fn(),
+        getStatus: vi.fn(),
+        detect: vi.fn(),
+      });
+      portScanner.probe.mockResolvedValue(true);
+
+      const order: string[] = [];
+      deployService.runHealthChecksForServer.mockImplementation(async () => {
+        order.push('observe');
+      });
+      deployService.runReadinessGatesForServer.mockImplementation(async () => {
+        order.push('gate');
+        return ok(undefined);
+      });
+
+      const executor = queue.setExecutor.mock.calls[0][0] as (entry: { kind: string; meta?: Record<string, unknown> }) => Promise<void>;
+      await executor({ kind: 'LifecycleStart', meta: { mode: 'run' } });
+
+      expect(order).toEqual(['observe', 'gate']);
+      expect(deployService.runReadinessGatesForServer).toHaveBeenCalledWith('srv-1', expect.anything());
+    });
+
+    it('transitions to error when a post-start readiness gate fails', async () => {
+      const queue = mockQueue();
+      const runtime = lifecycle.register('srv-1', makeServer(), queue as never);
+      const gateError = new JsmError({
+        code: ErrorCode.ValidationFailed,
+        message: 'Readiness gate failed for app',
+      });
+
+      pluginRegistry.get.mockReturnValue({
+        start: vi.fn(async () => ok({
+          pid: 123,
+          httpUrl: 'http://127.0.0.1:8080',
+          hints: [],
+        })),
+        stop: vi.fn(async () => ok(undefined)),
+        getStatus: vi.fn(),
+        detect: vi.fn(),
+      });
+      portScanner.probe.mockResolvedValue(true);
+      deployService.runReadinessGatesForServer.mockResolvedValue(err(gateError));
+
+      const executor = queue.setExecutor.mock.calls[0][0] as (entry: { kind: string; meta?: Record<string, unknown> }) => Promise<void>;
+      await expect(executor({ kind: 'LifecycleStart', meta: { mode: 'run' } })).rejects.toBe(gateError);
+
+      expect(runtime.state).toBe('error');
+      expect(deployService.runHealthChecksForServer).toHaveBeenCalled();
+      expect(deployService.runReadinessGatesForServer).toHaveBeenCalledWith('srv-1', expect.anything());
     });
 
     it('transitions to error when start is cancelled before debugger attach', async () => {

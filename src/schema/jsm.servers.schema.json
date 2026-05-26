@@ -115,12 +115,42 @@
         "hotReload": { "type": "boolean", "default": false, "description": "Enable hot-reload for exploded deployments. Only applies to files outside WEB-INF/ and META-INF/." },
         "ignoreGlobs": { "type": "array", "items": { "type": "string" } },
         "build": { "$ref": "#/definitions/DeploymentBuildConfig" },
+        "readinessGate": { "$ref": "#/definitions/DeploymentReadinessGateConfig" },
         "healthCheckPath": { "type": "string", "description": "Optional GET path for deployment health (e.g. /myapp/health)." },
         "healthCheckTimeoutMs": { "type": "integer", "minimum": 500, "description": "Timeout in ms for deployment health GET. Default 5000." },
         "hooks": {
           "type": "array",
           "items": { "$ref": "#/definitions/HookConfig" }
         }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "readinessGate": {
+                "type": "object",
+                "properties": { "enabled": { "const": true } },
+                "required": ["enabled"]
+              }
+            },
+            "required": ["readinessGate"]
+          },
+          "then": {
+            "required": ["healthCheckPath"],
+            "properties": {
+              "healthCheckPath": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      ]
+    },
+    "DeploymentReadinessGateConfig": {
+      "type": "object",
+      "required": ["enabled", "trigger"],
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "trigger": { "type": "string", "enum": ["postDeploy", "postStart", "postDeployAndStart"] }
       }
     },
     "DeploymentBuildConfig": {

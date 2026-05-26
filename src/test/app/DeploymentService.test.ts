@@ -58,6 +58,19 @@ function makeDepWithHealthPath(id = 'd1', healthCheckPath = '/app/health'): Depl
   return { ...makeDep(id), healthCheckPath };
 }
 
+function makeDepWithReadinessGate(
+  id = 'd1',
+  trigger: 'postDeploy' | 'postStart' | 'postDeployAndStart' = 'postDeploy',
+): DeploymentConfig {
+  return {
+    ...makeDepWithHealthPath(id),
+    readinessGate: {
+      enabled: true,
+      trigger,
+    },
+  } as DeploymentConfig;
+}
+
 function makeHook(event: HookConfig['event'], phase: HookConfig['phase'] = 'pre', id = `${event}-${phase}`): HookConfig {
   return {
     id,
@@ -632,6 +645,54 @@ describe('DeploymentService', () => {
       const config = { ...makeConfig(), deployments: [makeDepWithHealthPath()] };
       await service.runHealthChecksForServer('s1', config);
       expect(fetch).not.toHaveBeenCalled();
+    });
+
+    it('runs an opt-in post-deploy readiness gate after full deploy and stores the result', async () => {
+      (fetch as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true, status: 200 });
+      const config = { ...makeConfig(), deployments: [makeDepWithReadinessGate('d1', 'postDeploy')] };
+
+      const result = await service.fullRedeploy(makeCtx(), config, config.deployments[0]);
+
+      expect(result.ok).toBe(true);
+      expect(service.getDeploymentState('s1', 'd1')).toBe('synced');
+      expect(service.getDeploymentHealth('s1', 'd1')).toEqual(expect.objectContaining({ ok: true }));
+      expect(fetch).toHaveBeenCalledWith(
+        'http://127.0.0.1:8080/app/health',
+        expect.objectContaining({ method: 'GET' }),
+      );
+    });
+
+    it('fails fullRedeploy when the opt-in post-deploy readiness gate is unhealthy', async () => {
+      (fetch as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: false, status: 503 });
+      const config = { ...makeConfig(), deployments: [makeDepWithReadinessGate('d1', 'postDeploy')] };
+
+      const result = await service.fullRedeploy(makeCtx(), config, config.deployments[0]);
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toMatchObject({
+          code: ErrorCode.ValidationFailed,
+          message: expect.stringContaining('Readiness gate failed'),
+        });
+      }
+      expect(service.getDeploymentState('s1', 'd1')).toBe('error');
+      expect(service.getDeploymentHealth('s1', 'd1')).toEqual(expect.objectContaining({ ok: false }));
+    });
+
+    it('runs opt-in post-start readiness gates independently from observational health checks', async () => {
+      (fetch as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true, status: 200 });
+      const config = { ...makeConfig(), deployments: [makeDepWithReadinessGate('d1', 'postStart')] };
+      await service.fullRedeploy(makeCtx(), config, config.deployments[0]);
+      (fetch as ReturnType<typeof vi.fn>).mockClear();
+
+      const result = await service.runReadinessGatesForServer('s1', config);
+
+      expect(result.ok).toBe(true);
+      expect(fetch).toHaveBeenCalledWith(
+        'http://127.0.0.1:8080/app/health',
+        expect.objectContaining({ method: 'GET' }),
+      );
+      expect(service.getDeploymentHealth('s1', 'd1')).toEqual(expect.objectContaining({ ok: true }));
     });
   });
 

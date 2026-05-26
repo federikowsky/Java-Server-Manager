@@ -24,6 +24,7 @@ import type { HookRunner } from '@app/hooks';
 import type { DeploymentBuildRunner } from './DeploymentBuildRunner';
 
 const DEPLOYMENT_HEALTH_TIMEOUT_MS = 5000;
+type ReadinessGatePoint = 'postDeploy' | 'postStart';
 
 
 // ── Deployment Runtime State ────────────────────────────────────────────────
@@ -131,6 +132,19 @@ export class DeploymentService {
       const result = await this.fetchHealth(url, timeoutMs);
       this.healthCache.set(this.stateKey(serverKey, dep.id), result.ok ? result.value : { ok: false });
     }
+  }
+
+  async runReadinessGatesForServer(serverKey: ServerId, config: ServerConfig): Promise<Result<void, JsmError>> {
+    for (const dep of config.deployments) {
+      if (!this.shouldRunReadinessGate(dep, 'postStart')) {
+        continue;
+      }
+      const result = await this.runReadinessGate(serverKey, config, dep, 'postStart');
+      if (!result.ok) {
+        return result;
+      }
+    }
+    return ok(undefined);
   }
 
   private async fetchHealth(url: string, timeoutMs: number): Promise<Result<HealthReport, JsmError>> {
@@ -509,6 +523,14 @@ export class DeploymentService {
       }
 
       this.emitOperationStepCompleted(ctx, deployStepId);
+
+      const gateResult = await this.runDeploymentReadinessGate(ctx, config, dep, event);
+      if (!gateResult.ok) {
+        await this.runDeploymentOnErrorHooks(ctx, config, dep, event);
+        this.transitionDeploy(ctx.serverId, dep.id, 'error', { error: gateResult.error });
+        return gateResult;
+      }
+
       this.transitionDeploy(ctx.serverId, dep.id, 'synced');
       await this.runDeploymentHooks(ctx, config, dep, 'post', event);
       return ok(undefined);
@@ -654,7 +676,7 @@ export class DeploymentService {
     dep: DeploymentConfig,
     stepId: string,
     label: string,
-    kind: 'build' | 'deploy',
+    kind: 'build' | 'deploy' | 'health',
   ): void {
     this.bus.emit('OperationStepStarted', {
       serverId: ctx.serverId,
@@ -681,6 +703,80 @@ export class DeploymentService {
       stepId,
       error,
     });
+  }
+
+  private async runDeploymentReadinessGate(
+    ctx: OperationContext,
+    config: ServerConfig,
+    dep: DeploymentConfig,
+    event: HookEvent,
+  ): Promise<Result<void, JsmError>> {
+    if (event !== 'deploy.full' || !this.shouldRunReadinessGate(dep, 'postDeploy')) {
+      return ok(undefined);
+    }
+
+    this.ensureNotCancelled(ctx, dep, 'before readiness gate.');
+    const stepId = `readiness:${dep.id}`;
+    this.emitOperationStepStarted(ctx, dep, stepId, `Readiness gate ${dep.deployName}`, 'health');
+    const result = await this.runReadinessGate(ctx.serverId, config, dep, 'postDeploy');
+    if (!result.ok) {
+      this.emitOperationStepFailed(ctx, stepId, result.error);
+      return result;
+    }
+
+    this.emitOperationStepCompleted(ctx, stepId);
+    return ok(undefined);
+  }
+
+  private shouldRunReadinessGate(dep: DeploymentConfig, point: ReadinessGatePoint): boolean {
+    const gate = dep.readinessGate;
+    if (!gate?.enabled) {
+      return false;
+    }
+    return gate.trigger === point || gate.trigger === 'postDeployAndStart';
+  }
+
+  private async runReadinessGate(
+    serverKey: ServerId,
+    config: ServerConfig,
+    dep: DeploymentConfig,
+    point: ReadinessGatePoint,
+  ): Promise<Result<void, JsmError>> {
+    const healthPath = dep.healthCheckPath?.trim();
+    if (!healthPath) {
+      return err(new JsmError({
+        code: ErrorCode.InvalidConfig,
+        message: `Readiness gate for deployment '${dep.deployName}' requires a health check path.`,
+        suggestedFix: ['Edit the deployment and set Health Check Path, or disable the readiness gate.'],
+      }));
+    }
+
+    const path = healthPath.startsWith('/') ? healthPath : `/${healthPath}`;
+    const url = `http://${config.host}:${config.ports.http}${path}`;
+    const timeoutMs = dep.healthCheckTimeoutMs ?? DEPLOYMENT_HEALTH_TIMEOUT_MS;
+    const result = await this.fetchHealth(url, timeoutMs);
+    const report = result.ok ? result.value : { ok: false };
+    this.healthCache.set(this.stateKey(serverKey, dep.id), report);
+
+    if (!result.ok) {
+      return err(new JsmError({
+        code: result.error.code,
+        message: `Readiness gate failed for deployment '${dep.deployName}'.`,
+        details: result.error.details ?? `${point}: ${url}`,
+        cause: result.error,
+      }));
+    }
+
+    if (!result.value.ok) {
+      return err(new JsmError({
+        code: ErrorCode.ValidationFailed,
+        message: `Readiness gate failed for deployment '${dep.deployName}'.`,
+        details: `${point}: GET ${url} did not return a healthy 2xx response.`,
+        suggestedFix: ['Check the application health endpoint, deployment logs, or disable the readiness gate for this deployment.'],
+      }));
+    }
+
+    return ok(undefined);
   }
 
   private async runDeploymentOnErrorHooks(

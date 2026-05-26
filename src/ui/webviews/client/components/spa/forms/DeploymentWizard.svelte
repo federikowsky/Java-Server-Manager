@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import { formDataToDeploymentDraft, getDeploymentHookEvents } from '@core/authoring';
-  import type { DeploymentBuildConfig, ServerConfig, HookConfig } from '@core/types';
+  import type { DeploymentBuildConfig, DeploymentReadinessGateConfig, ServerConfig, HookConfig } from '@core/types';
   import {
     spaState,
     activeEntity,
@@ -63,6 +63,8 @@
   let hotReload = $state(false);
   let healthCheckPath = $state('');
   let healthCheckTimeoutMs = $state<number | undefined>(undefined);
+  let readinessGateEnabled = $state(false);
+  let readinessGateTrigger = $state<DeploymentReadinessGateConfig['trigger']>('postDeploy');
   let ignoreGlobs = $state<string[]>([]);
   let ignoreGlobDraft = $state('');
   let buildEnabled = $state(false);
@@ -189,6 +191,7 @@
     hotReload = existingDeployment?.hotReload || false;
     healthCheckPath = existingDeployment?.healthCheckPath || '';
     healthCheckTimeoutMs = existingDeployment?.healthCheckTimeoutMs;
+    applyReadinessGateConfig(existingDeployment?.readinessGate);
     ignoreGlobs = existingDeployment?.ignoreGlobs ? [...existingDeployment.ignoreGlobs] : [];
     ignoreGlobDraft = '';
     applyBuildConfig(existingDeployment?.build);
@@ -336,6 +339,26 @@
     return buildConfigFromFields(buildEnabled);
   }
 
+  function applyReadinessGateConfig(readinessGate: DeploymentReadinessGateConfig | undefined): void {
+    readinessGateEnabled = readinessGate?.enabled === true;
+    readinessGateTrigger = readinessGate?.trigger ?? 'postDeploy';
+  }
+
+  function readinessGateConfigFromFields(enabled: boolean): DeploymentReadinessGateConfig {
+    return {
+      enabled,
+      trigger: readinessGateTrigger,
+    };
+  }
+
+  function currentReadinessGateConfig(): DeploymentReadinessGateConfig | undefined {
+    return readinessGateEnabled ? readinessGateConfigFromFields(true) : undefined;
+  }
+
+  function snapshotReadinessGateConfig(): DeploymentReadinessGateConfig {
+    return readinessGateConfigFromFields(readinessGateEnabled);
+  }
+
   function getDraftKey(): string {
     return `${mode}:${serverRecord?.serverKey ?? serverKey ?? configServerId}:${deploymentId ?? 'create'}`;
   }
@@ -354,6 +377,7 @@
       ignoreGlobDraft,
       build: snapshotBuildConfig(),
       buildEnvDraft,
+      readinessGate: snapshotReadinessGateConfig(),
       hooks: cloneValue(hooks),
       lastInferredName,
       deployNameUserEdited,
@@ -375,6 +399,7 @@
     if (snapshot.buildEnvDraft !== undefined) {
       buildEnvDraft = snapshot.buildEnvDraft;
     }
+    applyReadinessGateConfig(snapshot.readinessGate);
     hooks = cloneValue(snapshot.hooks);
     lastInferredName = snapshot.lastInferredName;
     deployNameUserEdited = snapshot.deployNameUserEdited ?? false;
@@ -434,6 +459,9 @@
     ) {
       allErrors.healthCheckTimeoutMs = 'Timeout must be a positive number';
     }
+    if (readinessGateEnabled && !healthCheckPath.trim()) {
+      allErrors.readinessGate = 'Readiness gate requires a health check path';
+    }
     if (buildEnabled) {
       if (buildTimeoutMs === undefined || !Number.isFinite(buildTimeoutMs) || buildTimeoutMs < 1000) {
         allErrors.buildTimeoutMs = 'Build timeout must be at least 1000 ms';
@@ -451,6 +479,7 @@
       sourcePath: true,
       deployName: true,
       healthCheckTimeoutMs: healthCheckTimeoutMs !== undefined,
+      readinessGate: readinessGateEnabled,
       buildTimeoutMs: buildEnabled,
       buildCommandLine: buildEnabled && buildKind === 'command',
       buildTaskName: buildEnabled && buildKind === 'vscodeTask',
@@ -475,6 +504,7 @@
       healthCheckTimeoutMs: healthCheckTimeoutMs && healthCheckTimeoutMs > 0
         ? healthCheckTimeoutMs
         : undefined,
+      readinessGate: currentReadinessGateConfig(),
       ignoreGlobs: [...ignoreGlobs],
       build: currentBuildConfig(),
       hooks: cloneValue(hooks),
@@ -794,6 +824,48 @@
             <p class="field-help">Optional timeout for deployment health checks. Leave empty to use the default.</p>
           {/if}
         </div>
+
+        <div class="form-field full-width-field">
+          <label class="checkbox-label">
+            <input type="checkbox" class="field-checkbox" bind:checked={readinessGateEnabled} />
+            <div class="checkbox-content">
+              <span class="checkbox-label-text">Require healthy response</span>
+              <span class="checkbox-desc">Fail explicit deploy or start operations when this health endpoint does not return a healthy response.</span>
+            </div>
+          </label>
+          {#if errors.readinessGate && touched.readinessGate}
+            <p class="field-error">{errors.readinessGate}</p>
+          {/if}
+        </div>
+
+        {#if readinessGateEnabled}
+          <div class="form-field">
+            <label class="field-label">Gate Run On</label>
+            <div class="radio-group">
+              <label class="radio-option" class:selected={readinessGateTrigger === 'postDeploy'}>
+                <input type="radio" bind:group={readinessGateTrigger} value="postDeploy" />
+                <div class="radio-content">
+                  <span class="radio-label">After deploy</span>
+                  <span class="radio-desc">Require health after explicit full deploy and redeploy operations.</span>
+                </div>
+              </label>
+              <label class="radio-option" class:selected={readinessGateTrigger === 'postStart'}>
+                <input type="radio" bind:group={readinessGateTrigger} value="postStart" />
+                <div class="radio-content">
+                  <span class="radio-label">After start</span>
+                  <span class="radio-desc">Require health after the server reaches running.</span>
+                </div>
+              </label>
+              <label class="radio-option" class:selected={readinessGateTrigger === 'postDeployAndStart'}>
+                <input type="radio" bind:group={readinessGateTrigger} value="postDeployAndStart" />
+                <div class="radio-content">
+                  <span class="radio-label">After deploy and start</span>
+                  <span class="radio-desc">Apply the same explicit gate to both paths.</span>
+                </div>
+              </label>
+            </div>
+          </div>
+        {/if}
 
         <div class="form-field">
           <label class="field-label">Ignore Patterns</label>

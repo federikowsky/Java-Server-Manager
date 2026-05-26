@@ -1,5 +1,6 @@
 import type {
   DeploymentBuildConfig,
+  DeploymentReadinessGateConfig,
   DeploymentType,
   HookConfig,
   PluginConfig,
@@ -52,6 +53,7 @@ export interface DeploymentAuthoringDraft {
   hotReload: boolean;
   ignoreGlobs: string[];
   build?: DeploymentBuildConfig;
+  readinessGate?: DeploymentReadinessGateConfig;
   hooks: HookConfig[];
   healthCheckPath?: string;
   healthCheckTimeoutMs?: number;

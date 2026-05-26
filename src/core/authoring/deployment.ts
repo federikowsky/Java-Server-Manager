@@ -1,6 +1,7 @@
 import type {
   DeploymentBuildConfig,
   DeploymentConfig,
+  DeploymentReadinessGateConfig,
   DeploymentType,
   HookEvent,
   SyncMode,
@@ -18,6 +19,11 @@ const DEPLOYMENT_HOOK_EVENTS: readonly HookEvent[] = [
   'deploy.undeploy',
 ] as const;
 const DEFAULT_BUILD_TIMEOUT_MS = 60_000;
+const READINESS_GATE_TRIGGERS: readonly DeploymentReadinessGateConfig['trigger'][] = [
+  'postDeploy',
+  'postStart',
+  'postDeployAndStart',
+] as const;
 
 function normalizeDeploymentType(value: unknown): DeploymentType {
   return value === 'war' ? 'war' : 'exploded';
@@ -94,6 +100,26 @@ function cloneBuildConfig(build: DeploymentBuildConfig | undefined): DeploymentB
   return normalizeBuildConfig(build);
 }
 
+function normalizeReadinessGateConfig(value: unknown): DeploymentReadinessGateConfig | undefined {
+  if (!isRecord(value)) return undefined;
+
+  const rawTrigger = value['trigger'];
+  const trigger = READINESS_GATE_TRIGGERS.includes(rawTrigger as DeploymentReadinessGateConfig['trigger'])
+    ? rawTrigger as DeploymentReadinessGateConfig['trigger']
+    : 'postDeploy';
+
+  return {
+    enabled: value['enabled'] === true,
+    trigger,
+  };
+}
+
+function cloneReadinessGateConfig(
+  readinessGate: DeploymentReadinessGateConfig | undefined,
+): DeploymentReadinessGateConfig | undefined {
+  return normalizeReadinessGateConfig(readinessGate);
+}
+
 export function getDeploymentHookEvents(): readonly HookEvent[] {
   return DEPLOYMENT_HOOK_EVENTS;
 }
@@ -108,6 +134,7 @@ export function deploymentConfigToDraft(config: DeploymentConfig): DeploymentAut
     hotReload: config.hotReload,
     ignoreGlobs: [...config.ignoreGlobs],
     build: cloneBuildConfig(config.build),
+    readinessGate: cloneReadinessGateConfig(config.readinessGate),
     hooks: normalizeHookList(config.hooks, DEPLOYMENT_HOOK_EVENTS),
     healthCheckPath: config.healthCheckPath,
     healthCheckTimeoutMs: config.healthCheckTimeoutMs,
@@ -124,6 +151,7 @@ export function deploymentDraftToFormData(draft: DeploymentAuthoringDraft): Reco
     hotReload: draft.hotReload,
     ignoreGlobs: [...draft.ignoreGlobs],
     build: cloneBuildConfig(draft.build),
+    readinessGate: cloneReadinessGateConfig(draft.readinessGate),
     hooks: normalizeHookList(draft.hooks, DEPLOYMENT_HOOK_EVENTS),
     healthCheckPath: draft.healthCheckPath,
     healthCheckTimeoutMs: draft.healthCheckTimeoutMs,
@@ -151,6 +179,7 @@ export function formDataToDeploymentDraft(
       ? (data['ignoreGlobs'] as string[]).filter(entry => typeof entry === 'string' && entry.trim().length > 0)
       : [],
     build: normalizeBuildConfig(data['build']),
+    readinessGate: normalizeReadinessGateConfig(data['readinessGate']),
     hooks: normalizeHookList(data['hooks'], DEPLOYMENT_HOOK_EVENTS),
     healthCheckPath: typeof data['healthCheckPath'] === 'string' && data['healthCheckPath'].trim() !== ''
       ? data['healthCheckPath'].trim()
@@ -165,6 +194,8 @@ export function deploymentDraftToConfig(
   draft: DeploymentAuthoringDraft,
   id: string,
 ): DeploymentConfig {
+  const build = cloneBuildConfig(draft.build);
+  const readinessGate = cloneReadinessGateConfig(draft.readinessGate);
   return {
     id: draft.id ?? id,
     type: draft.type,
@@ -173,10 +204,11 @@ export function deploymentDraftToConfig(
     syncMode: draft.syncMode,
     hotReload: draft.type === 'exploded' && draft.hotReload,
     ignoreGlobs: [...draft.ignoreGlobs],
-    build: cloneBuildConfig(draft.build),
+    ...(build ? { build } : {}),
+    ...(readinessGate ? { readinessGate } : {}),
     hooks: normalizeHookList(draft.hooks, DEPLOYMENT_HOOK_EVENTS),
-    healthCheckPath: draft.healthCheckPath,
-    healthCheckTimeoutMs: draft.healthCheckTimeoutMs,
+    ...(draft.healthCheckPath ? { healthCheckPath: draft.healthCheckPath } : {}),
+    ...(draft.healthCheckTimeoutMs !== undefined ? { healthCheckTimeoutMs: draft.healthCheckTimeoutMs } : {}),
   };
 }
 
@@ -230,6 +262,35 @@ export function validateDeploymentForm(data: Record<string, unknown>): Authoring
         message: 'Health check timeout must be a positive number.',
         suggestedFix: 'Use a timeout such as 5000 milliseconds, or leave the field empty.',
       });
+    }
+  }
+
+  const rawReadinessGate = data['readinessGate'];
+  if (rawReadinessGate !== undefined) {
+    if (!isRecord(rawReadinessGate)) {
+      errors.push({
+        field: 'readinessGate',
+        message: 'Readiness gate configuration must be an object.',
+        suggestedFix: 'Disable the gate or select when it should run.',
+      });
+    } else if (rawReadinessGate['enabled'] === true) {
+      const trigger = rawReadinessGate['trigger'];
+      if (!READINESS_GATE_TRIGGERS.includes(trigger as DeploymentReadinessGateConfig['trigger'])) {
+        errors.push({
+          field: 'readinessGate.trigger',
+          message: 'Readiness gate trigger is invalid.',
+          suggestedFix: 'Select post-deploy, post-start, or both.',
+        });
+      }
+
+      const healthPath = typeof data['healthCheckPath'] === 'string' ? data['healthCheckPath'].trim() : '';
+      if (!healthPath) {
+        errors.push({
+          field: 'readinessGate',
+          message: 'Readiness gate requires a health check path.',
+          suggestedFix: 'Enter an explicit health check path or disable the readiness gate.',
+        });
+      }
     }
   }
 

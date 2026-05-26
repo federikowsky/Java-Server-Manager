@@ -48,6 +48,31 @@ function sameHookConfig(
     && left.vscodeTask?.taskName === right.vscodeTask?.taskName;
 }
 
+function sameBuildConfig(
+  left: DeploymentConfig['build'],
+  right: DeploymentConfig['build'],
+): boolean {
+  if (!left || !right) return left === right;
+  return left.enabled === right.enabled
+    && left.kind === right.kind
+    && left.trigger === right.trigger
+    && left.timeoutMs === right.timeoutMs
+    && left.command?.mode === right.command?.mode
+    && left.command?.line === right.command?.line
+    && left.command?.cwd === right.command?.cwd
+    && sameStringRecord(left.command?.env, right.command?.env)
+    && left.vscodeTask?.taskName === right.vscodeTask?.taskName;
+}
+
+function sameReadinessGateConfig(
+  left: DeploymentConfig['readinessGate'],
+  right: DeploymentConfig['readinessGate'],
+): boolean {
+  if (!left || !right) return left === right;
+  return left.enabled === right.enabled
+    && left.trigger === right.trigger;
+}
+
 function deploymentPersistedChanged(before: DeploymentConfig, after: DeploymentConfig): boolean {
   return before.id !== after.id
     || before.type !== after.type
@@ -56,6 +81,8 @@ function deploymentPersistedChanged(before: DeploymentConfig, after: DeploymentC
     || before.syncMode !== after.syncMode
     || before.hotReload !== after.hotReload
     || !sameStringArray(before.ignoreGlobs, after.ignoreGlobs)
+    || !sameBuildConfig(before.build, after.build)
+    || !sameReadinessGateConfig(before.readinessGate, after.readinessGate)
     || before.healthCheckPath !== after.healthCheckPath
     || before.healthCheckTimeoutMs !== after.healthCheckTimeoutMs
     || before.hooks.length !== after.hooks.length

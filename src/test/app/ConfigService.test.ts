@@ -526,6 +526,31 @@ describe('ConfigService', () => {
         workspaceFolderUri: 'file:///ws',
       });
     });
+
+    it('emits DeploymentUpdated when readiness gate metadata changes', async () => {
+      const dep = makeDeployment();
+      repo._seed({ ...makeServer(), deployments: [dep] });
+      const updatedServer = {
+        ...makeServer(),
+        deployments: [{
+          ...dep,
+          healthCheckPath: '/health',
+          readinessGate: {
+            enabled: true,
+            trigger: 'postDeploy',
+          },
+        }],
+      };
+
+      const result = await service.updateServer(updatedServer);
+
+      expect(result.ok).toBe(true);
+      expect(bus.emit).toHaveBeenCalledWith('DeploymentUpdated', {
+        serverId: 'srv-1',
+        deploymentId: 'dep-1',
+        workspaceFolderUri: 'file:///ws',
+      });
+    });
   });
 
   /* ── removeServer ────────────────────────────────────────────────────── */

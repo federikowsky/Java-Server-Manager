@@ -114,6 +114,7 @@
         "syncMode": { "type": "string", "enum": ["manual", "auto"] },
         "hotReload": { "type": "boolean", "default": false, "description": "Enable hot-reload for exploded deployments. Only applies to files outside WEB-INF/ and META-INF/." },
         "ignoreGlobs": { "type": "array", "items": { "type": "string" } },
+        "build": { "$ref": "#/definitions/DeploymentBuildConfig" },
         "healthCheckPath": { "type": "string", "description": "Optional GET path for deployment health (e.g. /myapp/health)." },
         "healthCheckTimeoutMs": { "type": "integer", "minimum": 500, "description": "Timeout in ms for deployment health GET. Default 5000." },
         "hooks": {
@@ -121,6 +122,52 @@
           "items": { "$ref": "#/definitions/HookConfig" }
         }
       }
+    },
+    "DeploymentBuildConfig": {
+      "type": "object",
+      "required": ["enabled", "kind", "trigger", "timeoutMs"],
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "kind": { "type": "string", "enum": ["command", "vscodeTask"] },
+        "trigger": { "type": "string", "enum": ["manual", "manualAndAuto"] },
+        "timeoutMs": { "type": "integer", "minimum": 1000 },
+        "command": {
+          "type": "object",
+          "required": ["mode", "line"],
+          "properties": {
+            "mode": { "type": "string", "const": "shell" },
+            "line": { "type": "string", "minLength": 1 },
+            "cwd": { "type": "string" },
+            "env": { "type": "object", "additionalProperties": { "type": "string" } }
+          },
+          "additionalProperties": false
+        },
+        "vscodeTask": {
+          "type": "object",
+          "required": ["taskName"],
+          "properties": {
+            "taskName": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": false
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "kind": { "const": "command" } },
+            "required": ["kind"]
+          },
+          "then": { "required": ["command"] }
+        },
+        {
+          "if": {
+            "properties": { "kind": { "const": "vscodeTask" } },
+            "required": ["kind"]
+          },
+          "then": { "required": ["vscodeTask"] }
+        }
+      ]
     },
     "HookConfig": {
       "type": "object",

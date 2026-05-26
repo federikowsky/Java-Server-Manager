@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import { formDataToDeploymentDraft, getDeploymentHookEvents } from '@core/authoring';
-  import type { ServerConfig, HookConfig } from '@core/types';
+  import type { DeploymentBuildConfig, ServerConfig, HookConfig } from '@core/types';
   import {
     spaState,
     activeEntity,
@@ -65,6 +65,14 @@
   let healthCheckTimeoutMs = $state<number | undefined>(undefined);
   let ignoreGlobs = $state<string[]>([]);
   let ignoreGlobDraft = $state('');
+  let buildEnabled = $state(false);
+  let buildKind = $state<'command' | 'vscodeTask'>('command');
+  let buildTrigger = $state<'manual' | 'manualAndAuto'>('manual');
+  let buildTimeoutMs = $state<number | undefined>(60000);
+  let buildCommandLine = $state('');
+  let buildCommandCwd = $state('');
+  let buildEnvDraft = $state('');
+  let buildTaskName = $state('');
   let hooks = $state<HookConfig[]>([]);
 
   let errors = $state<Record<string, string>>({});
@@ -183,6 +191,7 @@
     healthCheckTimeoutMs = existingDeployment?.healthCheckTimeoutMs;
     ignoreGlobs = existingDeployment?.ignoreGlobs ? [...existingDeployment.ignoreGlobs] : [];
     ignoreGlobDraft = '';
+    applyBuildConfig(existingDeployment?.build);
     hooks = existingDeployment?.hooks ? cloneValue(existingDeployment.hooks) : [];
     errors = {};
     touched = {};
@@ -257,6 +266,76 @@
     ignoreGlobs = ignoreGlobs.filter((_, i) => i !== index);
   }
 
+  function buildEnvToDraft(env: Record<string, string> | undefined): string {
+    if (!env) return '';
+    return Object.entries(env)
+      .map(([key, value]) => `${key}=${value}`)
+      .join('\n');
+  }
+
+  function parseBuildEnvDraft(value: string): Record<string, string> {
+    const env: Record<string, string> = {};
+    for (const rawLine of value.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith('#')) continue;
+      const separator = line.indexOf('=');
+      if (separator <= 0) continue;
+      const key = line.slice(0, separator).trim();
+      const entryValue = line.slice(separator + 1);
+      if (key) {
+        env[key] = entryValue;
+      }
+    }
+    return env;
+  }
+
+  function applyBuildConfig(build: DeploymentBuildConfig | undefined): void {
+    buildEnabled = build?.enabled === true;
+    buildKind = build?.kind ?? 'command';
+    buildTrigger = build?.trigger ?? 'manual';
+    buildTimeoutMs = build?.timeoutMs ?? 60000;
+    buildCommandLine = build?.command?.line ?? '';
+    buildCommandCwd = build?.command?.cwd ?? '';
+    buildEnvDraft = buildEnvToDraft(build?.command?.env);
+    buildTaskName = build?.vscodeTask?.taskName ?? '';
+  }
+
+  function buildConfigFromFields(enabled: boolean): DeploymentBuildConfig {
+    if (buildKind === 'vscodeTask') {
+      return {
+        enabled,
+        kind: 'vscodeTask',
+        trigger: buildTrigger,
+        timeoutMs: buildTimeoutMs ?? 60000,
+        vscodeTask: {
+          taskName: buildTaskName.trim(),
+        },
+      };
+    }
+
+    const env = parseBuildEnvDraft(buildEnvDraft);
+    return {
+      enabled,
+      kind: 'command',
+      trigger: buildTrigger,
+      timeoutMs: buildTimeoutMs ?? 60000,
+      command: {
+        mode: 'shell',
+        line: buildCommandLine.trim(),
+        ...(buildCommandCwd.trim() ? { cwd: buildCommandCwd.trim() } : {}),
+        ...(Object.keys(env).length > 0 ? { env } : {}),
+      },
+    };
+  }
+
+  function currentBuildConfig(): DeploymentBuildConfig | undefined {
+    return buildEnabled ? buildConfigFromFields(true) : undefined;
+  }
+
+  function snapshotBuildConfig(): DeploymentBuildConfig {
+    return buildConfigFromFields(buildEnabled);
+  }
+
   function getDraftKey(): string {
     return `${mode}:${serverRecord?.serverKey ?? serverKey ?? configServerId}:${deploymentId ?? 'create'}`;
   }
@@ -273,6 +352,8 @@
       ...(healthCheckTimeoutMs !== undefined ? { healthCheckTimeoutMs } : {}),
       ignoreGlobs: [...ignoreGlobs],
       ignoreGlobDraft,
+      build: snapshotBuildConfig(),
+      buildEnvDraft,
       hooks: cloneValue(hooks),
       lastInferredName,
       deployNameUserEdited,
@@ -289,6 +370,11 @@
     healthCheckTimeoutMs = snapshot.healthCheckTimeoutMs;
     ignoreGlobs = [...snapshot.ignoreGlobs];
     ignoreGlobDraft = snapshot.ignoreGlobDraft;
+    buildEnvDraft = snapshot.buildEnvDraft ?? '';
+    applyBuildConfig(snapshot.build);
+    if (snapshot.buildEnvDraft !== undefined) {
+      buildEnvDraft = snapshot.buildEnvDraft;
+    }
     hooks = cloneValue(snapshot.hooks);
     lastInferredName = snapshot.lastInferredName;
     deployNameUserEdited = snapshot.deployNameUserEdited ?? false;
@@ -348,12 +434,26 @@
     ) {
       allErrors.healthCheckTimeoutMs = 'Timeout must be a positive number';
     }
+    if (buildEnabled) {
+      if (buildTimeoutMs === undefined || !Number.isFinite(buildTimeoutMs) || buildTimeoutMs < 1000) {
+        allErrors.buildTimeoutMs = 'Build timeout must be at least 1000 ms';
+      }
+      if (buildKind === 'command' && !buildCommandLine.trim()) {
+        allErrors.buildCommandLine = 'Build command is required';
+      }
+      if (buildKind === 'vscodeTask' && !buildTaskName.trim()) {
+        allErrors.buildTaskName = 'Task name is required';
+      }
+    }
 
     errors = allErrors;
     touched = {
       sourcePath: true,
       deployName: true,
       healthCheckTimeoutMs: healthCheckTimeoutMs !== undefined,
+      buildTimeoutMs: buildEnabled,
+      buildCommandLine: buildEnabled && buildKind === 'command',
+      buildTaskName: buildEnabled && buildKind === 'vscodeTask',
     };
 
     if (Object.keys(allErrors).length > 0) {
@@ -376,6 +476,7 @@
         ? healthCheckTimeoutMs
         : undefined,
       ignoreGlobs: [...ignoreGlobs],
+      build: currentBuildConfig(),
       hooks: cloneValue(hooks),
     };
     const draft = formDataToDeploymentDraft(formData, { id: existingDeployment?.id });
@@ -530,6 +631,136 @@
       </div>
     </AdvancedCollapse>
 
+    <AdvancedCollapse title="Build before Deploy">
+      <div class="section-grid">
+        <div class="form-field full-width-field">
+          <label class="checkbox-label">
+            <input type="checkbox" class="field-checkbox" bind:checked={buildEnabled} />
+            <div class="checkbox-content">
+              <span class="checkbox-label-text">Run build before full deploy</span>
+              <span class="checkbox-desc">Runs an explicit command or VS Code task before manual full deploy operations.</span>
+            </div>
+          </label>
+        </div>
+
+        {#if buildEnabled}
+          <div class="form-field">
+            <label class="field-label">Build Type</label>
+            <ModeSelector
+              ariaLabel="Build type"
+              value={buildKind}
+              onChange={(v) => (buildKind = v as 'command' | 'vscodeTask')}
+              options={[
+                { value: 'command', label: 'Command' },
+                { value: 'vscodeTask', label: 'VS Code Task' },
+              ]}
+            />
+          </div>
+
+          <div class="form-field">
+            <label class="field-label">Run On</label>
+            <div class="radio-group">
+              <label class="radio-option" class:selected={buildTrigger === 'manual'}>
+                <input type="radio" bind:group={buildTrigger} value="manual" />
+                <div class="radio-content">
+                  <span class="radio-label">Manual deploys</span>
+                  <span class="radio-desc">Deploy, redeploy all, and deploy on start. Autosync fallback skips this build.</span>
+                </div>
+              </label>
+              <label class="radio-option" class:selected={buildTrigger === 'manualAndAuto'}>
+                <input type="radio" bind:group={buildTrigger} value="manualAndAuto" />
+                <div class="radio-content">
+                  <span class="radio-label">Manual and autosync fallback</span>
+                  <span class="radio-desc">Also runs when autosync must fall back to a full deploy.</span>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          <div class="form-field">
+            <label class="field-label" for="build-timeout">Build Timeout (ms)</label>
+            <input
+              id="build-timeout"
+              type="number"
+              class="field-input"
+              class:error={errors.buildTimeoutMs && touched.buildTimeoutMs}
+              bind:value={buildTimeoutMs}
+              min="1000"
+              placeholder="60000"
+            />
+            {#if errors.buildTimeoutMs && touched.buildTimeoutMs}
+              <p class="field-error">{errors.buildTimeoutMs}</p>
+            {:else}
+              <p class="field-help">Maximum time allowed for the build step.</p>
+            {/if}
+          </div>
+
+          {#if buildKind === 'command'}
+            <div class="form-field full-width-field">
+              <label class="field-label" for="build-command">Command <span class="required">*</span></label>
+              <input
+                id="build-command"
+                type="text"
+                class="field-input"
+                class:error={errors.buildCommandLine && touched.buildCommandLine}
+                bind:value={buildCommandLine}
+                oninput={() => handleFieldInput('buildCommandLine', buildCommandLine)}
+                onblur={() => handleFieldBlur('buildCommandLine')}
+                placeholder="mvn package"
+              />
+              {#if errors.buildCommandLine && touched.buildCommandLine}
+                <p class="field-error">{errors.buildCommandLine}</p>
+              {:else}
+                <p class="field-help">Exact shell command to run. JSM does not infer build tools.</p>
+              {/if}
+            </div>
+
+            <div class="form-field">
+              <label class="field-label" for="build-cwd">Working Directory</label>
+              <input
+                id="build-cwd"
+                type="text"
+                class="field-input"
+                bind:value={buildCommandCwd}
+                placeholder="/workspace/app"
+              />
+              <p class="field-help">Optional. Defaults to the owning workspace folder.</p>
+            </div>
+
+            <div class="form-field">
+              <label class="field-label" for="build-env">Environment</label>
+              <textarea
+                id="build-env"
+                class="field-input build-env-input"
+                bind:value={buildEnvDraft}
+                placeholder={"MAVEN_OPTS=-Xmx1g\nJAVA_TOOL_OPTIONS=-Dfile.encoding=UTF-8"}
+              ></textarea>
+              <p class="field-help">Optional KEY=value entries, one per line.</p>
+            </div>
+          {:else}
+            <div class="form-field full-width-field">
+              <label class="field-label" for="build-task">Task Name <span class="required">*</span></label>
+              <input
+                id="build-task"
+                type="text"
+                class="field-input"
+                class:error={errors.buildTaskName && touched.buildTaskName}
+                bind:value={buildTaskName}
+                oninput={() => handleFieldInput('buildTaskName', buildTaskName)}
+                onblur={() => handleFieldBlur('buildTaskName')}
+                placeholder="build"
+              />
+              {#if errors.buildTaskName && touched.buildTaskName}
+                <p class="field-error">{errors.buildTaskName}</p>
+              {:else}
+                <p class="field-help">Name must match one VS Code task exactly.</p>
+              {/if}
+            </div>
+          {/if}
+        {/if}
+      </div>
+    </AdvancedCollapse>
+
     <AdvancedCollapse title="Advanced Options">
       <div class="section-grid">
         <div class="form-field">
@@ -673,5 +904,11 @@
     margin: 0;
     font-size: var(--jsm-font-size-sm);
     color: var(--jsm-color-fg);
+  }
+
+  .build-env-input {
+    min-height: 84px;
+    resize: vertical;
+    line-height: 1.4;
   }
 </style>

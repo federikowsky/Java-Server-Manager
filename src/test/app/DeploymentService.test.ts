@@ -113,6 +113,7 @@ describe('DeploymentService', () => {
   let mockPlugin: IServerPlugin;
   let mockRegistry: PluginRegistry;
   let hookRunner: { runHooks: ReturnType<typeof vi.fn> };
+  let buildRunner: { runBuild: ReturnType<typeof vi.fn> };
 
   beforeEach(() => {
     bus = new EventBus(mockLogger());
@@ -154,13 +155,17 @@ describe('DeploymentService', () => {
     hookRunner = {
       runHooks: vi.fn(async () => ok({ executed: 0, skipped: 0, failed: 0, errors: [] })),
     };
+    buildRunner = {
+      runBuild: vi.fn(async () => ok(undefined)),
+    };
 
     service = new DeploymentService({
       pluginRegistry: mockRegistry,
       bus,
       logger: mockLogger(),
       hookRunner: hookRunner as never,
-    });
+      buildRunner,
+    } as never);
   });
 
   it('starts in undeployed state', () => {
@@ -213,6 +218,120 @@ describe('DeploymentService', () => {
       targetDeploymentId: dep.id,
     }));
     expect(postCall[0].parent).toBe(preCall[0].parent);
+  });
+
+  it('runs enabled manual build before planning a full deploy', async () => {
+    const config = makeConfig();
+    const dep = {
+      ...makeDep(),
+      build: {
+        enabled: true,
+        kind: 'command',
+        trigger: 'manual',
+        timeoutMs: 120_000,
+        command: { mode: 'shell', line: 'npm run build', cwd: '/workspace/app' },
+      },
+    } as DeploymentConfig;
+    const order: string[] = [];
+
+    buildRunner.runBuild.mockImplementation(async () => {
+      order.push('build');
+      return ok(undefined);
+    });
+    (mockPlugin.planDeploy as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      order.push('plan');
+      return ok({
+        targetRoot: '/tmp/inst/webapps',
+        targetPath: '/tmp/inst/webapps/app',
+        strategy: 'copy-war',
+        notes: [],
+      });
+    });
+
+    const result = await service.fullRedeploy(makeCtx(), config, dep);
+
+    expect(result.ok).toBe(true);
+    expect(buildRunner.runBuild).toHaveBeenCalledWith(expect.objectContaining({
+      parent: expect.objectContaining({ kind: 'DeployFull', targetDeploymentId: dep.id }),
+      server: config,
+      deployment: dep,
+      build: dep.build,
+    }));
+    expect(order).toEqual(['build', 'plan']);
+  });
+
+  it('blocks full deploy and transitions to error when enabled build fails', async () => {
+    const buildError = new JsmError({ code: ErrorCode.OperationFailed, message: 'build failed' });
+    const dep = {
+      ...makeDep(),
+      build: {
+        enabled: true,
+        kind: 'command',
+        trigger: 'manual',
+        timeoutMs: 120_000,
+        command: { mode: 'shell', line: 'npm run build' },
+      },
+    } as DeploymentConfig;
+    buildRunner.runBuild.mockResolvedValue(err(buildError));
+
+    const result = await service.fullRedeploy(makeCtx(), makeConfig(), dep);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBe(buildError);
+    }
+    expect(mockPlugin.planDeploy).not.toHaveBeenCalled();
+    expect(mockPlugin.deployFull).not.toHaveBeenCalled();
+    expect(service.getDeploymentState('s1', 'd1')).toBe('error');
+  });
+
+  it('skips disabled build config and preserves full deploy behavior', async () => {
+    const dep = {
+      ...makeDep(),
+      build: {
+        enabled: false,
+        kind: 'command',
+        trigger: 'manual',
+        timeoutMs: 120_000,
+        command: { mode: 'shell', line: 'npm run build' },
+      },
+    } as DeploymentConfig;
+
+    const result = await service.fullRedeploy(makeCtx(), makeConfig(), dep);
+
+    expect(result.ok).toBe(true);
+    expect(buildRunner.runBuild).not.toHaveBeenCalled();
+    expect(mockPlugin.planDeploy).toHaveBeenCalled();
+    expect(mockPlugin.deployFull).toHaveBeenCalled();
+  });
+
+  it('does not run manual-only build when autosync falls back to full deploy', async () => {
+    const config = makeConfig();
+    const dep = {
+      ...makeDep(),
+      type: 'exploded',
+      sourcePath: '/src/app',
+      build: {
+        enabled: true,
+        kind: 'command',
+        trigger: 'manual',
+        timeoutMs: 120_000,
+        command: { mode: 'shell', line: 'npm run build' },
+      },
+    } as DeploymentConfig;
+    const batch = {
+      changes: [{ type: 'change' as const, path: '/src/app/WEB-INF/classes/App.class', relativePath: 'WEB-INF/classes/App.class' }],
+      totalFiles: 1,
+      totalBytes: 100,
+    };
+
+    mockPlugin.deployIncremental = vi.fn().mockResolvedValue(ok(undefined));
+
+    const result = await service.sync(makeCtx('s1', 'd1', 'DeployIncremental'), config, dep, batch);
+
+    expect(result.ok).toBe(true);
+    expect(buildRunner.runBuild).not.toHaveBeenCalled();
+    expect(mockPlugin.deployFull).toHaveBeenCalled();
   });
 
   it('fullRedeploy transitions to error on plan failure', async () => {

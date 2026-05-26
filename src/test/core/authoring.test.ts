@@ -162,6 +162,48 @@ describe('authoring adapters', () => {
     });
   });
 
+  it('round-trips explicit deployment build config through authoring', () => {
+    const draft = formDataToDeploymentDraft({
+      type: 'war',
+      sourcePath: '/workspace/app/target/app.war',
+      deployName: 'myapp',
+      syncMode: 'manual',
+      hotReload: false,
+      ignoreGlobs: [],
+      build: {
+        enabled: true,
+        kind: 'command',
+        trigger: 'manual',
+        timeoutMs: 120000,
+        command: {
+          mode: 'shell',
+          line: 'mvn package',
+          cwd: '/workspace/app',
+          env: {
+            MAVEN_OPTS: '-Xmx1g',
+          },
+        },
+      },
+      hooks: [],
+    }, { id: 'dep-build' });
+    const config = deploymentDraftToConfig(draft, 'dep-build');
+
+    expect(config.build).toEqual({
+      enabled: true,
+      kind: 'command',
+      trigger: 'manual',
+      timeoutMs: 120000,
+      command: {
+        mode: 'shell',
+        line: 'mvn package',
+        cwd: '/workspace/app',
+        env: {
+          MAVEN_OPTS: '-Xmx1g',
+        },
+      },
+    });
+  });
+
   it('projects template defaults into a create-ready server draft', () => {
     const template: ServerTemplate = {
       id: 'tpl-1',

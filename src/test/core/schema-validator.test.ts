@@ -248,6 +248,108 @@ describe('SchemaValidator', () => {
     expect(result.ok).toBe(false);
   });
 
+  it('accepts deployment build config when explicitly configured', () => {
+    const data = {
+      servers: [{
+        id: '550e8400-e29b-41d4-a716-446655440000',
+        name: 'Test',
+        type: 'tomcat',
+        runtime: { id: 'r1', homePath: '/opt/tomcat' },
+        instancePath: '/tmp/base',
+        javaHome: '/usr/lib/jvm/java-17',
+        host: '127.0.0.1',
+        ports: { http: 8080, debug: 5005 },
+        run: { env: {}, vmArgs: [] },
+        debug: { enabled: true, bind: '127.0.0.1', attachDelayMs: 1000 },
+        deployments: [{
+          id: '550e8400-e29b-41d4-a716-446655440001',
+          type: 'war',
+          sourcePath: '/app/target/app.war',
+          deployName: 'app',
+          syncMode: 'manual',
+          hotReload: false,
+          ignoreGlobs: [],
+          build: {
+            enabled: true,
+            kind: 'command',
+            trigger: 'manual',
+            timeoutMs: 120000,
+            command: {
+              mode: 'shell',
+              line: 'mvn package',
+              cwd: '/app',
+              env: {
+                MAVEN_OPTS: '-Xmx1g',
+              },
+            },
+          },
+          hooks: [],
+        }],
+        autosync: {
+          enabled: true,
+          debounceMs: 400,
+          maxBatchFiles: 200,
+          maxBatchBytes: 20000000,
+          stormBackoffMs: 2000,
+          ignoreGlobs: [],
+        },
+        hooks: [],
+      }],
+    };
+
+    const result = validator.validate(data, 'workspace');
+    expect(result.ok).toBe(true);
+  });
+
+  it('rejects command build config without a command line', () => {
+    const data = {
+      servers: [{
+        id: '550e8400-e29b-41d4-a716-446655440000',
+        name: 'Test',
+        type: 'tomcat',
+        runtime: { id: 'r1', homePath: '/opt/tomcat' },
+        instancePath: '/tmp/base',
+        javaHome: '/usr/lib/jvm/java-17',
+        host: '127.0.0.1',
+        ports: { http: 8080, debug: 5005 },
+        run: { env: {}, vmArgs: [] },
+        debug: { enabled: true, bind: '127.0.0.1', attachDelayMs: 1000 },
+        deployments: [{
+          id: '550e8400-e29b-41d4-a716-446655440001',
+          type: 'war',
+          sourcePath: '/app/target/app.war',
+          deployName: 'app',
+          syncMode: 'manual',
+          hotReload: false,
+          ignoreGlobs: [],
+          build: {
+            enabled: true,
+            kind: 'command',
+            trigger: 'manual',
+            timeoutMs: 120000,
+            command: {
+              mode: 'shell',
+              line: '',
+            },
+          },
+          hooks: [],
+        }],
+        autosync: {
+          enabled: true,
+          debounceMs: 400,
+          maxBatchFiles: 200,
+          maxBatchBytes: 20000000,
+          stormBackoffMs: 2000,
+          ignoreGlobs: [],
+        },
+        hooks: [],
+      }],
+    };
+
+    const result = validator.validate(data, 'workspace');
+    expect(result.ok).toBe(false);
+  });
+
   it('returns error for unknown schema ID', () => {
     const result = validator.validate({}, 'nonexistent');
     expect(result.ok).toBe(false);

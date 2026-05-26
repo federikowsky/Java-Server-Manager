@@ -1,4 +1,5 @@
 import type {
+  DeploymentBuildConfig,
   DeploymentType,
   HookConfig,
   PluginConfig,
@@ -50,6 +51,7 @@ export interface DeploymentAuthoringDraft {
   syncMode: SyncMode;
   hotReload: boolean;
   ignoreGlobs: string[];
+  build?: DeploymentBuildConfig;
   hooks: HookConfig[];
   healthCheckPath?: string;
   healthCheckTimeoutMs?: number;

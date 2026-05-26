@@ -21,6 +21,7 @@ import type { HealthReport } from '@plugins/interfaces/IServerPlugin';
 import type { IServerPlugin } from '@plugins/interfaces/IServerPlugin';
 import type { PluginRegistry } from '@plugins/registry/PluginRegistry';
 import type { HookRunner } from '@app/hooks';
+import type { DeploymentBuildRunner } from './DeploymentBuildRunner';
 
 const DEPLOYMENT_HEALTH_TIMEOUT_MS = 5000;
 
@@ -83,6 +84,7 @@ export class DeploymentService {
   private readonly logger: Logger;
   private readonly trustGate?: TrustGate;
   private readonly hookRunner?: Pick<HookRunner, 'runHooks'>;
+  private readonly buildRunner?: DeploymentBuildRunner;
   private readonly states = new Map<string, DeploymentEntry>();
   private readonly healthCache = new Map<string, HealthReport>();
 
@@ -92,12 +94,14 @@ export class DeploymentService {
     logger: Logger;
     trustGate?: TrustGate;
     hookRunner?: Pick<HookRunner, 'runHooks'>;
+    buildRunner?: DeploymentBuildRunner;
   }) {
     this.pluginRegistry = deps.pluginRegistry;
     this.bus = deps.bus;
     this.logger = deps.logger;
     this.trustGate = deps.trustGate;
     this.hookRunner = deps.hookRunner;
+    this.buildRunner = deps.buildRunner;
   }
 
   // ── State Management ──────────────────────────────────────────────
@@ -478,6 +482,13 @@ export class DeploymentService {
     this.transitionDeploy(ctx.serverId, dep.id, 'deploying');
 
     try {
+      const buildResult = await this.runDeploymentBuild(ctx, config, dep, event);
+      if (!buildResult.ok) {
+        await this.runDeploymentOnErrorHooks(ctx, config, dep, event);
+        this.transitionDeploy(ctx.serverId, dep.id, 'error', { error: buildResult.error });
+        return buildResult;
+      }
+
       await this.runDeploymentHooks(ctx, config, dep, 'pre', event);
       this.ensureNotCancelled(ctx, dep, `before executing ${event}.`);
       const result = await operation(plugin);
@@ -548,6 +559,57 @@ export class DeploymentService {
     if (!result.ok) {
       throw result.error;
     }
+  }
+
+  private async runDeploymentBuild(
+    ctx: OperationContext,
+    config: ServerConfig,
+    dep: DeploymentConfig,
+    event: HookEvent,
+  ): Promise<Result<void, JsmError>> {
+    if (!this.shouldRunDeploymentBuild(ctx, dep, event)) {
+      return ok(undefined);
+    }
+
+    this.ensureNotCancelled(ctx, dep, `before build for ${event}.`);
+    if (!this.buildRunner) {
+      return err(new JsmError({
+        code: ErrorCode.InvalidConfig,
+        message: `Build is configured for deployment '${dep.deployName}', but no build runner is available.`,
+      }));
+    }
+
+    const result = await this.buildRunner.runBuild({
+      parent: ctx,
+      server: config,
+      deployment: dep,
+      build: dep.build!,
+    });
+    if (!result.ok) {
+      return result;
+    }
+
+    this.ensureNotCancelled(ctx, dep, `after build for ${event}.`);
+    return ok(undefined);
+  }
+
+  private shouldRunDeploymentBuild(
+    ctx: OperationContext,
+    dep: DeploymentConfig,
+    event: HookEvent,
+  ): boolean {
+    const build = dep.build;
+    if (!build?.enabled || event !== 'deploy.full') {
+      return false;
+    }
+
+    if (build.trigger === 'manualAndAuto') {
+      return true;
+    }
+
+    return ctx.kind === 'DeployFull'
+      || ctx.kind === 'RedeployAll'
+      || ctx.kind === 'DeployUndeployed';
   }
 
   private async runDeploymentOnErrorHooks(

@@ -25,7 +25,7 @@ import {
 } from '@app/config';
 import { ServerLifecycle } from '@app/server';
 import { ManagedInstancePathResolver, ServerProvisioningService, ServerDiscoveryService } from '@app/server';
-import { DeploymentService } from '@app/deployment';
+import { DeploymentService, HookBackedDeploymentBuildRunner } from '@app/deployment';
 import { AutoSyncService } from '@app/sync';
 import { DiagnosticsService } from '@app/diagnostics';
 import { TemplateService } from '@app/templates';
@@ -638,6 +638,7 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<JsmExtensi
   const trustGate = { isTrusted: () => vscode.workspace.isTrusted };
 
   const hookRunner = new HookRunner({ executor: hookExecutor, logger, trustGate });
+  const buildRunner = new HookBackedDeploymentBuildRunner({ hookRunner });
 
   const workspaceServiceRegistry = new WorkspaceServiceRegistry(
     workspaceFolders.map(folder => buildWorkspaceServiceEntry({
@@ -658,6 +659,7 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<JsmExtensi
     logger,
     trustGate,
     hookRunner,
+    buildRunner,
   });
 
   const autoSyncRef: { current?: InstanceType<typeof AutoSyncService> } = {};

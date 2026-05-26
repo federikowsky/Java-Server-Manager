@@ -20,6 +20,8 @@ const mockLifecycleUpdateConfig = vi.fn();
 const mockLifecycleUnregister = vi.fn();
 const mockPluginRegistryDispose = vi.fn(async () => {});
 const mockConfigRepoCtorArgs: unknown[][] = [];
+const mockDeploymentServiceCtorArgs: unknown[][] = [];
+const mockBuildRunnerCtorArgs: unknown[][] = [];
 
 let mockLogChannelInstance: any = null;
 let mockChannelInstance: any = null;
@@ -221,7 +223,15 @@ vi.mock('@app/server', () => ({
 
 // DeploymentService
 vi.mock('@app/deployment', () => ({
+  HookBackedDeploymentBuildRunner: class {
+    constructor(...args: unknown[]) {
+      mockBuildRunnerCtorArgs.push(args);
+    }
+  },
   DeploymentService: class {
+    constructor(...args: unknown[]) {
+      mockDeploymentServiceCtorArgs.push(args);
+    }
     getDeploymentState = vi.fn(() => 'undeployed');
   },
 }));
@@ -351,6 +361,8 @@ describe('Extension Activation', () => {
     vi.clearAllMocks();
     eventHandlers.clear();
     mockConfigRepoCtorArgs.length = 0;
+    mockDeploymentServiceCtorArgs.length = 0;
+    mockBuildRunnerCtorArgs.length = 0;
     mockConfigServiceLoadWorkspace.mockResolvedValue({ ok: true, value: [] });
     mockLifecycleReconcile.mockResolvedValue(undefined);
     mockPluginRegistryDispose.mockResolvedValue(undefined);
@@ -414,6 +426,20 @@ describe('Extension Activation', () => {
     const normalizedStorageRoot = repoOptions.storageRoot?.replace(/\\/g, '/');
     expect(normalizedStorageRoot).toMatch(/^\/vscode\/storage\/workspaces\/[a-f0-9]{12}\/inventory$/);
     expect(normalizedStorageRoot).not.toContain('/test/workspace/.vscode');
+  });
+
+  it('should wire the hook-backed build runner into deployment service', async () => {
+    workspaceFolders = [{ uri: { fsPath: '/test/workspace' } }];
+
+    await activate(ctx);
+
+    expect(mockBuildRunnerCtorArgs).toHaveLength(1);
+    expect(mockDeploymentServiceCtorArgs).toHaveLength(1);
+    const buildRunnerDeps = mockBuildRunnerCtorArgs[0][0] as { hookRunner?: unknown };
+    const deploymentServiceDeps = mockDeploymentServiceCtorArgs[0][0] as { buildRunner?: unknown; hookRunner?: unknown };
+    expect(buildRunnerDeps.hookRunner).toBeDefined();
+    expect(deploymentServiceDeps.hookRunner).toBe(buildRunnerDeps.hookRunner);
+    expect(deploymentServiceDeps.buildRunner).toBeDefined();
   });
 
   function setupWorkspaceScope() {

@@ -99,6 +99,21 @@ export interface HookConfig {
 
 // ── Deployment Config ───────────────────────────────────────────────────────
 
+export type DeploymentBuildTrigger = 'manual' | 'manualAndAuto';
+export type DeploymentBuildKind = 'command' | 'vscodeTask';
+
+export interface DeploymentBuildConfig {
+  enabled: boolean;
+  kind: DeploymentBuildKind;
+  trigger: DeploymentBuildTrigger;
+  /** Default: 60_000 */
+  timeoutMs: number;
+  command?: HookCommandConfig;
+  vscodeTask?: {
+    taskName: string;
+  };
+}
+
 export interface DeploymentConfig {
   id: DeploymentId;
   type: DeploymentType;
@@ -112,6 +127,7 @@ export interface DeploymentConfig {
   hotReload: boolean;
   /** Per-deployment ignore patterns, merged with server-level autosync.ignoreGlobs. */
   ignoreGlobs: string[];
+  build?: DeploymentBuildConfig;
   hooks: HookConfig[];
   /** Optional health check path (e.g. "/myapp/health", "/actuator/health"). GET http://host:port{healthCheckPath}. */
   healthCheckPath?: string;

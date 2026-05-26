@@ -39,4 +39,14 @@ describe('hooks editor state contracts', () => {
     expect(src).toContain('restoreDeploymentWizardDraft(savedDraft)');
     expect(src).toContain('deploymentWizardDraft.set(snapshot)');
   });
+
+  it('keeps deployment build authoring state in the nested editor draft snapshot', () => {
+    const src = readSource('src/ui/webviews/client/components/spa/forms/DeploymentWizard.svelte');
+
+    expect(src).toContain('Build before Deploy');
+    expect(src).toContain('build: snapshotBuildConfig()');
+    expect(src).toContain('buildEnvDraft');
+    expect(src).toContain('applyBuildConfig(snapshot.build)');
+    expect(src).toContain('build: currentBuildConfig()');
+  });
 });

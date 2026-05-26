@@ -165,6 +165,7 @@ function mockDeps() {
       waitUntilQueueIdle: vi.fn(async () => {}),
       getAndClearQueueDrainFailure: vi.fn(() => undefined),
       refreshStatus: vi.fn(() => ok(undefined)),
+      getRuntime: vi.fn(() => undefined),
       getServerKeysInState: vi.fn(() => []),
     },
     pluginRegistry: {
@@ -195,7 +196,20 @@ function mockDeps() {
         appendLine: vi.fn(),
         clear: vi.fn(),
       })),
+      appendLine: vi.fn(),
       showLogs: vi.fn(),
+    },
+    doctorService: {
+      inspect: vi.fn(async ({ config }: { config: ServerConfig }) => ok({
+        serverId: config.id,
+        serverName: config.name,
+        generatedAt: '2026-05-26T00:00:00.000Z',
+        summary: { passes: 2, infos: 0, warnings: 1, errors: 0 },
+        findings: [
+          { id: 'trust.workspace', severity: 'pass', message: 'Workspace trust allows local server management.' },
+          { id: 'runtime.warning', severity: 'warning', message: 'Could not detect Tomcat version.' },
+        ],
+      })),
     },
     hookRunner: {
       runHooks: vi.fn(async () => ok({
@@ -255,6 +269,7 @@ describe('Server Commands', () => {
       'jsm.server.attachDebug',
       'jsm.server.detachDebug',
       'jsm.server.cancelOperation',
+      'jsm.server.doctor',
       'jsm.server.showLogs',
       'jsm.server.edit',
       'jsm.server.duplicate',
@@ -366,6 +381,55 @@ describe('Server Commands', () => {
       expect(mockShowErrorMessage).toHaveBeenCalledWith(
         expect.stringContaining('requires a server selected'),
       );
+    });
+  });
+
+  describe('jsm.server.doctor', () => {
+    it('runs deterministic doctor checks and writes a server report to the log channel', async () => {
+      const srv = makeServer('srv-1', 'Doctor Tomcat');
+      deps.workspaceRegistry.getServer.mockReturnValue(srv);
+
+      const result = await invoke('jsm.server.doctor', {
+        serverId: 'srv-1',
+        serverKey: 'file:///ws::srv-1',
+        workspaceFolderUri: 'file:///ws',
+      });
+
+      expect(deps.doctorService.inspect).toHaveBeenCalledWith({
+        config: srv,
+        workspaceFolderFsPath: '/ws',
+        serverState: undefined,
+      });
+      expect(deps.logChannel.appendLine).toHaveBeenCalledWith(
+        'file:///ws::srv-1',
+        'Doctor Tomcat',
+        expect.stringContaining('Server Doctor report for Doctor Tomcat'),
+      );
+      expect(deps.logChannel.showLogs).toHaveBeenCalledWith('file:///ws::srv-1', 'Doctor Tomcat');
+      expect(mockShowWarningMessage).toHaveBeenCalledWith(expect.stringContaining('1 warning'));
+      expect(result).toEqual({
+        ok: true,
+        message: 'Server Doctor completed with 0 error(s), 1 warning(s).',
+      });
+    });
+
+    it('fails closed when doctor service is not wired', async () => {
+      Object.keys(registeredHandlers).forEach(key => delete registeredHandlers[key]);
+      const depsWithoutDoctor = mockDeps();
+      depsWithoutDoctor.doctorService = undefined as never;
+      depsWithoutDoctor.workspaceRegistry.getServer.mockReturnValue(makeServer());
+      registerServerCommands(depsWithoutDoctor as any);
+
+      const result = await invoke('jsm.server.doctor', {
+        serverId: 'srv-1',
+        workspaceFolderUri: 'file:///ws',
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        message: 'Server Doctor is not available.',
+      });
+      expect(mockShowErrorMessage).toHaveBeenCalledWith(expect.stringContaining('Server Doctor is not available'));
     });
   });
 

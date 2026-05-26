@@ -484,6 +484,7 @@ export class DashboardPanel implements vscode.Disposable {
           value.length === 0 || (value.length === 1 && this.isServerAddPayload(value[0])));
 
       case 'jsm.server.showLogs':
+      case 'jsm.server.doctor':
       case 'jsm.server.startRun':
       case 'jsm.server.stop':
         return this.validateTuple(args, value =>

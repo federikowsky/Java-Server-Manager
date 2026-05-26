@@ -13,6 +13,7 @@ import { createCancellationTokenSource } from '@core/ops';
 import type { ServerLifecycle } from '@app/server/ServerLifecycle';
 import type { ServerDiscoveryService } from '@app/server/ServerDiscoveryService';
 import type { HookRunner } from '@app/hooks';
+import type { ServerDoctorReport, ServerDoctorService } from '@app/doctor';
 import { makeWorkspaceServerKey, type WorkspaceServiceRegistry, type WorkspaceScope } from '@app/config';
 import type { WorkspaceServiceEntry } from '@app/config';
 import type { PluginRegistry } from '@plugins/registry/PluginRegistry';
@@ -74,6 +75,7 @@ export interface ServerCommandsDeps {
     removeServer(serverId: string): Promise<Result<void, JsmError>>;
   };
   discoveryService?: ServerDiscoveryService;
+  doctorService?: ServerDoctorService;
   treeProvider: ServerTreeViewProvider;
   schemaValidator?: SchemaValidator;
   openDashboard?: (target?: DashboardNavigationTarget) => void;
@@ -324,6 +326,7 @@ export function registerServerCommands(
     workspaceRegistry,
     configService,
     provisioningService,
+    doctorService,
     treeProvider,
     schemaValidator,
     openDashboard,
@@ -497,6 +500,30 @@ export function registerServerCommands(
       details: workspaceFolderUri,
     }));
     return undefined;
+  };
+
+  const getWorkspaceFolderFsPath = (workspaceFolderUri: string): string | undefined =>
+    workspaceRegistry?.getWorkspaceScopes().find(scope => scope.uri === workspaceFolderUri)?.fsPath;
+
+  const formatDoctorReport = (report: ServerDoctorReport): string => {
+    const lines = [
+      `[JSM] Server Doctor report for ${report.serverName}`,
+      `[JSM] Generated: ${report.generatedAt}`,
+      `[JSM] Summary: ${report.summary.errors} error(s), ${report.summary.warnings} warning(s), ${report.summary.infos} info, ${report.summary.passes} pass(es)`,
+      '',
+    ];
+
+    for (const finding of report.findings) {
+      lines.push(`[${finding.severity.toUpperCase()}] ${finding.id}: ${finding.message}`);
+      if (finding.details) {
+        lines.push(`  Details: ${finding.details}`);
+      }
+      for (const fix of finding.suggestedFix ?? []) {
+        lines.push(`  Fix: ${fix}`);
+      }
+    }
+
+    return lines.join('\n');
   };
 
   return registerMany([
@@ -696,6 +723,55 @@ export function registerServerCommands(
       const resolvedArg = requireServerCommandArg(arg, 'Cancelling an operation');
       if (!resolvedArg) return;
       lifecycle.cancel(createContext(resolvedArg).serverKey);
+    }],
+
+    ['jsm.server.doctor', async (arg: unknown) => {
+      const resolvedArg = requireServerCommandArg(arg, 'Running Server Doctor');
+      if (!resolvedArg) {
+        return { ok: false, message: 'Invalid server context.' };
+      }
+      if (!doctorService) {
+        const error = new JsmError({
+          code: ErrorCode.InvalidConfig,
+          message: 'Server Doctor is not available.',
+        });
+        showErr(error);
+        return { ok: false, message: error.message };
+      }
+
+      const context = createContext(resolvedArg);
+      const config = requireContextConfig(context, { allowInlineConfig: true });
+      if (!config) {
+        return { ok: false, message: serverConfigNotFoundError().message };
+      }
+
+      const reportResult = await doctorService.inspect({
+        config,
+        workspaceFolderFsPath: getWorkspaceFolderFsPath(resolvedArg.workspaceFolderUri),
+        serverState: lifecycle.getRuntime(context.serverKey)?.getState().state,
+      });
+      if (!reportResult.ok) {
+        const error = new JsmError({
+          code: ErrorCode.Unknown,
+          message: 'Server Doctor failed before producing a report.',
+        });
+        showErr(error);
+        return { ok: false, message: error.message };
+      }
+
+      const report = reportResult.value;
+      logChannel.appendLine(context.serverKey, context.label, formatDoctorReport(report));
+      logChannel.showLogs(context.serverKey, context.label);
+
+      const message = `Server Doctor completed with ${report.summary.errors} error(s), ${report.summary.warnings} warning(s).`;
+      if (report.summary.errors > 0) {
+        showErr(new JsmError({ code: ErrorCode.ValidationFailed, message }));
+      } else if (report.summary.warnings > 0) {
+        void vscode.window.showWarningMessage(`JSM: ${message}`);
+      } else {
+        showSuccess(`JSM: ${message}`);
+      }
+      return { ok: report.summary.errors === 0, message };
     }],
 
     ['jsm.server.showLogs', (arg: unknown) => {

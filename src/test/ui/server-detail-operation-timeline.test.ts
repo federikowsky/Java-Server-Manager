@@ -16,4 +16,11 @@ describe('server detail operation timeline', () => {
     expect(src).toContain('timelineStepClass(step.status)');
     expect(src).toContain('step.errorMessage');
   });
+
+  it('exposes the Server Doctor command from server detail actions', () => {
+    const src = readSource('src/ui/webviews/client/components/spa/ServerDetail.svelte');
+
+    expect(src).toContain("handleAction('jsm.server.doctor')");
+    expect(src).toContain('Doctor');
+  });
 });

@@ -85,6 +85,11 @@
         "icon": "$(file-code)"
       },
       {
+        "command": "jsm.server.doctor",
+        "title": "Run Server Doctor",
+        "icon": "$(debug-alt)"
+      },
+      {
         "command": "jsm.server.showLogs",
         "title": "Show Server Logs",
         "icon": "$(output)"
@@ -293,6 +298,11 @@
           "command": "jsm.server.openConfig",
           "when": "view == javaServerManagerView && viewItem =~ /jsm\\.server\\..*/",
           "group": "troubleshooting@1"
+        },
+        {
+          "command": "jsm.server.doctor",
+          "when": "view == javaServerManagerView && viewItem =~ /jsm\\.server\\..*/",
+          "group": "troubleshooting@1.5"
         },
         {
           "command": "jsm.server.showLogs",

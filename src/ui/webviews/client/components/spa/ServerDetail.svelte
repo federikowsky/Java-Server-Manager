@@ -339,6 +339,15 @@
           <Icon name="terminal" size={14} />
           <span>Logs</span>
         </button>
+        <button
+          type="button"
+          class="action-btn"
+          title="Run deterministic server checks"
+          onclick={() => handleAction('jsm.server.doctor')}
+        >
+          <Icon name="debug" size={14} />
+          <span>Doctor</span>
+        </button>
         {#if runtimeState?.state === 'error'}
           <button class="action-btn primary" onclick={() => handleAction('jsm.server.startRun')}>
             <Icon name="play" size={14} />

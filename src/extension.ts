@@ -28,6 +28,7 @@ import { ManagedInstancePathResolver, ServerProvisioningService, ServerDiscovery
 import { DeploymentService, HookBackedDeploymentBuildRunner } from '@app/deployment';
 import { AutoSyncService } from '@app/sync';
 import { DiagnosticsService } from '@app/diagnostics';
+import { ServerDoctorService } from '@app/doctor';
 import { TemplateService } from '@app/templates';
 import { OperationHistoryService } from '@app/operations';
 import { PortAssistantService } from '@app/network';
@@ -750,6 +751,12 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<JsmExtensi
     getLocalTelemetrySnapshot: () => localTelemetry.getSnapshot(),
   });
 
+  const doctorService = new ServerDoctorService({
+    pluginRegistry,
+    portProbe: portScanner,
+    trustGate,
+  });
+
   const discoveryService = new ServerDiscoveryService(pluginRegistry, logger);
 
   // ── 6. UI presentation ────────────────────────────────────────────────
@@ -820,6 +827,7 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<JsmExtensi
       pluginRegistry,
       logChannel,
       hookRunner,
+      doctorService,
       workspaceRegistry: workspaceServiceRegistry,
       discoveryService,
       treeProvider,

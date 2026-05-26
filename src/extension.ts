@@ -29,6 +29,7 @@ import { DeploymentService, HookBackedDeploymentBuildRunner } from '@app/deploym
 import { AutoSyncService } from '@app/sync';
 import { DiagnosticsService } from '@app/diagnostics';
 import { ServerDoctorService } from '@app/doctor';
+import { TeamSetupRecipeService } from '@app/recipes';
 import { TemplateService } from '@app/templates';
 import { OperationHistoryService } from '@app/operations';
 import { PortAssistantService } from '@app/network';
@@ -757,6 +758,11 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<JsmExtensi
     trustGate,
   });
 
+  const teamSetupRecipeService = new TeamSetupRecipeService({
+    templateService,
+    logger,
+  });
+
   const discoveryService = new ServerDiscoveryService(pluginRegistry, logger);
 
   // ── 6. UI presentation ────────────────────────────────────────────────
@@ -828,6 +834,7 @@ export async function activate(ctx: vscode.ExtensionContext): Promise<JsmExtensi
       logChannel,
       hookRunner,
       doctorService,
+      teamSetupRecipeService,
       workspaceRegistry: workspaceServiceRegistry,
       discoveryService,
       treeProvider,

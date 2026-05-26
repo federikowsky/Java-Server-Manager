@@ -97,4 +97,12 @@ describe('settings dirty payload', () => {
     expect(src).toContain('const payload = buildDirtySettingsPayload');
     expect(src).toContain('args: [payload]');
   });
+
+  it('exposes team setup recipe import and export from settings', () => {
+    const src = readSource('src/ui/webviews/client/components/spa/SettingsView.svelte');
+
+    expect(src).toContain('Team Setup Recipes');
+    expect(src).toContain("id: 'jsm.recipe.export'");
+    expect(src).toContain("id: 'jsm.recipe.import'");
+  });
 });

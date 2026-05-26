@@ -228,6 +228,16 @@ function mockDeps() {
         ],
       })),
     },
+    teamSetupRecipeService: {
+      exportRecipe: vi.fn(() => ok({
+        kind: 'jsm.teamSetupRecipe',
+        version: 1,
+        name: 'JSM Team Setup',
+        instructions: ['Install Tomcat locally.'],
+        templates: [],
+      })),
+      importRecipe: vi.fn(async () => ok({ importedTemplates: 1 })),
+    },
     hookRunner: {
       runHooks: vi.fn(async () => ok({
         executed: 1,
@@ -298,6 +308,8 @@ describe('Server Commands', () => {
       'jsm.view.refresh',
       'jsm.server.export',
       'jsm.server.import',
+      'jsm.recipe.export',
+      'jsm.recipe.import',
     ];
 
     for (const id of expected) {
@@ -506,6 +518,49 @@ describe('Server Commands', () => {
         ok: true,
         message: 'No lifecycle recovery action is currently needed.',
       });
+    });
+  });
+
+  describe('team setup recipe commands', () => {
+    it('exports a team setup recipe JSON file from saved templates', async () => {
+      mockShowSaveDialog.mockResolvedValue({ fsPath: '/ws/jsm.team-setup.json' });
+
+      await invoke('jsm.recipe.export');
+
+      expect(deps.teamSetupRecipeService.exportRecipe).toHaveBeenCalledWith({
+        name: 'JSM Team Setup',
+        instructions: expect.any(Array),
+      });
+      expect(mockWriteFile).toHaveBeenCalledWith(
+        '/ws/jsm.team-setup.json',
+        expect.stringContaining('"kind": "jsm.teamSetupRecipe"'),
+        'utf8',
+      );
+      expect(mockShowInfoMessage).toHaveBeenCalledWith(expect.stringContaining('Team setup recipe exported'));
+    });
+
+    it('imports a team setup recipe into workspace templates after confirmation', async () => {
+      mockShowOpenDialog.mockResolvedValue([{ fsPath: '/ws/jsm.team-setup.json' }]);
+      mockReadFile.mockResolvedValue(JSON.stringify({
+        kind: 'jsm.teamSetupRecipe',
+        version: 1,
+        name: 'Team',
+        instructions: [],
+        templates: [],
+      }));
+      mockShowWarningMessage.mockResolvedValue('Import Recipe');
+
+      const result = await invoke('jsm.recipe.import');
+
+      expect(deps.teamSetupRecipeService.importRecipe).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'jsm.teamSetupRecipe',
+        version: 1,
+      }));
+      expect(result).toEqual({
+        ok: true,
+        message: 'Imported 1 template(s) from team setup recipe.',
+      });
+      expect(mockShowInfoMessage).toHaveBeenCalledWith(expect.stringContaining('Imported 1 template'));
     });
   });
 

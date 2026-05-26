@@ -165,6 +165,16 @@
         "icon": "$(cloud-download)"
       },
       {
+        "command": "jsm.recipe.export",
+        "title": "Export Team Setup Recipe",
+        "icon": "$(export)"
+      },
+      {
+        "command": "jsm.recipe.import",
+        "title": "Import Team Setup Recipe",
+        "icon": "$(import)"
+      },
+      {
         "command": "jsm.deployment.openLogs",
         "title": "Deployment Logs",
         "icon": "$(output)"

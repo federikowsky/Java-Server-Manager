@@ -15,6 +15,7 @@ import type { LifecycleRecoveryPlan } from '@app/server/ServerLifecycle';
 import type { ServerDiscoveryService } from '@app/server/ServerDiscoveryService';
 import type { HookRunner } from '@app/hooks';
 import type { ServerDoctorReport, ServerDoctorService } from '@app/doctor';
+import type { TeamSetupRecipeService } from '@app/recipes';
 import { makeWorkspaceServerKey, type WorkspaceServiceRegistry, type WorkspaceScope } from '@app/config';
 import type { WorkspaceServiceEntry } from '@app/config';
 import type { PluginRegistry } from '@plugins/registry/PluginRegistry';
@@ -77,6 +78,7 @@ export interface ServerCommandsDeps {
   };
   discoveryService?: ServerDiscoveryService;
   doctorService?: ServerDoctorService;
+  teamSetupRecipeService?: TeamSetupRecipeService;
   treeProvider: ServerTreeViewProvider;
   schemaValidator?: SchemaValidator;
   openDashboard?: (target?: DashboardNavigationTarget) => void;
@@ -223,6 +225,30 @@ async function writeExportFile(
   }
 }
 
+async function writeJsonFile(filePath: string, value: unknown): Promise<Result<void, JsmError>> {
+  try {
+    await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+    return ok(undefined);
+  } catch (e) {
+    return err(JsmError.fromUnknown(e));
+  }
+}
+
+async function readJsonFile(filePath: string): Promise<Result<unknown, JsmError>> {
+  try {
+    const content = await fs.readFile(filePath, 'utf8');
+    return ok(JSON.parse(content) as unknown);
+  } catch (e) {
+    if (e instanceof SyntaxError) {
+      return err(new JsmError({
+        code: ErrorCode.InvalidConfig,
+        message: 'Invalid JSON.',
+      }));
+    }
+    return err(JsmError.fromUnknown(e));
+  }
+}
+
 async function readImportedServerConfigs(
   filePath: string,
   schemaValidator: SchemaValidator,
@@ -328,6 +354,7 @@ export function registerServerCommands(
     configService,
     provisioningService,
     doctorService,
+    teamSetupRecipeService,
     treeProvider,
     schemaValidator,
     openDashboard,
@@ -1035,6 +1062,94 @@ export function registerServerCommands(
       if (!result.ok) { showErr(result.error); return; }
       await refreshRunningServerState();
       treeProvider.forceRefresh();
+    }],
+
+    ['jsm.recipe.export', async () => {
+      if (!teamSetupRecipeService) {
+        const error = new JsmError({
+          code: ErrorCode.InvalidConfig,
+          message: 'Team setup recipe export is not available in this session.',
+        });
+        showErr(error);
+        return { ok: false, message: error.message };
+      }
+
+      const recipeResult = teamSetupRecipeService.exportRecipe({
+        name: 'JSM Team Setup',
+        instructions: [
+          'Install Java and Tomcat locally, then create servers from the imported templates.',
+          'Review runtime and Java paths before saving each server.',
+        ],
+      });
+      if (!recipeResult.ok) {
+        showErr(recipeResult.error);
+        return { ok: false, message: recipeResult.error.message };
+      }
+
+      const defaultUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+      const saveUri = await vscode.window.showSaveDialog({
+        filters: { JSON: ['json'] },
+        defaultUri: defaultUri ? vscode.Uri.joinPath(defaultUri, 'jsm.team-setup.json') : undefined,
+      });
+      if (!saveUri) {
+        return { ok: false, message: 'Team setup recipe export cancelled.' };
+      }
+
+      const writeResult = await writeJsonFile(saveUri.fsPath, recipeResult.value);
+      if (!writeResult.ok) {
+        showErr(writeResult.error);
+        return { ok: false, message: writeResult.error.message };
+      }
+
+      const message = `Team setup recipe exported to ${saveUri.fsPath}.`;
+      void vscode.window.showInformationMessage(`JSM: ${message}`);
+      return { ok: true, message };
+    }],
+
+    ['jsm.recipe.import', async () => {
+      if (!teamSetupRecipeService) {
+        const error = new JsmError({
+          code: ErrorCode.InvalidConfig,
+          message: 'Team setup recipe import is not available in this session.',
+        });
+        showErr(error);
+        return { ok: false, message: error.message };
+      }
+
+      const picks = await vscode.window.showOpenDialog({
+        filters: { JSON: ['json'] },
+        canSelectMany: false,
+      });
+      const file = picks?.[0];
+      if (!file) {
+        return { ok: false, message: 'Team setup recipe import cancelled.' };
+      }
+
+      const recipeResult = await readJsonFile(file.fsPath);
+      if (!recipeResult.ok) {
+        showErr(recipeResult.error);
+        return { ok: false, message: recipeResult.error.message };
+      }
+
+      const answer = await vscode.window.showWarningMessage(
+        'Import this team setup recipe into workspace templates? This will not create servers or modify existing server inventory.',
+        { modal: true },
+        'Import Recipe',
+      );
+      if (answer !== 'Import Recipe') {
+        return { ok: false, message: 'Team setup recipe import cancelled.' };
+      }
+
+      const importResult = await teamSetupRecipeService.importRecipe(recipeResult.value);
+      if (!importResult.ok) {
+        showErr(importResult.error);
+        return { ok: false, message: importResult.error.message };
+      }
+
+      const message = `Imported ${importResult.value.importedTemplates} template(s) from team setup recipe.`;
+      treeProvider.requestRefresh();
+      void vscode.window.showInformationMessage(`JSM: ${message}`);
+      return { ok: true, message };
     }],
 
     ['jsm.server.export', async () => {

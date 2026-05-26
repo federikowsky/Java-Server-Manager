@@ -181,6 +181,24 @@
     });
   }
 
+  function handleExportRecipe() {
+    postToHost({
+      v: WEBVIEW_PROTOCOL_VERSION,
+      command: 'executeCommand',
+      id: 'jsm.recipe.export',
+      args: [],
+    });
+  }
+
+  function handleImportRecipe() {
+    postToHost({
+      v: WEBVIEW_PROTOCOL_VERSION,
+      command: 'executeCommand',
+      id: 'jsm.recipe.import',
+      args: [],
+    });
+  }
+
   function handleBrowseJava() {
     postToHost({
       v: WEBVIEW_PROTOCOL_VERSION,
@@ -284,6 +302,20 @@
         <button type="button" class="btn btn-secondary" onclick={handleImportInventory}>
           <Icon name="upload" size={16} />
           <span>Import Servers</span>
+        </button>
+      </div>
+    </SectionBlock>
+
+    <SectionBlock title="Team Setup Recipes">
+      <p class="section-lead">Share one-way template presets and setup notes without creating servers</p>
+      <div class="btn-row">
+        <button type="button" class="btn btn-secondary" onclick={handleExportRecipe}>
+          <Icon name="download" size={16} />
+          <span>Export Recipe</span>
+        </button>
+        <button type="button" class="btn btn-secondary" onclick={handleImportRecipe}>
+          <Icon name="upload" size={16} />
+          <span>Import Recipe</span>
         </button>
       </div>
     </SectionBlock>

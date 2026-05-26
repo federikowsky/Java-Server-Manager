@@ -491,13 +491,24 @@ export class DeploymentService {
 
       await this.runDeploymentHooks(ctx, config, dep, 'pre', event);
       this.ensureNotCancelled(ctx, dep, `before executing ${event}.`);
-      const result = await operation(plugin);
+      const deployStepId = `${event}:${dep.id}`;
+      this.emitOperationStepStarted(ctx, dep, deployStepId, this.operationStepLabel(event, dep), 'deploy');
+      let result: Result<void, JsmError>;
+      try {
+        result = await operation(plugin);
+      } catch (cause) {
+        const error = cause instanceof JsmError ? cause : JsmError.fromUnknown(cause);
+        this.emitOperationStepFailed(ctx, deployStepId, error);
+        throw error;
+      }
       if (!result.ok) {
+        this.emitOperationStepFailed(ctx, deployStepId, result.error);
         await this.runDeploymentOnErrorHooks(ctx, config, dep, event);
         this.transitionDeploy(ctx.serverId, dep.id, 'error', { error: result.error });
         return result;
       }
 
+      this.emitOperationStepCompleted(ctx, deployStepId);
       this.transitionDeploy(ctx.serverId, dep.id, 'synced');
       await this.runDeploymentHooks(ctx, config, dep, 'post', event);
       return ok(undefined);
@@ -572,24 +583,37 @@ export class DeploymentService {
     }
 
     this.ensureNotCancelled(ctx, dep, `before build for ${event}.`);
+    const stepId = `build:${dep.id}`;
+    this.emitOperationStepStarted(ctx, dep, stepId, `Build ${dep.deployName}`, 'build');
     if (!this.buildRunner) {
-      return err(new JsmError({
+      const error = new JsmError({
         code: ErrorCode.InvalidConfig,
         message: `Build is configured for deployment '${dep.deployName}', but no build runner is available.`,
-      }));
+      });
+      this.emitOperationStepFailed(ctx, stepId, error);
+      return err(error);
     }
 
-    const result = await this.buildRunner.runBuild({
-      parent: ctx,
-      server: config,
-      deployment: dep,
-      build: dep.build!,
-    });
+    let result: Result<void, JsmError>;
+    try {
+      result = await this.buildRunner.runBuild({
+        parent: ctx,
+        server: config,
+        deployment: dep,
+        build: dep.build!,
+      });
+    } catch (cause) {
+      const error = cause instanceof JsmError ? cause : JsmError.fromUnknown(cause, ErrorCode.DeployFailed);
+      this.emitOperationStepFailed(ctx, stepId, error);
+      return err(error);
+    }
     if (!result.ok) {
+      this.emitOperationStepFailed(ctx, stepId, result.error);
       return result;
     }
 
     this.ensureNotCancelled(ctx, dep, `after build for ${event}.`);
+    this.emitOperationStepCompleted(ctx, stepId);
     return ok(undefined);
   }
 
@@ -610,6 +634,53 @@ export class DeploymentService {
     return ctx.kind === 'DeployFull'
       || ctx.kind === 'RedeployAll'
       || ctx.kind === 'DeployUndeployed';
+  }
+
+  private operationStepLabel(event: HookEvent, dep: DeploymentConfig): string {
+    switch (event) {
+      case 'deploy.full':
+        return `Deploy ${dep.deployName}`;
+      case 'deploy.incremental':
+        return `Sync ${dep.deployName}`;
+      case 'deploy.undeploy':
+        return `Undeploy ${dep.deployName}`;
+      default:
+        return `${event} ${dep.deployName}`;
+    }
+  }
+
+  private emitOperationStepStarted(
+    ctx: OperationContext,
+    dep: DeploymentConfig,
+    stepId: string,
+    label: string,
+    kind: 'build' | 'deploy',
+  ): void {
+    this.bus.emit('OperationStepStarted', {
+      serverId: ctx.serverId,
+      operationId: ctx.operationId,
+      stepId,
+      label,
+      kind,
+      targetDeploymentId: dep.id,
+    });
+  }
+
+  private emitOperationStepCompleted(ctx: OperationContext, stepId: string): void {
+    this.bus.emit('OperationStepCompleted', {
+      serverId: ctx.serverId,
+      operationId: ctx.operationId,
+      stepId,
+    });
+  }
+
+  private emitOperationStepFailed(ctx: OperationContext, stepId: string, error: JsmError): void {
+    this.bus.emit('OperationStepFailed', {
+      serverId: ctx.serverId,
+      operationId: ctx.operationId,
+      stepId,
+      error,
+    });
   }
 
   private async runDeploymentOnErrorHooks(

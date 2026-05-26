@@ -39,6 +39,54 @@ describe('OperationHistoryService', () => {
     ]);
   });
 
+  it('records operation timeline steps with durations', () => {
+    let now = 1000;
+    const bus = new EventBus(mockLogger());
+    const service = new OperationHistoryService({ bus, now: () => now });
+
+    bus.emit('OperationStarted', {
+      serverId: 'ws::srv-1',
+      operationId: 'op-1',
+      kind: 'DeployFull',
+      targetDeploymentId: 'dep-1',
+    });
+    now = 1100;
+    bus.emit('OperationStepStarted', {
+      serverId: 'ws::srv-1',
+      operationId: 'op-1',
+      stepId: 'build:dep-1',
+      label: 'Build app',
+      kind: 'build',
+      targetDeploymentId: 'dep-1',
+    });
+    now = 1600;
+    bus.emit('OperationStepCompleted', {
+      serverId: 'ws::srv-1',
+      operationId: 'op-1',
+      stepId: 'build:dep-1',
+      message: 'Build completed',
+    });
+
+    expect(service.getRecent('ws::srv-1')[0].timeline).toEqual([
+      expect.objectContaining({
+        stepId: 'operation',
+        label: 'DeployFull',
+        status: 'running',
+        startedAt: 1000,
+      }),
+      expect.objectContaining({
+        stepId: 'build:dep-1',
+        label: 'Build app',
+        kind: 'build',
+        status: 'succeeded',
+        startedAt: 1100,
+        finishedAt: 1600,
+        durationMs: 500,
+        message: 'Build completed',
+      }),
+    ]);
+  });
+
   it('records failed operations with error details', () => {
     const bus = new EventBus(mockLogger());
     const service = new OperationHistoryService({ bus, now: () => 10 });
@@ -71,6 +119,43 @@ describe('OperationHistoryService', () => {
         suggestedFix: ['Check the configured HTTP port'],
       }),
     ]);
+  });
+
+  it('records failed timeline steps with error details', () => {
+    let now = 1000;
+    const bus = new EventBus(mockLogger());
+    const service = new OperationHistoryService({ bus, now: () => now });
+    const error = new JsmError({ code: ErrorCode.DeployFailed, message: 'build failed' });
+
+    bus.emit('OperationStarted', {
+      serverId: 'ws::srv-1',
+      operationId: 'op-1',
+      kind: 'DeployFull',
+      targetDeploymentId: 'dep-1',
+    });
+    bus.emit('OperationStepStarted', {
+      serverId: 'ws::srv-1',
+      operationId: 'op-1',
+      stepId: 'build:dep-1',
+      label: 'Build app',
+      kind: 'build',
+      targetDeploymentId: 'dep-1',
+    });
+    now = 1250;
+    bus.emit('OperationStepFailed', {
+      serverId: 'ws::srv-1',
+      operationId: 'op-1',
+      stepId: 'build:dep-1',
+      error,
+    });
+
+    expect(service.getRecent('ws::srv-1')[0].timeline).toContainEqual(expect.objectContaining({
+      stepId: 'build:dep-1',
+      status: 'failed',
+      errorCode: ErrorCode.DeployFailed,
+      errorMessage: 'build failed',
+      durationMs: 250,
+    }));
   });
 
   it('keeps only the configured number of recent entries and purges deleted servers', () => {

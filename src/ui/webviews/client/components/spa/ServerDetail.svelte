@@ -269,6 +269,16 @@
     return `${(value / 1000).toFixed(1)} s`;
   }
 
+  function operationTimeline(operation: Record<string, unknown>): Array<Record<string, unknown>> {
+    return Array.isArray(operation.timeline)
+      ? operation.timeline as Array<Record<string, unknown>>
+      : [];
+  }
+
+  function timelineStepClass(status: unknown): string {
+    return `timeline-step-status ${String(status ?? 'unknown')}`;
+  }
+
   function formatBytes(value: unknown): string {
     if (typeof value !== 'number' || value <= 0) return '0 B';
     if (value < 1024) return `${value} B`;
@@ -495,6 +505,31 @@
                     </div>
                     {#if operation.errorMessage}
                       <div class="operation-error">{String(operation.errorMessage)}</div>
+                    {/if}
+                    {#if operationTimeline(operation).length > 0}
+                      <div class="operation-timeline" role="list" aria-label="Operation timeline">
+                        {#each operationTimeline(operation) as step}
+                          <div class="timeline-step" role="listitem">
+                            <span class={timelineStepClass(step.status)} aria-hidden="true"></span>
+                            <div class="timeline-step-body">
+                              <div class="timeline-step-main">
+                                <span class="timeline-step-label">{String(step.label ?? step.stepId ?? 'Step')}</span>
+                                <span class="timeline-step-state">{String(step.status ?? 'unknown')}</span>
+                              </div>
+                              <div class="timeline-step-meta">
+                                <span>{formatTimestamp(step.startedAt)}</span>
+                                <span>{formatDuration(step.durationMs)}</span>
+                              </div>
+                              {#if step.message}
+                                <div class="timeline-step-message">{String(step.message)}</div>
+                              {/if}
+                              {#if step.errorMessage}
+                                <div class="timeline-step-error">{String(step.errorMessage)}</div>
+                              {/if}
+                            </div>
+                          </div>
+                        {/each}
+                      </div>
                     {/if}
                   </div>
                 {/each}
@@ -864,6 +899,73 @@
     font-size: var(--jsm-font-size-sm);
     line-height: var(--jsm-line-height-relaxed);
     margin-top: var(--jsm-space-2xs);
+  }
+
+  .operation-timeline {
+    display: flex;
+    flex-direction: column;
+    gap: var(--jsm-space-xs);
+    margin-top: var(--jsm-space-sm);
+    padding-left: var(--jsm-space-sm);
+    border-left: 1px solid var(--jsm-color-border-secondary);
+  }
+
+  .timeline-step {
+    display: grid;
+    grid-template-columns: 10px minmax(0, 1fr);
+    gap: var(--jsm-space-sm);
+    align-items: start;
+  }
+
+  .timeline-step-status {
+    width: 8px;
+    height: 8px;
+    margin-top: 5px;
+    border-radius: 50%;
+    background: var(--jsm-color-fg-muted);
+  }
+
+  .timeline-step-status.succeeded {
+    background: var(--jsm-color-success);
+  }
+
+  .timeline-step-status.failed {
+    background: var(--jsm-color-error);
+  }
+
+  .timeline-step-status.running {
+    background: var(--vscode-charts-blue);
+  }
+
+  .timeline-step-main,
+  .timeline-step-meta {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--jsm-space-sm);
+  }
+
+  .timeline-step-label {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    font-size: var(--jsm-font-size-sm);
+    color: var(--jsm-color-fg);
+  }
+
+  .timeline-step-state,
+  .timeline-step-meta,
+  .timeline-step-message,
+  .timeline-step-error {
+    font-size: var(--jsm-font-size-xs);
+    color: var(--jsm-color-fg-muted);
+  }
+
+  .timeline-step-state {
+    text-transform: capitalize;
+    white-space: nowrap;
+  }
+
+  .timeline-step-error {
+    color: var(--jsm-color-error);
   }
   .note {
     color: var(--vscode-descriptionForeground);

@@ -1,7 +1,7 @@
 import type { ServerId, DeploymentId, OperationId } from './ids';
 import type { ServerState, DeploymentState } from './enums';
 import type { JsmError } from '../errors/JsmError';
-import type { OperationKind } from './runtime';
+import type { OperationKind, OperationTimelineStepKind } from './runtime';
 
 // ── File Change Batch (§6.3) ────────────────────────────────────────────────
 
@@ -39,6 +39,9 @@ export interface EventMap {
   OperationStarted:       { serverId: ServerId; operationId: OperationId; kind: OperationKind; targetDeploymentId?: DeploymentId };
   OperationCompleted:     { serverId: ServerId; operationId: OperationId; kind: OperationKind; targetDeploymentId?: DeploymentId };
   OperationFailed:        { serverId: ServerId; operationId: OperationId; kind: OperationKind; targetDeploymentId?: DeploymentId; error: JsmError };
+  OperationStepStarted:   { serverId: ServerId; operationId: OperationId; stepId: string; label: string; kind: OperationTimelineStepKind; targetDeploymentId?: DeploymentId; message?: string };
+  OperationStepCompleted: { serverId: ServerId; operationId: OperationId; stepId: string; message?: string };
+  OperationStepFailed:    { serverId: ServerId; operationId: OperationId; stepId: string; error: JsmError };
   // Workspace
   WorkspaceLoaded:        { serverCount: number };
   ConfigChanged:          { source: 'user' | 'migration' | 'wizard' | 'external'; workspaceFolderUri: string };

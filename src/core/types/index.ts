@@ -30,6 +30,8 @@ export type {
   DeploymentRuntimeState,
   TrustGate,
   OperationKind,
+  OperationTimelineStep,
+  OperationTimelineStepKind,
   OperationHistoryEntry,
   CancellationToken,
   OutputSink,

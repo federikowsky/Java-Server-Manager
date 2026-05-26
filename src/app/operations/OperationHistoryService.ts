@@ -1,5 +1,5 @@
 import type { EventBus } from '@core/events/EventBus';
-import type { Disposable, OperationHistoryEntry, ServerId } from '@core/types';
+import type { Disposable, OperationHistoryEntry, OperationTimelineStep, ServerId } from '@core/types';
 
 const DEFAULT_HISTORY_LIMIT = 50;
 
@@ -17,13 +17,22 @@ export class OperationHistoryService implements Disposable {
     this.limit = deps.limit ?? DEFAULT_HISTORY_LIMIT;
     this.disposables = [
       deps.bus.on('OperationStarted', event => {
+        const startedAt = now();
         this.record({
           operationId: event.operationId,
           serverId: event.serverId,
           kind: event.kind,
           targetDeploymentId: event.targetDeploymentId,
           status: 'running',
-          startedAt: now(),
+          startedAt,
+          timeline: [{
+            stepId: 'operation',
+            label: event.kind,
+            kind: 'operation',
+            status: 'running',
+            startedAt,
+            targetDeploymentId: event.targetDeploymentId,
+          }],
         });
       }),
       deps.bus.on('OperationCompleted', event => {
@@ -34,6 +43,28 @@ export class OperationHistoryService implements Disposable {
           errorMessage: event.error.message,
           errorCode: event.error.code,
           suggestedFix: event.error.suggestedFix,
+        });
+      }),
+      deps.bus.on('OperationStepStarted', event => {
+        this.recordStep(event.serverId, event.operationId, {
+          stepId: event.stepId,
+          label: event.label,
+          kind: event.kind,
+          status: 'running',
+          startedAt: now(),
+          targetDeploymentId: event.targetDeploymentId,
+          message: event.message,
+        });
+      }),
+      deps.bus.on('OperationStepCompleted', event => {
+        this.finishStep(event.serverId, event.operationId, event.stepId, 'succeeded', now(), {
+          message: event.message,
+        });
+      }),
+      deps.bus.on('OperationStepFailed', event => {
+        this.finishStep(event.serverId, event.operationId, event.stepId, 'failed', now(), {
+          errorMessage: event.error.message,
+          errorCode: event.error.code,
         });
       }),
       deps.bus.on('ServerDeleted', event => {
@@ -77,13 +108,88 @@ export class OperationHistoryService implements Disposable {
     }
 
     const existing = entries[index];
+    const timeline = this.finishOperationTimeline(existing, status, finishedAt, error);
     entries[index] = {
       ...existing,
       status,
       finishedAt,
       durationMs: Math.max(0, finishedAt - existing.startedAt),
+      timeline,
       ...error,
     };
     this.history.set(serverId, entries);
+  }
+
+  private recordStep(
+    serverId: ServerId,
+    operationId: OperationHistoryEntry['operationId'],
+    step: OperationTimelineStep,
+  ): void {
+    const entries = this.history.get(serverId) ?? [];
+    const index = entries.findIndex(entry => entry.operationId === operationId);
+    if (index < 0) return;
+
+    const existing = entries[index];
+    const timeline = [...(existing.timeline ?? [])];
+    const stepIndex = timeline.findIndex(item => item.stepId === step.stepId);
+    if (stepIndex >= 0) {
+      timeline[stepIndex] = step;
+    } else {
+      timeline.push(step);
+    }
+
+    entries[index] = { ...existing, timeline };
+    this.history.set(serverId, entries);
+  }
+
+  private finishStep(
+    serverId: ServerId,
+    operationId: OperationHistoryEntry['operationId'],
+    stepId: string,
+    status: 'succeeded' | 'failed',
+    finishedAt: number,
+    details?: Pick<OperationTimelineStep, 'message' | 'errorMessage' | 'errorCode'>,
+  ): void {
+    const entries = this.history.get(serverId) ?? [];
+    const index = entries.findIndex(entry => entry.operationId === operationId);
+    if (index < 0) return;
+
+    const existing = entries[index];
+    const timeline = [...(existing.timeline ?? [])];
+    const stepIndex = timeline.findIndex(item => item.stepId === stepId);
+    if (stepIndex < 0) return;
+
+    const step = timeline[stepIndex];
+    timeline[stepIndex] = {
+      ...step,
+      status,
+      finishedAt,
+      durationMs: Math.max(0, finishedAt - step.startedAt),
+      ...details,
+    };
+    entries[index] = { ...existing, timeline };
+    this.history.set(serverId, entries);
+  }
+
+  private finishOperationTimeline(
+    entry: OperationHistoryEntry,
+    status: 'succeeded' | 'failed',
+    finishedAt: number,
+    error?: Pick<OperationHistoryEntry, 'errorMessage' | 'errorCode' | 'suggestedFix'>,
+  ): OperationTimelineStep[] {
+    const timeline = [...(entry.timeline ?? [])];
+    const index = timeline.findIndex(step => step.stepId === 'operation');
+    if (index < 0) return timeline;
+
+    const step = timeline[index];
+    timeline[index] = {
+      ...step,
+      status,
+      finishedAt,
+      durationMs: Math.max(0, finishedAt - step.startedAt),
+      errorMessage: error?.errorMessage,
+      errorCode: error?.errorCode,
+    };
+    return timeline;
   }
 }

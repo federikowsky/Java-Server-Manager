@@ -260,6 +260,33 @@ describe('DeploymentService', () => {
     expect(order).toEqual(['build', 'plan']);
   });
 
+  it('emits build and deploy timeline steps for full deploy evidence', async () => {
+    const config = makeConfig();
+    const dep = {
+      ...makeDep(),
+      build: {
+        enabled: true,
+        kind: 'command',
+        trigger: 'manual',
+        timeoutMs: 120_000,
+        command: { mode: 'shell', line: 'npm run build' },
+      },
+    } as DeploymentConfig;
+    const events: Array<{ event: string; stepId: string; label?: string }> = [];
+    bus.on('OperationStepStarted', e => events.push({ event: 'started', stepId: e.stepId, label: e.label }));
+    bus.on('OperationStepCompleted', e => events.push({ event: 'completed', stepId: e.stepId }));
+
+    const result = await service.fullRedeploy(makeCtx(), config, dep);
+
+    expect(result.ok).toBe(true);
+    expect(events).toEqual([
+      { event: 'started', stepId: 'build:d1', label: 'Build app' },
+      { event: 'completed', stepId: 'build:d1' },
+      { event: 'started', stepId: 'deploy.full:d1', label: 'Deploy app' },
+      { event: 'completed', stepId: 'deploy.full:d1' },
+    ]);
+  });
+
   it('blocks full deploy and transitions to error when enabled build fails', async () => {
     const buildError = new JsmError({ code: ErrorCode.OperationFailed, message: 'build failed' });
     const dep = {
@@ -283,6 +310,33 @@ describe('DeploymentService', () => {
     expect(mockPlugin.planDeploy).not.toHaveBeenCalled();
     expect(mockPlugin.deployFull).not.toHaveBeenCalled();
     expect(service.getDeploymentState('s1', 'd1')).toBe('error');
+  });
+
+  it('emits failed build timeline step and skips deploy step when build fails', async () => {
+    const buildError = new JsmError({ code: ErrorCode.OperationFailed, message: 'build failed' });
+    const dep = {
+      ...makeDep(),
+      build: {
+        enabled: true,
+        kind: 'command',
+        trigger: 'manual',
+        timeoutMs: 120_000,
+        command: { mode: 'shell', line: 'npm run build' },
+      },
+    } as DeploymentConfig;
+    const events: Array<{ event: string; stepId: string; message?: string }> = [];
+    bus.on('OperationStepStarted', e => events.push({ event: 'started', stepId: e.stepId }));
+    bus.on('OperationStepCompleted', e => events.push({ event: 'completed', stepId: e.stepId }));
+    bus.on('OperationStepFailed', e => events.push({ event: 'failed', stepId: e.stepId, message: e.error.message }));
+    buildRunner.runBuild.mockResolvedValue(err(buildError));
+
+    const result = await service.fullRedeploy(makeCtx(), makeConfig(), dep);
+
+    expect(result.ok).toBe(false);
+    expect(events).toEqual([
+      { event: 'started', stepId: 'build:d1' },
+      { event: 'failed', stepId: 'build:d1', message: 'build failed' },
+    ]);
   });
 
   it('skips disabled build config and preserves full deploy behavior', async () => {

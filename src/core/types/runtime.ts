@@ -36,6 +36,31 @@ export interface OperationHistoryEntry {
   errorMessage?: string;
   errorCode?: string;
   suggestedFix?: string[];
+  timeline?: OperationTimelineStep[];
+}
+
+export type OperationTimelineStepKind =
+  | 'operation'
+  | 'build'
+  | 'deploy'
+  | 'hook'
+  | 'task'
+  | 'health'
+  | 'lifecycle'
+  | 'sync';
+
+export interface OperationTimelineStep {
+  stepId: string;
+  label: string;
+  kind: OperationTimelineStepKind;
+  status: 'running' | 'succeeded' | 'failed' | 'skipped';
+  startedAt: number;
+  finishedAt?: number;
+  durationMs?: number;
+  message?: string;
+  targetDeploymentId?: DeploymentId;
+  errorMessage?: string;
+  errorCode?: string;
 }
 
 // ── Workspace Trust ─────────────────────────────────────────────────────────

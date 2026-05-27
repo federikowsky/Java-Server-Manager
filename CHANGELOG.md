@@ -10,6 +10,52 @@ The format follows Keep a Changelog and this project adheres to Semantic Version
 
 - ongoing improvements toward stable readiness
 
+## [0.1.9] - 2026-05-27
+
+### Summary
+
+- Ninth beta patch focused on deterministic local-server DX improvements and release hardening after the storage-backed inventory migration.
+- Adds explicit build, diagnostics, doctor, readiness, recovery, onboarding, and environment-profile workflows without fragile project autodetection.
+- Preserves the canonical JSM model: managed inventory remains authoritative, templates and recipes are one-way provisioning inputs, and runtime evidence stays derived.
+
+### Beta Disclaimer
+
+- this is a beta prerelease intended for validation and feedback.
+- behavior and feature surface may change before stable.
+
+### Known Limitations
+
+- only Tomcat is supported in this release.
+- environment profile secret values are local to VS Code SecretStorage and must be re-entered on another machine unless intentionally imported from a local secure file.
+
+### Added
+
+- Explicit Build-on-Deploy metadata per deployment, supporting command or VS Code task execution before full deploy/redeploy.
+- Operation Timeline evidence in recent operations for build/deploy steps, durations, failures, and operator-visible context.
+- Manual Server Doctor command for deterministic trust, plugin, path, deployment source, build cwd, and port checks.
+- Opt-in Health/Readiness gates for post-deploy and post-start validation using explicit deployment health paths.
+- Explicit Lifecycle Recovery planning for stale PID/runtime uncertainty, with confirmation-gated stale PID cleanup.
+- Team Setup Recipes for exporting/importing saved templates and onboarding instructions without creating servers.
+- Secret-safe Environment Profiles with profile metadata in VS Code workspace storage and secret values in VS Code SecretStorage.
+
+### Changed
+
+- Add Server can bind a server to an explicit environment profile via `run.envProfileId`.
+- Start and deployment operations resolve environment profile values at operation time into an effective config copy without mutating managed inventory.
+- Settings now includes Team Setup Recipe and Environment Profile import/export actions.
+
+### Fixed
+
+- Lifecycle recovery avoids killing unattributed processes and reports port conflicts as operator findings.
+- Readiness gates fail closed only when explicitly enabled and do not turn observational health checks into background policy.
+- Environment profile export omits secret values and records only non-secret values plus secret availability metadata.
+
+### Tests
+
+- Added focused coverage for Build-on-Deploy, Operation Timeline, Server Doctor, Readiness Gates, Lifecycle Recovery, Team Setup Recipes, and Secret-safe Environment Profiles.
+- Added schema/authoring tests for deployment build/readiness metadata and `run.envProfileId`.
+- Added webview and command-boundary tests for recipe/profile import-export, dashboard sync payloads, and Add Server profile binding.
+
 ## [0.1.8] - 2026-05-26
 
 ### Summary

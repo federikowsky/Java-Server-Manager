@@ -189,17 +189,66 @@ jobs:
       - name: Publish to Marketplace
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
+          VSIX_PATH: ${{ runner.temp }}/release-package/${{ needs.package.outputs.vsix_name }}
+          RELEASE_CHANNEL: ${{ needs.preflight.outputs.channel }}
+          MARKETPLACE_SOCKET_TIMEOUT_MS: 900000
+          MARKETPLACE_PUBLISH_ATTEMPTS: 2
         shell: bash
         run: |
-          extra_args=()
-          if [ "${{ needs.preflight.outputs.channel }}" = "beta" ]; then
-            extra_args+=(--pre-release)
-          fi
+          npx --yes --package @vscode/vsce@${VSCE_VERSION} node <<'NODE'
+          const childProcess = require('child_process');
+          const fs = require('fs');
+          const path = require('path');
+          const { createRequire } = require('module');
 
-          npx --yes @vscode/vsce@${VSCE_VERSION} publish \
-            --packagePath "${{ runner.temp }}/release-package/${{ needs.package.outputs.vsix_name }}" \
-            --skip-duplicate \
-            "${extra_args[@]}"
+          const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+          const vsceBin = childProcess.execFileSync('which', ['vsce'], { encoding: 'utf8' }).trim();
+          const vsceRoot = path.dirname(fs.realpathSync(vsceBin));
+          const vsceRequire = createRequire(path.join(vsceRoot, 'package.json'));
+          const util = vsceRequire('./out/util');
+          const { publish } = vsceRequire('./out/publish');
+          const { GalleryApi } = vsceRequire('azure-devops-node-api/GalleryApi');
+          const { getBasicHandler } = vsceRequire('azure-devops-node-api/WebApi');
+
+          const socketTimeout = Number(process.env.MARKETPLACE_SOCKET_TIMEOUT_MS || 900000);
+          const maxAttempts = Number(process.env.MARKETPLACE_PUBLISH_ATTEMPTS || 2);
+          const retryable = err => /timeout|ECONNRESET|ETIMEDOUT|EAI_AGAIN|5\d\d/.test(String(err && (err.message || err)));
+
+          util.getGalleryAPI = async pat => {
+            const authHandler = getBasicHandler('OAuth', pat);
+            return new GalleryApi(util.getMarketplaceUrl(), [authHandler], {
+              socketTimeout,
+              allowRetries: true,
+              maxRetries: 3
+            });
+          };
+
+          async function publishWithRetry() {
+            for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+              try {
+                await publish({
+                  packagePath: [process.env.VSIX_PATH],
+                  pat: process.env.VSCE_PAT,
+                  skipDuplicate: true,
+                  preRelease: process.env.RELEASE_CHANNEL === 'beta'
+                });
+                return;
+              } catch (err) {
+                if (attempt === maxAttempts || !retryable(err)) {
+                  throw err;
+                }
+
+                console.warn(`Marketplace publish attempt ${attempt} failed: ${err.message || err}`);
+                await sleep(30000 * attempt);
+              }
+            }
+          }
+
+          publishWithRetry().catch(err => {
+            console.error(err);
+            process.exitCode = 1;
+          });
+          NODE
 
   publish_openvsx:
     runs-on: ubuntu-latest
